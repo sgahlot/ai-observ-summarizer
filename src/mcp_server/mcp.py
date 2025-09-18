@@ -31,6 +31,11 @@ class ObservabilityMCPServer:
             list_openshift_namespace_metric_groups,
             chat_openshift,
         )
+        from .tools.tempo_query_tool import (
+            query_tempo_tool,
+            get_trace_details_tool,
+            analyze_traces_tool,
+        )
 
         self.mcp.tool()(list_models)
         self.mcp.tool()(list_namespaces)
@@ -42,4 +47,7 @@ class ObservabilityMCPServer:
         self.mcp.tool()(list_openshift_metric_groups)
         self.mcp.tool()(list_openshift_namespace_metric_groups)
         self.mcp.tool()(chat_openshift)
+        self.mcp.tool()(query_tempo_tool)
+        self.mcp.tool()(get_trace_details_tool)
+        self.mcp.tool()(analyze_traces_tool)
 

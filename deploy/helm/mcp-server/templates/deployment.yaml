@@ -43,6 +43,10 @@ spec:
             {{- end }}
             - name: PROMETHEUS_URL
               value: "{{ .Values.env.PROMETHEUS_URL }}"
+            - name: TEMPO_URL
+              value: "{{ .Values.env.TEMPO_URL }}"
+            - name: TEMPO_TENANT_ID
+              value: "{{ .Values.env.TEMPO_TENANT_ID }}"
             - name: NAMESPACE
               value: "{{ .Release.Namespace }}"
             - name: THANOS_TOKEN
