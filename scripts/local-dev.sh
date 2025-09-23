@@ -11,8 +11,10 @@ NC='\033[0m' # No Color
 
 # Configuration
 PROMETHEUS_NAMESPACE="openshift-monitoring"
+OBSERVABILITY_NAMESPACE="observability-hub"
 METRIC_API_APP="metrics-api-app"
 THANOS_PORT=9090
+TEMPO_PORT=8082
 LLAMASTACK_PORT=8321
 LLAMA_MODEL_PORT=8080
 # Metrics API (FastAPI) port for local dev; can override via METRICS_API_PORT
@@ -85,6 +87,7 @@ cleanup() {
     echo -e "\n${YELLOW}🧹 Cleaning up services and port-forwards...${NC}"
     ensure_port_free "$METRICS_API_PORT"
     ensure_port_free "$MCP_PORT"
+    ensure_port_free "$TEMPO_PORT"
     pkill -f "oc port-forward" || true
     pkill -f "uvicorn.*metrics_api:app" || true
     pkill -f "mcp_server.main" || true
@@ -169,6 +172,16 @@ start_port_forwards() {
         exit 1
     fi
     
+    # Find and port-forward TempoStack gateway
+    TEMPO_SERVICE=$(oc get services -n "$OBSERVABILITY_NAMESPACE" -o name -l 'app.kubernetes.io/name=tempo' -l 'app.kubernetes.io/component=gateway' | cut -d'/' -f2 || echo "")
+    if [ -n "$TEMPO_SERVICE" ]; then
+        echo -e "${GREEN}✅ Found TempoStack gateway: $TEMPO_SERVICE in [$OBSERVABILITY_NAMESPACE] namespace${NC}"
+        oc port-forward service/"$TEMPO_SERVICE" "$TEMPO_PORT:8080" -n "$OBSERVABILITY_NAMESPACE" &
+        echo -e "${GREEN}   📊 Tempo available at: http://localhost:$TEMPO_PORT${NC}"
+    else
+        echo -e "${YELLOW}⚠️  TempoStack gateway not found in namespace: $OBSERVABILITY_NAMESPACE. Tempo functionality may not be available.${NC}"
+    fi
+
     sleep 3  # Give port-forwards time to establish
 }
 
@@ -221,6 +234,9 @@ start_local_services() {
     
     # Set environment variables
     export PROMETHEUS_URL="http://localhost:$THANOS_PORT"
+    export TEMPO_URL="https://localhost:$TEMPO_PORT"
+    export TEMPO_TENANT_ID="dev"
+    export TEMPO_TOKEN="$TOKEN"
     export LLAMA_STACK_URL="http://localhost:$LLAMASTACK_PORT/v1/openai/v1"
     export THANOS_TOKEN="$TOKEN"
     export METRICS_API_URL="http://localhost:$METRICS_API_PORT"
@@ -251,13 +267,16 @@ start_local_services() {
         exit 1
     fi
 
-    # Start MCP server (HTTP transport)
-    echo -e "${BLUE}🧩 Starting MCP Server (HTTP)...${NC}"
+    # Start MCP server (StreamableHTTP transport for MCP Inspector)
+    echo -e "${BLUE}🧩 Starting MCP Server (StreamableHTTP)...${NC}"
     ensure_port_free "$MCP_PORT"
     (cd src && \
-      MCP_TRANSPORT_PROTOCOL=http \
+      MCP_TRANSPORT_PROTOCOL=streamable-http \
       MODEL_CONFIG="$MODEL_CONFIG" \
       PROMETHEUS_URL="$PROMETHEUS_URL" \
+      TEMPO_URL="$TEMPO_URL" \
+      TEMPO_TENANT_ID="$TEMPO_TENANT_ID" \
+      TEMPO_TOKEN="$TEMPO_TOKEN" \
       LLAMA_STACK_URL="$LLAMA_STACK_URL" \
       THANOS_TOKEN="$THANOS_TOKEN" \
       python3 -m mcp_server.main > mcp_log.txt) &
@@ -310,8 +329,9 @@ main() {
     echo -e "   ${YELLOW}🎨 Streamlit UI: http://localhost:$UI_PORT${NC}"
     echo -e "   ${YELLOW}🔧 Metrics API: http://localhost:$METRICS_API_PORT/docs${NC}"
     echo -e "   ${YELLOW}🧩 MCP Server (health): http://localhost:$MCP_PORT/health${NC}"
-    echo -e "   ${YELLOW}🧩 MCP HTTP Endpoint: http://localhost:$MCP_PORT/mcp${NC}"
+    echo -e "   ${YELLOW}🧩 MCP StreamableHTTP Endpoint: http://localhost:$MCP_PORT/mcp${NC}"
     echo -e "   ${YELLOW}📊 Prometheus: http://localhost:$THANOS_PORT${NC}"
+    echo -e "   ${YELLOW}🔍 TempoStack: https://localhost:$TEMPO_PORT${NC}"
     echo -e "   ${YELLOW}🦙 LlamaStack: http://localhost:$LLAMASTACK_PORT${NC}"
     echo -e "   ${YELLOW}🤖 Llama Model: http://localhost:$LLAMA_MODEL_PORT${NC}"
     

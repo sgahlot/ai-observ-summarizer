@@ -42,7 +42,11 @@ class TempoQueryTool:
             with open('/var/run/secrets/kubernetes.io/serviceaccount/token', 'r') as f:
                 return f.read().strip()
         except FileNotFoundError:
-            # Fallback for local development
+            # Fallback for local development - use TEMPO_TOKEN if available
+            import os
+            tempo_token = os.getenv("TEMPO_TOKEN")
+            if tempo_token:
+                return tempo_token
             return "dev-token"
 
     def _extract_root_service(self, trace: Dict[str, Any]) -> str:
@@ -219,7 +223,7 @@ class TempoQueryTool:
     async def get_trace_details(self, trace_id: str) -> Dict[str, Any]:
         """Get detailed trace information."""
         try:
-            trace_url = f"{self.tempo_url}/api/traces/v1/{self.tenant_id}/{trace_id}"
+            trace_url = f"{self.tempo_url}/api/traces/v1/{self.tenant_id}/api/traces/{trace_id}"
             
             headers = {
                 "X-Scope-OrgID": self.tenant_id,
