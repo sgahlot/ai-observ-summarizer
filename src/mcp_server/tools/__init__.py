@@ -1,1 +1,3 @@
-"""Tools package for mcp_server."""
+"""MCP Tools package."""
+
+# Make this directory a proper Python package for reliable imports

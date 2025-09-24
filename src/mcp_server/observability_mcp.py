@@ -31,23 +31,49 @@ class ObservabilityMCPServer:
             list_openshift_namespace_metric_groups,
             chat_openshift,
         )
+        from .tools.prometheus_tools import (
+            search_metrics,                    # Search metrics by pattern
+            get_metric_metadata,              # Get metric metadata
+            get_label_values,                 # Get label values
+            execute_promql,                   # Execute PromQL queries
+            explain_results,                  # Explain query results
+            suggest_queries,                  # Suggest related queries
+            select_best_metric,               # Select best metric
+            find_best_metric_with_metadata_v2,  # Smart metric selection v2
+            find_best_metric_with_metadata,   # Smart metric selection v1
+        )
         from .tools.tempo_query_tool import (
             query_tempo_tool,
             get_trace_details_tool,
             analyze_traces_tool,
         )
 
+        # Register vLLM tools
         self.mcp.tool()(list_models)
         self.mcp.tool()(list_namespaces)
         self.mcp.tool()(get_model_config)
         self.mcp.tool()(get_vllm_metrics_tool)
         self.mcp.tool()(analyze_vllm)
         self.mcp.tool()(calculate_metrics)
+
+        # Register OpenShift tools
         self.mcp.tool()(analyze_openshift)
         self.mcp.tool()(list_openshift_metric_groups)
         self.mcp.tool()(list_openshift_namespace_metric_groups)
         self.mcp.tool()(chat_openshift)
+
+        # Register Prometheus tools one by one
+        self.mcp.tool()(search_metrics)                    # Search metrics by pattern
+        self.mcp.tool()(get_metric_metadata)              # Get metric metadata
+        self.mcp.tool()(get_label_values)                 # Get label values
+        self.mcp.tool()(execute_promql)                   # Execute PromQL queries
+        self.mcp.tool()(explain_results)                  # Explain query results
+        self.mcp.tool()(suggest_queries)                  # Suggest related queries
+        self.mcp.tool()(select_best_metric)               # Select best metric
+        self.mcp.tool()(find_best_metric_with_metadata_v2)  # Smart metric selection v2
+        self.mcp.tool()(find_best_metric_with_metadata)   # Smart metric selection v1
+
+        # Register Tempo query tools
         self.mcp.tool()(query_tempo_tool)
         self.mcp.tool()(get_trace_details_tool)
         self.mcp.tool()(analyze_traces_tool)
-

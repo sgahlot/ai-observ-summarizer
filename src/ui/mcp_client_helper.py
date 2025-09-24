@@ -17,11 +17,29 @@ from typing import Dict, Any, List, Optional
 
 # Add current directory to Python path for consistent imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Also add the project src root so `common` and other packages are importable in local runs
+_SRC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _SRC_ROOT not in sys.path:
+    sys.path.append(_SRC_ROOT)
 
 from error_handler import parse_mcp_error, display_mcp_error
+from common.pylogger import get_python_logger, force_reconfigure_all_loggers
 
-# Configure logger for this module (avoid global basicConfig here)
+# Initialize shared structured logging once per process
+get_python_logger(os.getenv("PYTHON_LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
+
+# Ensure root logger has a handler in UI context
+try:
+    _root_logger = logging.getLogger()
+    if not _root_logger.handlers:
+        logging.basicConfig(
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            stream=sys.stdout,
+            level=os.getenv("PYTHON_LOG_LEVEL", "INFO").upper(),
+        )
+except Exception:
+    pass
 
 # MCP Server Configuration
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8085")
@@ -785,6 +803,109 @@ def parse_model_config_text(text: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error parsing model config text: {e}")
         return {}
+
+
+def chat_openshift_mcp(
+    metric_category: str,
+    question: str,
+    scope: str,
+    namespace: Optional[str],
+    start_ts: int,
+    end_ts: int,
+    summarize_model_id: str,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Chat about OpenShift metrics via MCP chat_openshift tool."""
+    try:
+        # Soft health check: log but don't fail early; still attempt the tool call
+        try:
+            if not mcp_client.check_server_health():
+                logger.warning("MCP health check failed; proceeding to attempt chat_openshift anyway")
+        except Exception:
+            logger.warning("MCP health check error; proceeding anyway")
+
+        params = {
+            "metric_category": metric_category,
+            "question": question,
+            "scope": scope,
+            "namespace": namespace or "",
+            "start_datetime": epoch_to_iso(start_ts),
+            "end_datetime": epoch_to_iso(end_ts),
+            "summarize_model_id": summarize_model_id,
+        }
+        if api_key:
+            params["api_key"] = api_key
+
+        result = mcp_client.call_tool_sync("chat_openshift", params)
+        if result is None:
+            return {
+                "error": "MCP chat request timed out",
+                "error_type": "mcp_structured",
+                "error_details": {
+                    "is_error": True,
+                    "error_code": "TIMEOUT_ERROR",
+                    "message": "MCP chat_openshift timed out. The LLM service may be unavailable or slow.",
+                },
+            }
+        # If server returned a structured MCP error, surface it
+        # Prometheus or LLM structured errors from MCP
+        err = parse_mcp_error(result)
+        if err:
+            return {
+                "error": err.get("message", "MCP tool error"),
+                "error_type": "mcp_structured",
+                "error_details": err,
+            }
+        response_text = extract_text_from_mcp_result(result) or ""
+        
+        # Parse the JSON response
+        try:
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            # If MCP returned an error body encoded as list/dict text, surface as error
+            possible_err = parse_mcp_error(result)
+            if possible_err:
+                return {
+                    "error": possible_err.get("message", "MCP tool error"),
+                    "error_type": "mcp_structured",
+                    "error_details": possible_err,
+                }
+            logger.error(f"Failed to parse chat_openshift response as JSON: {response_text}")
+            return {"summary": response_text, "promql": ""}
+            
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"MCP connection error during chat_openshift: {e}")
+        return {
+            "error": "MCP server is not available",
+            "error_type": "mcp_structured",
+            "error_details": {
+                "is_error": True,
+                "error_code": "CONNECTION_ERROR",
+                "message": "MCP server is not available",
+            },
+        }
+    except requests.exceptions.Timeout as e:
+        logger.error(f"MCP timeout during chat_openshift: {e}")
+        return {
+            "error": "MCP chat request timed out",
+            "error_type": "mcp_structured",
+            "error_details": {
+                "is_error": True,
+                "error_code": "TIMEOUT_ERROR",
+                "message": "MCP chat_openshift timed out. The LLM service may be unavailable or slow.",
+            },
+        }
+    except Exception as e:
+        logger.error(f"Error chatting with OpenShift via MCP: {e}")
+        return {
+            "error": str(e),
+            "error_type": "mcp_structured",
+            "error_details": {
+                "is_error": True,
+                "error_code": "INTERNAL_ERROR",
+                "message": str(e),
+            },
+        }
 
 
 def get_vllm_metrics_mcp() -> Dict[str, str]:

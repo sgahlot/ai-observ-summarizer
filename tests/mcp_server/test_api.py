@@ -24,7 +24,7 @@ def _reload_api_with_mocks(protocol: str | None = None):
     mcp_mock.http_app.return_value = http_app_mock
     server_mock.mcp = mcp_mock
 
-    patches = [patch("mcp_server.mcp.ObservabilityMCPServer", return_value=server_mock)]
+    patches = [patch("mcp_server.observability_mcp.ObservabilityMCPServer", return_value=server_mock)]
 
     # If SSE, patch create_sse_app and set settings before reload
     if protocol == "sse":

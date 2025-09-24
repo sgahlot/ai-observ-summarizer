@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from mcp_server.mcp import ObservabilityMCPServer
+from mcp_server.observability_mcp import ObservabilityMCPServer
 from mcp_server.settings import settings
 
 server = ObservabilityMCPServer()

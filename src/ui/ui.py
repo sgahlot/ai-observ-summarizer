@@ -10,6 +10,7 @@ import base64
 import matplotlib.pyplot as plt
 import io
 import time
+import logging
 from mcp_client_helper import (
     mcp_client,
     get_namespaces_mcp,
@@ -24,37 +25,217 @@ from mcp_client_helper import (
     is_double_encoded_mcp_response,
     extract_from_double_encoded_response,
     analyze_openshift_mcp,
+    chat_openshift_mcp,
     parse_analyze_response,
 )
 # Add current directory to Python path for consistent imports
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+_SRC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _SRC_ROOT not in sys.path:
+    sys.path.append(_SRC_ROOT)
 
 from mcp_client_helper import get_namespaces_mcp, get_models_mcp, get_model_config_mcp, analyze_vllm_mcp, calculate_metrics_mcp, get_vllm_metrics_mcp
-from error_handler import (
-    parse_mcp_error,
-    display_mcp_error,
-    display_error_with_context,
-    handle_client_or_mcp_error,
-)
+from error_handler import parse_mcp_error, display_mcp_error, display_error_with_context, handle_client_or_mcp_error
+import sys
+import os
+import importlib.util
+from common.pylogger import get_python_logger
+
+# Initialize shared structured logger for UI
+get_python_logger(os.getenv("PYTHON_LOG_LEVEL", "INFO"))
+logger = logging.getLogger(__name__)
+
+# Ensure root logger has a handler (pylogger clears handlers for third-party loggers)
+try:
+    _root_logger = logging.getLogger()
+    if not _root_logger.handlers:
+        logging.basicConfig(
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            stream=sys.stdout,
+            level=os.getenv("PYTHON_LOG_LEVEL", "INFO").upper(),
+        )
+except Exception:
+    pass
+
+# Claude Desktop Intelligence - Direct import with robust fallbacks
+try:
+    # Try direct import first (works in container with proper package structure)
+    from mcp_server.claude_integration import PrometheusChatBot
+except ImportError:
+    # Fallback: Add path and try again (works in local development)
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'mcp_server'))
+    try:
+        from claude_integration import PrometheusChatBot
+    except ImportError:
+        # Final fallback: Direct file loading (most robust)
+        claude_integration_path = os.path.join(os.path.dirname(__file__), '..', 'mcp_server', 'claude_integration.py')
+        if os.path.exists(claude_integration_path):
+            spec = importlib.util.spec_from_file_location("claude_integration", claude_integration_path)
+            claude_integration = importlib.util.module_from_spec(spec)
+            sys.modules['claude_integration'] = claude_integration
+            spec.loader.exec_module(claude_integration)
+            PrometheusChatBot = claude_integration.PrometheusChatBot
+        else:
+            # If all else fails, create a dummy class to prevent crashes
+            class PrometheusChatBot:
+                def __init__(self, *args, **kwargs):
+                    self.error = "Claude integration not available"
+                def chat(self, *args, **kwargs):
+                    return "❌ Claude integration not available. Please check deployment."
+                def test_connection(self):
+                    return False
 
 # --- Config ---
 API_URL = os.getenv("METRICS_API_URL", "http://localhost:8000")
 PROM_URL = os.getenv("PROM_URL", "http://localhost:9090")
+
+# --- Claude Chat Bot (removed cached version since we create chatbot dynamically with user API key) ---
 
 # --- Page Setup ---
 st.set_page_config(page_title="AI Metric Tools", layout="wide")
 st.markdown(
     """
 <style>
-    html, body, [class*="css"] { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto; }
-    h1, h2, h3 { font-weight: 600; color: #1c1c1e; letter-spacing: -0.5px; }
-    .stMetric { border-radius: 12px; background-color: #f9f9f9; padding: 1em; box-shadow: 0 2px 8px rgba(0,0,0,0.05); color: #1c1c1e !important; }
-    [data-testid="stMetricValue"], [data-testid="stMetricLabel"] { color: #1c1c1e !important; font-weight: 600; }
-    .block-container { padding-top: 2rem; }
-    .stButton>button { border-radius: 8px; padding: 0.5em 1.2em; font-size: 1em; }
+    /* Claude Desktop-like styling */
+    html, body, [class*="css"] { 
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+        background-color: #f8f9fa;
+    }
+    
+    /* Chat container styling */
+    .main .block-container {
+        padding-top: 1rem;
+        max-width: 900px;
+        margin: 0 auto;
+    }
+    
+    /* Chat messages styling */
+    [data-testid="stChatMessage"] {
+        background-color: white;
+        border-radius: 12px;
+        margin: 0.5rem 0;
+        padding: 1rem 1.5rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border: 1px solid #e1e5e9;
+    }
+    
+    /* User message styling */
+    [data-testid="stChatMessage"][data-testid*="user"] {
+        background-color: #f0f4f8;
+        border-left: 4px solid #0066cc;
+    }
+    
+    /* Assistant message styling */
+    [data-testid="stChatMessage"][data-testid*="assistant"] {
+        background-color: white;
+        border-left: 4px solid #28a745;
+    }
+    
+    /* Chat input styling */
+    [data-testid="stChatInput"] {
+        border-radius: 20px;
+        border: 2px solid #e1e5e9;
+        background-color: white;
+        margin: 1rem 0;
+    }
+    
+    [data-testid="stChatInput"]:focus-within {
+        border-color: #0066cc;
+        box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+    }
+    
+    /* Typography */
+    h1, h2, h3 { 
+        font-weight: 600; 
+        color: #1a1a1a; 
+        letter-spacing: -0.5px; 
+    }
+    
+    /* Metrics styling */
+    .stMetric { 
+        border-radius: 12px; 
+        background-color: white; 
+        padding: 1.5rem; 
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08); 
+        border: 1px solid #e1e5e9;
+        color: #1a1a1a !important; 
+    }
+    
+    [data-testid="stMetricValue"], [data-testid="stMetricLabel"] { 
+        color: #1a1a1a !important; 
+        font-weight: 600; 
+    }
+    
+    /* Button styling */
+    .stButton>button { 
+        border-radius: 8px; 
+        padding: 0.75rem 1.5rem; 
+        font-size: 1rem;
+        font-weight: 500;
+        border: none;
+        background: linear-gradient(135deg, #0066cc, #004499);
+        color: white;
+        transition: all 0.2s ease;
+    }
+    
+    .stButton>button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0, 102, 204, 0.3);
+    }
+    
+    /* Sidebar styling */
+    .stSidebar {
+        background-color: #f8f9fa;
+        border-right: 1px solid #e1e5e9;
+    }
+    
+    /* Hide default Streamlit elements */
     footer, header { visibility: hidden; }
+    #MainMenu { visibility: hidden; }
+    
+    /* Loading spinner */
+    .stSpinner {
+        text-align: center;
+        color: #0066cc;
+    }
+    
+    /* Code blocks */
+    pre, code {
+        background-color: #f6f8fa;
+        border-radius: 6px;
+        padding: 0.5rem;
+        border: 1px solid #e1e5e9;
+    }
+    
+    /* Status indicators */
+    .element-container .stSuccess {
+        background-color: #d4edda;
+        border-color: #c3e6cb;
+        color: #155724;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+    }
+    
+    .element-container .stInfo {
+        background-color: #d1ecf1;
+        border-color: #bee5eb;
+        color: #0c5460;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+    }
+    
+    .element-container .stWarning {
+        background-color: #fff3cd;
+        border-color: #ffeeba;
+        color: #856404;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -65,6 +246,8 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Go to:", ["vLLM Metric Summarizer", "Chat with Prometheus", "OpenShift Metrics"]
 )
+
+# Log level is controlled via PYTHON_LOG_LEVEL env; no runtime selector in UI
 
 
 # --- Shared Utilities ---
@@ -412,6 +595,7 @@ def create_trend_chart_image(metric_data, chart_metrics=None):
 
 def generate_report_and_download(report_format: str):
     try:
+        logger.info(f"Starting report generation", extra={"format": report_format})
         analysis_params = st.session_state["analysis_params"]
 
         # Check if this is OpenShift analysis or vLLM analysis
@@ -468,12 +652,14 @@ def generate_report_and_download(report_format: str):
         if trend_chart_image_b64:
             payload["trend_chart_image"] = trend_chart_image_b64
 
+        logger.info("Requesting report generation from API")
         response = requests.post(
             f"{API_URL}/generate_report",
             json=payload,
         )
         response.raise_for_status()
         report_id = response.json()["report_id"]
+        logger.info("Report generated", extra={"report_id": report_id})
         download_response = requests.get(f"{API_URL}/download_report/{report_id}")
         download_response.raise_for_status()
         mime_map = {
@@ -484,8 +670,10 @@ def generate_report_and_download(report_format: str):
         mime_type = mime_map.get(report_format, "application/octet-stream")
         trigger_download(download_response.content, filename, mime_type)
     except requests.exceptions.HTTPError as http_err:
+        logger.exception("HTTP error during report generation")
         st.error(f"HTTP error during report generation: {http_err}")
     except Exception as e:
+        logger.exception("Error during report generation")
         st.error(f"❌ Error during report generation: {e}")
 
 
@@ -637,65 +825,35 @@ if page == "OpenShift Metrics":
     model_name = None
 
 elif page == "Chat with Prometheus":
-    # Chat with Prometheus-specific sidebar controls
-    st.sidebar.markdown("### Chat Scope")
+    # Simplified - no namespace/fleet-wide complexity
+    st.sidebar.markdown("### 🤖 Chat with Prometheus")
+    st.sidebar.markdown("Ask about **any metrics** across your cluster")
     
-    # Chat scope selection
-    chat_scope = st.sidebar.radio(
-        "Select Chat Scope",
-        ["Namespace-specific", "Fleet-wide"],
-        help="Choose whether to analyze a specific namespace or the entire cluster",
-        key="chat_scope_selector"
-    )
-    
-    # Namespace selection (conditional based on scope)
-    if chat_scope == "Namespace-specific":
-        namespaces = get_namespaces()
-        selected_namespace = st.sidebar.selectbox(
-            "Select Namespace", 
-            namespaces, 
-            key="chat_namespace_selector"
-        )
-    else:
-        # Fleet-wide: show disabled dropdown
-        selected_namespace = None
-        st.sidebar.selectbox(
-            "Select Namespace",
-            ["All Namespaces (Fleet-wide)"],
-            disabled=True,
-            help="Namespace selection is disabled for fleet-wide analysis",
-            key="chat_namespace_disabled",
-        )
-    
-    # Model selection (always needed for some model-specific queries)
+    # Simple model selection for reference (optional)
     model_list = get_models()
-    if chat_scope == "Namespace-specific" and selected_namespace:
-        # Filter models by selected namespace
-        filtered_models = [
-            model for model in model_list if model.startswith(f"{selected_namespace} | ")
-        ]
-        if filtered_models:
-            model_name = st.sidebar.selectbox(
-                "Select Model", filtered_models, key="chat_model_selector"
-            )
-        else:
-            model_name = None
-            st.sidebar.warning(f"No models found in namespace {selected_namespace}")
-    else:
-        # Fleet-wide: use first available model as default
-        model_name = model_list[0] if model_list else None
+    model_name = None
+    selected_namespace = None  # Always analyze cluster-wide
     
     st.sidebar.markdown("---")
     
-    # --- Select LLM ---
-    st.sidebar.markdown("### Select LLM for summarization")
+    # --- Select Claude Model ---
+    st.sidebar.markdown("### 🤖 Select Claude Model")
+    st.sidebar.markdown("*Claude Desktop-powered analysis*")
 
-    # --- Multi-model support ---
-    multi_model_list = get_multi_models()
+    # --- Claude-only model support for Chat with Prometheus ---
+    all_models = get_multi_models()
+    # Filter for only Claude/Anthropic models since this page uses Claude Desktop intelligence
+    claude_models = [model for model in all_models if 'anthropic' in model.lower() or 'claude' in model.lower()]
+    
+    if not claude_models:
+        st.sidebar.error("❌ No Claude models found. Please check model configuration.")
+        claude_models = all_models  # Fallback to all models
+    
     multi_model_name = st.sidebar.selectbox(
-        "Select LLM for summarization",
-        multi_model_list,
-        key="chat_multi_model_selector",
+        "Select Claude model for Prometheus analysis",
+        claude_models,
+        key="chat_claude_model_selector",
+        help="Only Claude models are available for Chat with Prometheus due to superior observability analysis capabilities"
     )
 
     # --- Define model key requirements ---
@@ -885,6 +1043,9 @@ if page == "vLLM Metric Summarizer":
     if st.button("🔍 Analyze Metrics"):
         with st.spinner("Analyzing metrics..."):
             try:
+                logger.info(
+                    "Starting vLLM analysis",
+                )
                 # Analyze metrics via MCP server
                 result = analyze_vllm_mcp(
                     model_name=model_name,
@@ -935,6 +1096,7 @@ if page == "vLLM Metric Summarizer":
                 st.rerun()
 
             except Exception as e:
+                logger.exception("Error during vLLM analysis")
                 clear_session_state()
                 st.error(f"❌ Error during analysis: {e}")
 
@@ -1139,100 +1301,140 @@ if page == "vLLM Metric Summarizer":
 
 # --- 🤖 Chat with Prometheus Page ---
 elif page == "Chat with Prometheus":
-    st.markdown("<h1>Chat with Prometheus</h1>", unsafe_allow_html=True)
+    # Claude Desktop-like header
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem 0 1rem 0;">
+        <h1 style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem; background: linear-gradient(135deg, #0066cc, #004499); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+            Chat with Prometheus
+        </h1>
+        <p style="font-size: 1.1rem; color: #666; margin-bottom: 0;">
+            Ask questions about your infrastructure metrics in natural language
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Display current scope configuration
-    if chat_scope == "Fleet-wide":
-        st.markdown("🌐 **Fleet-wide analysis** - Querying metrics across all namespaces")
-        st.markdown(
-            "Ask questions like: `Total GPU usage across all namespaces?`, `Which namespace has highest latency?`, `What alerts were firing cluster-wide yesterday?` etc."
-        )
-    else:
-        st.markdown(f"🏷️ **Namespace-specific analysis** - Currently selected namespace: **{selected_namespace}**")
-        st.markdown(
-            "Ask questions like: `What's the P95 latency in past 1 hour?`, `Is GPU usage stable in my namespace?`, `What alerts were firing in my namespace yesterday?` etc."
-        )
+    # Initialize Claude chat bot using user-entered API key or environment variable
+    claude_chatbot = None
+    user_api_key = api_key if api_key else os.getenv("ANTHROPIC_API_KEY")
     
-    # Helpful hint about dynamic time parsing
-    st.info(
-        "💡 **Smart Time Parsing**: Just mention time naturally in your question! "
-        "Examples: *'past 15 minutes'*, *'last 3 hours'*, *'yesterday'*, *'past 2 weeks'*"
+    if user_api_key:
+        try:
+            claude_chatbot = PrometheusChatBot(api_key=user_api_key, model_name=multi_model_name)
+        except Exception as e:
+            st.error(f"Failed to initialize Claude chat bot: {e}")
+    
+    # Simple cluster-wide analysis
+    st.markdown("🌐 **Cluster-wide analysis** - Ask about any metrics across your infrastructure")
+    st.markdown(
+        "Ask questions like: `What's the GPU temperature?`, `How many pods are running?`, `Token generation rate?`, `Memory usage per model?` etc."
     )
-
+    
+    # Claude integration status
+    if claude_chatbot:
+        st.success("✅ Claude AI is connected and ready!")
+        if claude_chatbot.test_connection():
+            st.info("🔗 MCP tools are working properly")
+        else:
+            st.warning("⚠️ MCP tools connection issue")
+    else:
+        if current_model_requires_api_key and not user_api_key:
+            st.error("❌ Please enter your Anthropic API key in the sidebar.")
+        else:
+            st.info("💡 **Smart Time Parsing**: Just mention time naturally in your question! "
+                    "Examples: *'past 15 minutes'*, *'last 3 hours'*, *'yesterday'*, *'past 2 weeks'*")
+    
     # --- Chat history management ---
-    if "messages" not in st.session_state:
-        st.session_state.messages = []  # List to store chat messages
+    if "claude_messages" not in st.session_state:
+        st.session_state.claude_messages = []  # List to store chat messages
+
+    # Show suggested questions if no conversation started (like Claude Desktop)
+    if not st.session_state.claude_messages and claude_chatbot:
+        st.markdown("### 💡 Suggested Questions")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🖥️ What's the GPU usage?", key="gpu_question", use_container_width=True):
+                st.session_state.suggested_question = "What's the GPU usage in the dev namespace?"
+            
+            if st.button("📊 Show CPU metrics", key="cpu_question", use_container_width=True):
+                st.session_state.suggested_question = "Show me CPU utilization trends for the last hour"
+        
+        with col2:
+            if st.button("💾 Check memory usage", key="memory_question", use_container_width=True):
+                st.session_state.suggested_question = "What's the memory usage across all pods?"
+            
+            if st.button("🚨 Any alerts firing?", key="alerts_question", use_container_width=True):
+                st.session_state.suggested_question = "What alerts were firing in my namespace yesterday?"
+        
+        # Handle suggested question clicks
+        if "suggested_question" in st.session_state:
+            question = st.session_state.suggested_question
+            del st.session_state.suggested_question
+            st.rerun()
 
     # Display previous chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
+    for message in st.session_state.claude_messages:
+        avatar = "👤" if message["role"] == "user" else "🤖"
+        with st.chat_message(message["role"], avatar=avatar):
             st.markdown(message["content"])
 
-    user_question = st.chat_input("Your question")
-    if user_question:
-        st.session_state.messages.append({"role": "user", "content": user_question})
-        with st.chat_message("user"):
+    # Custom chat input with better placeholder
+    user_question = st.chat_input("Ask Claude about your Prometheus metrics... (e.g., 'What's the GPU usage?' or 'Show me CPU trends')")
+    
+    if user_question and claude_chatbot:
+        # Add user message to history and display it
+        st.session_state.claude_messages.append({"role": "user", "content": user_question})
+        with st.chat_message("user", avatar="👤"):
             st.markdown(user_question)
 
-        with st.spinner("Querying and summarizing..."):
+        # Create assistant message placeholder for streaming-like effect
+        with st.chat_message("assistant", avatar="🤖"):
+            message_placeholder = st.empty()
+            
+            # Show thinking state
+            message_placeholder.markdown("🔍 **Analyzing your request...**")
+            
             try:
-                # Convert chat scope to backend format
-                backend_chat_scope = "fleet_wide" if chat_scope == "Fleet-wide" else "namespace_specific"
+                # Create progress callback to show tool usage like Claude Desktop
+                def update_progress(status_msg):
+                    message_placeholder.markdown(f"**{status_msg}**")
                 
-                response = requests.post(
-                    f"{API_URL}/chat-metrics",
-                    json={
-                        "model_name": model_name or "default",  # Provide default if None
-                        "question": user_question,
-                        "start_ts": selected_start,
-                        "end_ts": selected_end,
-                        "namespace": selected_namespace or "",  # Provide empty string if None
-                        "summarize_model_id": multi_model_name,
-                        "api_key": api_key,
-                        "chat_scope": backend_chat_scope,
-                    },
+                # Update status
+                message_placeholder.markdown("⚡ **Starting analysis...**")
+                
+                # Get response from Claude with real-time progress (PromQL queries always included)
+                response = claude_chatbot.chat(
+                    user_question,
+                    namespace=None,  # Cluster-wide analysis
+                    scope="cluster-wide",
+                    progress_callback=update_progress
                 )
-                data = response.json()
-                promql = data.get("promql", "")
-                summary = data.get("summary", "")
-                chat_scope_response = data.get("chat_scope", "namespace_specific")
-                time_range = data.get("time_range", "")
                 
-                if not summary:
-                    st.error("Error: Missing summary in response from AI.")
+                # Display final response with better formatting
+                if response:
+                    # Format the response for better readability
+                    formatted_response = response.replace("\\n", "\n")
+                    message_placeholder.markdown(formatted_response)
+                    
+                    # Add Claude's response to history
+                    st.session_state.claude_messages.append({"role": "assistant", "content": response})
                 else:
-                    # Adding AI response to history ---
-                    ai_response_content = ""
-                    
-                    # Show generated PromQL
-                    if promql:
-                        ai_response_content += (
-                            "**Generated PromQL:**\n```promql\n" + promql + "\n```\n\n"
-                        )
-                    else:
-                        ai_response_content += (
-                            "_No direct PromQL generated for this question._\n\n"
-                        )
-
-                    
-                    scope_display = "Fleet-wide" if chat_scope_response.lower() == "fleet_wide" else "Namespace-specific"
-
-                    # Show AI Summary 
-                    ai_response_content += "**AI Summary with Scope " + scope_display + ":**\n\n" + summary
-                    
-                    # Show additional context if available
-                    if time_range:
-                        ai_response_content += f"\n\n📅 **Time Range:** {time_range}"
-                    # ai_response_content += f"\n🔍 **Scope:** {scope_display}"
-
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": ai_response_content}
-                    )
-                    with st.chat_message("assistant"):
-                        st.markdown(ai_response_content)
+                    error_msg = "I couldn't generate a response. Please try again."
+                    message_placeholder.markdown(f"❌ **Error:** {error_msg}")
+                    st.session_state.claude_messages.append({"role": "assistant", "content": error_msg})
 
             except Exception as e:
-                st.error(f"Error: {e}")
+                error_msg = f"I encountered an error: {str(e)}. Please try again."
+                message_placeholder.markdown(f"❌ **Error:** {error_msg}")
+                st.session_state.claude_messages.append({"role": "assistant", "content": error_msg})
+    
+    elif user_question and not claude_chatbot:
+        with st.chat_message("assistant", avatar="⚠️"):
+            if current_model_requires_api_key and not user_api_key:
+                st.markdown("🔑 **API Key Required**\n\nPlease enter your Anthropic API key in the sidebar to start chatting with Claude.")
+            else:
+                st.markdown("❌ **Connection Error**\n\nClaude AI is not available. Please check your configuration.")
 
 
 # --- 🔧 OpenShift Metrics Page ---
@@ -1334,31 +1536,48 @@ elif page == "OpenShift Metrics":
             if st.button("Ask OpenShift Assistant"):
                 with st.spinner("OpenShift assistant is thinking..."):
                     try:
-                        reply = requests.post(
-                            f"{API_URL}/chat-openshift",
-                            json={
-                                "metric_category": st.session_state[
-                                    "openshift_metric_category"
-                                ],
-                                "question": openshift_question,
-                                "scope": st.session_state["openshift_scope"],
-                                "namespace": st.session_state["openshift_namespace"],
-                                "start_ts": selected_start,
-                                "end_ts": selected_end,
-                                "summarize_model_id": multi_model_name,
-                                "api_key": api_key,
-                            },
+                        logger.info("Starting OpenShift chat request")
+                        response_data = chat_openshift_mcp(
+                            metric_category=st.session_state["openshift_metric_category"],
+                            question=openshift_question,
+                            scope=st.session_state["openshift_scope"],
+                            namespace=st.session_state["openshift_namespace"],
+                            start_ts=selected_start,
+                            end_ts=selected_end,
+                            summarize_model_id=multi_model_name,
+                            api_key=api_key,
                         )
-                        reply.raise_for_status()
-                        response_data = reply.json()
-                        st.markdown("**Assistant's Response:**")
-                        st.markdown(response_data["summary"])
-                        if response_data.get("promql"):
-                            st.markdown("**Generated PromQL:**")
-                            st.code(response_data["promql"], language="yaml")
-                    except requests.exceptions.HTTPError as http_err:
-                        handle_http_error(http_err.response, "OpenShift chat failed")
+                        # Centralized error handling similar to analyze flow
+                        if handle_client_or_mcp_error(response_data, "OpenShift chat"):
+                            clear_session_state()
+                            st.stop()
+
+                        # Normalize response to dict {promql, summary}
+                        if isinstance(response_data, list):
+                            text = extract_text_from_mcp_result(response_data) or ""
+                            try:
+                                parsed = json.loads(text) if text else {}
+                                response_data = parsed if isinstance(parsed, dict) else {"promql": "", "summary": text}
+                            except Exception:
+                                response_data = {"promql": "", "summary": text or ""}
+                        elif not isinstance(response_data, dict):
+                            response_data = {"promql": "", "summary": str(response_data)}
+
+                        if not response_data:
+                            st.error("❌ OpenShift chat failed - no data returned")
+                            clear_session_state()
+                            st.stop()
+
+                        if response_data:
+                            st.markdown("**Assistant's Response:**")
+                            st.markdown(response_data.get("summary", "No response received"))
+                            if response_data.get("promql"):
+                                st.markdown("**Generated PromQL:**")
+                                st.code(response_data["promql"], language="yaml")
+                        else:
+                            st.error("❌ No response received from OpenShift assistant")
                     except Exception as e:
+                        logger.exception("OpenShift chat failed")
                         st.error(f"❌ OpenShift chat failed: {e}")
 
         with col2:

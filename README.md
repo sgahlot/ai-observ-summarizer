@@ -87,6 +87,15 @@ cd src/mcp_server && python setup_integration.py
 ```
 See [`src/mcp_server/README.md`](src/mcp_server/README.md) for complete documentation.
 
+### **8. 🤖 Chat with Prometheus - Claude Desktop Intelligence**
+- **Claude Desktop-style interface** with autonomous tool calling and real-time progress visibility
+- **Dynamic metric selection** from 3500+ available metrics using AI-powered analysis  
+- **Intelligent PromQL generation** with automatic aggregation and filtering
+- **Rich contextual responses** including operational insights, health assessments, and technical details
+- **Multi-iteration analysis** - Claude uses multiple tools sequentially for comprehensive understanding
+
+Ask questions like: *"How many pods are running?"*, *"What's the GPU temperature?"*, *"Token generation rate?"* and get Claude Desktop-quality responses with full transparency of the AI reasoning process.
+
 ---
 
 ### GPU Monitoring

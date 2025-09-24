@@ -205,16 +205,44 @@ ensure_port_free() {
     fi
 }
 
-# This function sets "MODEL_CONFIG" envrionment variable by reading it from "$METRIC_API_APP" deployment
+# This function sets "MODEL_CONFIG" environment variable from cluster deployment or local file
 set_model_config() {
-    # Find metrics-api-app deployment
-
+    echo -e "${BLUE}🔧 Setting up MODEL_CONFIG...${NC}"
+    
+    # Check if local model-config.json exists
+    LOCAL_MODEL_CONFIG="deploy/helm/model-config.json"
+    if [ -f "$LOCAL_MODEL_CONFIG" ]; then
+        echo -e "${YELLOW}📋 Found local model config file: $LOCAL_MODEL_CONFIG${NC}"
+        echo -e "${YELLOW}   This includes additional models like Anthropic Claude for testing.${NC}"
+        echo ""
+        echo -e "${BLUE}Choose MODEL_CONFIG source:${NC}"
+        echo -e "  ${GREEN}1) Use CLUSTER config${NC} (production models from deployed metrics-api)"
+        echo -e "  ${YELLOW}2) Use LOCAL config${NC} (includes Anthropic/Claude and other test models)"
+        echo ""
+        read -p "Enter your choice (1 or 2) [default: 1]: " CONFIG_CHOICE
+        
+        if [ "$CONFIG_CHOICE" = "2" ]; then
+            echo -e "${YELLOW}🔧 Using LOCAL model config...${NC}"
+            export MODEL_CONFIG=$(cat "$LOCAL_MODEL_CONFIG")
+            if [ -n "$MODEL_CONFIG" ]; then
+                echo -e "${GREEN}✅ LOCAL MODEL_CONFIG loaded successfully${NC}"
+                echo -e "${BLUE}   Available models: $(echo "$MODEL_CONFIG" | jq -r 'keys | join(", ")')${NC}"
+                return 0
+            else
+                echo -e "${RED}❌ Failed to read local model config file${NC}"
+                exit 1
+            fi
+        fi
+    fi
+    
+    # Default: Use cluster config
+    echo -e "${BLUE}🔧 Using CLUSTER model config...${NC}"
     METRIC_API_DEPLOYMENT=$(oc get deploy "$METRIC_API_APP" -n "$DEFAULT_NAMESPACE")
     if [ -n "$METRIC_API_DEPLOYMENT" ]; then
         echo -e "${GREEN}✅ Found [$METRIC_API_APP] deployment: $METRIC_API_DEPLOYMENT${NC}"
         export $(oc set env deployment/$METRIC_API_APP --list  -n "$DEFAULT_NAMESPACE" | grep MODEL_CONFIG)
         if [ -n "$MODEL_CONFIG" ]; then
-          echo -e "${GREEN}✅   MODEL_CONFIG set to: $MODEL_CONFIG${NC}"
+          echo -e "${GREEN}✅ CLUSTER MODEL_CONFIG set successfully${NC}"
         else
           echo -e "${RED}❌ Unable to set MODEL_CONFIG environment variable. It is required to run the UI locally.${NC}"
           exit 1
