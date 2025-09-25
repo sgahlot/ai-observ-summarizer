@@ -45,7 +45,6 @@ class ObservabilityMCPServer:
         from .tools.tempo_query_tool import (
             query_tempo_tool,
             get_trace_details_tool,
-            analyze_traces_tool,
         )
 
         # Register vLLM tools
@@ -76,4 +75,3 @@ class ObservabilityMCPServer:
         # Register Tempo query tools
         self.mcp.tool()(query_tempo_tool)
         self.mcp.tool()(get_trace_details_tool)
-        self.mcp.tool()(analyze_traces_tool)

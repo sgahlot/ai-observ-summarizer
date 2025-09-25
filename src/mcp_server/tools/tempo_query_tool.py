@@ -3,20 +3,14 @@
 This module provides async MCP tools for interacting with Tempo traces:
 - query_tempo_tool: Search traces by service, operation, time range
 - get_trace_details_tool: Get detailed trace information by trace ID
-- list_trace_services_tool: List available services with traces
-- analyze_traces_tool: Analyze trace patterns and summarize using LLM
 """
 
-import asyncio
 import httpx
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
-import json
+from typing import Dict, Any, List
+from datetime import datetime
 import logging
 
-from .observability_vllm_tools import _resp, resolve_time_range
-from core.llm_client import summarize_with_llm, build_prompt
-from core.response_validator import ResponseType
+# Note: Removed unused imports for analyze_traces_tool that was removed
 
 logger = logging.getLogger(__name__)
 
@@ -371,105 +365,5 @@ async def get_trace_details_tool(trace_id: str) -> List[Dict[str, Any]]:
 # Note: list_trace_services_tool removed because the /api/traces/v1/{tenant_id}/services endpoint
 # is not available in this TempoStack deployment. Use query_tempo_tool to search for traces instead.
 
-async def analyze_traces_tool(
-    query: str,
-    start_time: str,
-    end_time: str,
-    summarize_model_id: str = "llama-3.1-8b",
-    api_key: Optional[str] = None,
-    limit: int = 50
-) -> List[Dict[str, Any]]:
-    """
-    MCP tool function for analyzing trace patterns and summarizing using LLM.
-    
-    Args:
-        query: TraceQL query string
-        start_time: Start time in ISO format
-        end_time: End time in ISO format
-        summarize_model_id: LLM model to use for analysis
-        api_key: API key for LLM service
-        limit: Maximum number of traces to analyze
-    
-    Returns:
-        Analysis summary of trace patterns
-    """
-    try:
-        # First, query traces
-        tempo_tool = TempoQueryTool()
-        result = await tempo_tool.query_traces(query, start_time, end_time, limit)
-        
-        if not result["success"]:
-            return [{"type": "text", "text": f"Failed to query traces: {result['error']}"}]
-        
-        traces = result.get("traces", [])
-        
-        if not traces:
-            return [{"type": "text", "text": "No traces found for analysis"}]
-        
-        # Analyze trace patterns
-        analysis_data = {
-            "total_traces": len(traces),
-            "services": {},
-            "operations": {},
-            "duration_stats": {
-                "min": float('inf'),
-                "max": 0,
-                "total": 0
-            },
-            "error_traces": 0
-        }
-        
-        for trace in traces:
-            service = trace.get("rootServiceName", "unknown")
-            duration = trace.get("durationMs", 0)
-            
-            # Count services
-            analysis_data["services"][service] = analysis_data["services"].get(service, 0) + 1
-            
-            # Duration statistics (convert from ms to μs for consistency)
-            duration_us = duration * 1000
-            if duration_us > 0:
-                analysis_data["duration_stats"]["min"] = min(analysis_data["duration_stats"]["min"], duration_us)
-                analysis_data["duration_stats"]["max"] = max(analysis_data["duration_stats"]["max"], duration_us)
-                analysis_data["duration_stats"]["total"] += duration_us
-        
-        # Calculate average duration
-        if analysis_data["duration_stats"]["total"] > 0:
-            analysis_data["duration_stats"]["avg"] = analysis_data["duration_stats"]["total"] / len(traces)
-        else:
-            analysis_data["duration_stats"]["avg"] = 0
-        
-        # Build analysis prompt
-        prompt = f"""
-Analyze the following trace data and provide insights:
-
-Trace Analysis Summary:
-- Total traces: {analysis_data['total_traces']}
-- Services involved: {list(analysis_data['services'].keys())}
-- Duration stats: min={analysis_data['duration_stats']['min']:.2f}μs, max={analysis_data['duration_stats']['max']:.2f}μs, avg={analysis_data['duration_stats']['avg']:.2f}μs
-
-Service distribution:
-{json.dumps(analysis_data['services'], indent=2)}
-
-Please provide:
-1. Key performance insights
-2. Service health assessment
-3. Potential issues or bottlenecks
-4. Recommendations for improvement
-"""
-        
-        # Generate LLM summary
-        summary = summarize_with_llm(
-            prompt,
-            summarize_model_id,
-            ResponseType.VLLM_ANALYSIS,
-            api_key
-        )
-        
-        # Combine analysis data and summary
-        content = f"📊 **Trace Analysis Results**\n\n{summary}\n\n**Detailed Analysis Data:**\n{json.dumps(analysis_data, indent=2)}"
-        
-        return [{"type": "text", "text": content}]
-        
-    except Exception as e:
-        return [{"type": "text", "text": f"Failed to analyze traces: {str(e)}"}]
+# Note: analyze_traces_tool removed for now - can be added back later when needed
+# It requires LLM integration and complex analysis logic that may need refinement
