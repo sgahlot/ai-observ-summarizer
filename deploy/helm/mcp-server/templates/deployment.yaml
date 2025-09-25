@@ -43,6 +43,10 @@ spec:
             {{- end }}
             - name: PROMETHEUS_URL
               value: "{{ .Values.env.PROMETHEUS_URL }}"
+            - name: MAX_TIME_RANGE_DAYS
+              value: "{{ .Values.env.MAX_TIME_RANGE_DAYS }}"
+            - name: DEFAULT_TIME_RANGE_DAYS
+              value: "{{ .Values.env.DEFAULT_TIME_RANGE_DAYS }}"
             - name: TEMPO_URL
               value: "{{ .Values.env.TEMPO_URL }}"
             - name: TEMPO_TENANT_ID
