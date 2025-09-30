@@ -27,6 +27,7 @@ from mcp_client_helper import (
     analyze_openshift_mcp,
     chat_openshift_mcp,
     parse_analyze_response,
+    chat_tempo_mcp,
 )
 # Add current directory to Python path for consistent imports
 import sys
@@ -251,6 +252,21 @@ page = st.sidebar.radio(
 
 
 # --- Shared Utilities ---
+
+def detect_trace_question(question: str) -> bool:
+    """Detect if the question is about traces/tracing"""
+    question_lower = question.lower()
+    trace_keywords = [
+        "trace", "traces", "span", "spans", "latency", "request flow",
+        "distributed tracing", "request tracing", "performance trace",
+        "slow request", "request duration", "end-to-end trace",
+        "request path", "service call", "microservice", "request chain",
+        "error trace", "failed trace", "timeout trace", "performance",
+        "performance issues", "performance problems", "slow", "slowest",
+        "fastest", "response time", "execution time", "processing time"
+    ]
+    return any(keyword in question_lower for keyword in trace_keywords)
+
 @st.cache_data(ttl=300)
 def get_models():
     """Fetch available models from MCP server only"""
@@ -1324,9 +1340,9 @@ elif page == "Chat with Prometheus":
             st.error(f"Failed to initialize Claude chat bot: {e}")
     
     # Simple cluster-wide analysis
-    st.markdown("🌐 **Cluster-wide analysis** - Ask about any metrics across your infrastructure")
+    st.markdown("🌐 **Cluster-wide analysis** - Ask about any metrics and traces across your infrastructure")
     st.markdown(
-        "Ask questions like: `What's the GPU temperature?`, `How many pods are running?`, `Token generation rate?`, `Memory usage per model?` etc."
+        "Ask questions like: `What's the GPU temperature?`, `How many pods are running?`, `Token generation rate?`, `Memory usage per model?`, `Show me traces with errors?`, `Find slow requests?` etc."
     )
     
     # Claude integration status
@@ -1359,6 +1375,12 @@ elif page == "Chat with Prometheus":
             
             if st.button("📊 Show CPU metrics", key="cpu_question", use_container_width=True):
                 st.session_state.suggested_question = "Show me CPU utilization trends for the last hour"
+            
+            if st.button("🔍 Show me traces with errors", key="trace_errors_question", use_container_width=True):
+                st.session_state.suggested_question = "Show me traces with errors in the last hour"
+            
+            if st.button("⚡ Find slow traces", key="trace_slow_question", use_container_width=True):
+                st.session_state.suggested_question = "Find slow traces in my services"
         
         with col2:
             if st.button("💾 Check memory usage", key="memory_question", use_container_width=True):
@@ -1366,6 +1388,12 @@ elif page == "Chat with Prometheus":
             
             if st.button("🚨 Any alerts firing?", key="alerts_question", use_container_width=True):
                 st.session_state.suggested_question = "What alerts were firing in my namespace yesterday?"
+            
+            if st.button("📊 What services are active?", key="trace_services_question", use_container_width=True):
+                st.session_state.suggested_question = "What services are most active right now?"
+            
+            if st.button("🔗 Analyze request flows", key="trace_flows_question", use_container_width=True):
+                st.session_state.suggested_question = "Analyze the request flows for performance issues"
         
         # Handle suggested question clicks
         if "suggested_question" in st.session_state:
@@ -1380,7 +1408,7 @@ elif page == "Chat with Prometheus":
             st.markdown(message["content"])
 
     # Custom chat input with better placeholder
-    user_question = st.chat_input("Ask Claude about your Prometheus metrics... (e.g., 'What's the GPU usage?' or 'Show me CPU trends')")
+    user_question = st.chat_input("Ask Claude about your metrics and traces... (e.g., 'What's the GPU usage?' or 'Show me CPU trends' or 'Show me traces with errors')")
     
     if user_question and claude_chatbot:
         # Add user message to history and display it
@@ -1403,22 +1431,87 @@ elif page == "Chat with Prometheus":
                 # Update status
                 message_placeholder.markdown("⚡ **Starting analysis...**")
                 
+                # Check if this is a trace-related question
+                is_trace_question = detect_trace_question(user_question)
+                trace_analysis = None
+                skip_claude = False  # Flag to skip Claude analysis for pure trace questions
+                
+                # Debug: Print trace detection result
+                print(f"DEBUG: Question: {user_question}")
+                print(f"DEBUG: Is trace question: {is_trace_question}")
+                
+                if is_trace_question:
+                    message_placeholder.markdown("🔍 **Detected trace question - analyzing traces...**")
+                    try:
+                        # Query Tempo for trace analysis (backend will extract time range)
+                        trace_result = chat_tempo_mcp(user_question)
+                        if trace_result["status"] == "success":
+                            # Extract text and handle nested JSON structure
+                            raw_text = extract_text_from_mcp_result(trace_result["data"])
+                            if raw_text:
+                                # Check if the text contains nested JSON
+                                if raw_text.startswith('[') and raw_text.endswith(']'):
+                                    try:
+                                        # Parse the nested JSON
+                                        nested_data = json.loads(raw_text)
+                                        if isinstance(nested_data, list) and len(nested_data) > 0:
+                                            nested_item = nested_data[0]
+                                            if isinstance(nested_item, dict) and "text" in nested_item:
+                                                trace_analysis = nested_item["text"]
+                                            else:
+                                                trace_analysis = raw_text
+                                        else:
+                                            trace_analysis = raw_text
+                                    except json.JSONDecodeError:
+                                        trace_analysis = raw_text
+                                else:
+                                    trace_analysis = raw_text
+                            else:
+                                trace_analysis = None
+                            message_placeholder.markdown("✅ **Trace analysis complete**")
+                            
+                            # For pure trace questions, show only trace analysis
+                            if trace_analysis:
+                                message_placeholder.markdown(trace_analysis)
+                                full_response = trace_analysis
+                                st.session_state.claude_messages.append({"role": "assistant", "content": full_response})
+                                skip_claude = True  # Skip Claude/Prometheus analysis for pure trace questions
+                        else:
+                            message_placeholder.markdown("⚠️ **Trace analysis failed, continuing with metrics only**")
+                    except Exception as e:
+                        message_placeholder.markdown(f"⚠️ **Trace analysis error: {str(e)}, continuing with metrics only**")
+                
                 # Get response from Claude with real-time progress (PromQL queries always included)
-                response = claude_chatbot.chat(
-                    user_question,
-                    namespace=None,  # Cluster-wide analysis
-                    scope="cluster-wide",
-                    progress_callback=update_progress
-                )
+                if not skip_claude:
+                    response = claude_chatbot.chat(
+                        user_question,
+                        namespace=None,  # Cluster-wide analysis
+                        scope="cluster-wide",
+                        progress_callback=update_progress
+                    )
+                else:
+                    response = None  # Skip Claude analysis for pure trace questions
                 
                 # Display final response with better formatting
                 if response:
                     # Format the response for better readability
                     formatted_response = response.replace("\\n", "\n")
+                    
+                    # If we have trace analysis, append it to the response
+                    if trace_analysis:
+                        formatted_response += "\n\n---\n\n## 🔍 **Trace Analysis**\n\n" + trace_analysis
+                    
                     message_placeholder.markdown(formatted_response)
                     
-                    # Add Claude's response to history
-                    st.session_state.claude_messages.append({"role": "assistant", "content": response})
+                    # Add Claude's response to history (including trace analysis if available)
+                    full_response = response
+                    if trace_analysis:
+                        full_response += "\n\n---\n\n## 🔍 **Trace Analysis**\n\n" + trace_analysis
+                    st.session_state.claude_messages.append({"role": "assistant", "content": full_response})
+                elif skip_claude:
+                    # For pure trace questions, we already displayed the trace analysis above
+                    # No additional processing needed
+                    pass
                 else:
                     error_msg = "I couldn't generate a response. Please try again."
                     message_placeholder.markdown(f"❌ **Error:** {error_msg}")

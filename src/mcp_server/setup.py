@@ -31,11 +31,13 @@ setup(
         "mcp_server",
         "mcp_server.tools",
         "mcp_server.utils",
+        "mcp_server.common",
     ],
     package_dir={
         "mcp_server": ".",
         "mcp_server.tools": "tools",
         "mcp_server.utils": "utils",
+        "mcp_server.common": "../common",
     },
     python_requires=">=3.10",
     install_requires=read_requirements(),

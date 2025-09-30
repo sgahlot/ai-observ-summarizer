@@ -41,6 +41,13 @@ def load_thanos_token() -> str:
 
 def get_ca_verify_setting():
     """Get SSL certificate verification setting."""
+    # Check if VERIFY_SSL environment variable is set
+    verify_ssl_env = os.getenv("VERIFY_SSL")
+    if verify_ssl_env is not None:
+        # Convert string to boolean
+        return verify_ssl_env.lower() in ("true", "1", "yes", "on")
+
+    # Fallback to CA bundle check
     ca_bundle_path = "/etc/pki/ca-trust/extracted/pem/ca-bundle.crt"
     return ca_bundle_path if os.path.exists(ca_bundle_path) else True
 

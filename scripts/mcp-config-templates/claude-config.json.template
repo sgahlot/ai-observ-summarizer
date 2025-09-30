@@ -1,0 +1,65 @@
+{
+  "mcpServers": {
+    "ai-observability": {
+      "command": "$OBS_BASE_DIR/.venv/bin/obs-mcp-stdio",
+      "args": [],
+      "env": {
+        "PROMETHEUS_URL": "http://localhost:9090",
+        "TEMPO_URL": "https://localhost:8082",
+        "TEMPO_TENANT_ID": "dev",
+        "TEMPO_TOKEN": "$OC_TOKEN",
+        "LLAMA_STACK_URL": "http://localhost:8321/v1/openai/v1",
+        "THANOS_TOKEN": "$OC_TOKEN"
+      },
+      "autoApprove": [
+        "list_models",
+        "list_namespaces",
+        "get_model_config",
+        "get_vllm_metrics_tool",
+        "analyze_vllm",
+        "calculate_metrics",
+        "analyze_openshift",
+        "list_openshift_metric_groups",
+        "list_openshift_namespace_metric_groups",
+        "chat_openshift",
+        "search_metrics",
+        "get_metric_metadata",
+        "get_label_values",
+        "execute_promql",
+        "explain_results",
+        "suggest_queries",
+        "select_best_metric",
+        "find_best_metric_with_metadata_v2",
+        "find_best_metric_with_metadata",
+        "query_tempo_tool",
+        "get_trace_details_tool",
+        "chat_tempo_tool"
+      ],
+      "alwaysAllow": [
+        "list_models",
+        "list_namespaces",
+        "get_model_config",
+        "get_vllm_metrics_tool",
+        "analyze_vllm",
+        "calculate_metrics",
+        "analyze_openshift",
+        "list_openshift_metric_groups",
+        "list_openshift_namespace_metric_groups",
+        "chat_openshift",
+        "search_metrics",
+        "get_metric_metadata",
+        "get_label_values",
+        "execute_promql",
+        "explain_results",
+        "suggest_queries",
+        "select_best_metric",
+        "find_best_metric_with_metadata_v2",
+        "find_best_metric_with_metadata",
+        "query_tempo_tool",
+        "get_trace_details_tool",
+        "chat_tempo_tool"
+      ],
+      "disabled": false
+    }
+  }
+}
