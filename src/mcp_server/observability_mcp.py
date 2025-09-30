@@ -45,6 +45,11 @@ class ObservabilityMCPServer:
             find_best_metric_with_metadata_v2,  # Smart metric selection v2
             find_best_metric_with_metadata,   # Smart metric selection v1
         )
+        from .tools.tempo import (
+            query_tempo_tool,
+            get_trace_details_tool,
+            chat_tempo_tool,
+        )
 
         # Register vLLM tools
         self.mcp.tool()(list_models)
@@ -73,3 +78,8 @@ class ObservabilityMCPServer:
         self.mcp.tool()(select_best_metric)               # Select best metric
         self.mcp.tool()(find_best_metric_with_metadata_v2)  # Smart metric selection v2
         self.mcp.tool()(find_best_metric_with_metadata)   # Smart metric selection v1
+
+        # Register Tempo query tools
+        self.mcp.tool()(query_tempo_tool)
+        self.mcp.tool()(get_trace_details_tool)
+        self.mcp.tool()(chat_tempo_tool)

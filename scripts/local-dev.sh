@@ -11,8 +11,10 @@ NC='\033[0m' # No Color
 
 # Configuration
 PROMETHEUS_NAMESPACE="openshift-monitoring"
+OBSERVABILITY_NAMESPACE="observability-hub"
 METRIC_API_APP="metrics-api-app"
 THANOS_PORT=9090
+TEMPO_PORT=8082
 LLAMASTACK_PORT=8321
 LLAMA_MODEL_PORT=8080
 # Metrics API (FastAPI) port for local dev; can override via METRICS_API_PORT
@@ -30,11 +32,14 @@ usage() {
     echo "Options:"
     echo "  -n/-N NAMESPACE              Default namespace for pods (required)"
     echo "  -m/-M NAMESPACE              Llama Model namespace (optional, use if model is in different namespace)"
+    echo "  -c/-C CONFIG                 Model config source: 'local' or 'cluster' (default: local)"
     echo ""
     echo "Examples:"
-    echo "  $0 -n default-ns                       # All pods/services in same namespace"
-    echo "  $0 -N default-ns                       # All pods/services in same namespace (uppercase)"
-    echo "  $0 -n default-ns -m model-ns           # Model in different namespace than other pods/services"
+    echo "  $0 -n default-ns                       # All pods/services in same namespace, use local config"
+    echo "  $0 -N default-ns                       # All pods/services in same namespace (uppercase), use local config"
+    echo "  $0 -n default-ns -m model-ns           # Model in different namespace than other pods/services, use local config"
+    echo "  $0 -n default-ns -c cluster            # Use cluster model config instead of local"
+    echo "  $0 -n default-ns -C local              # Explicitly use local model config (default)"
 }
 
 # Function to parse command line arguments
@@ -47,12 +52,16 @@ parse_args() {
 
     DEFAULT_NAMESPACE=""
     LLAMA_MODEL_NAMESPACE=""
+    MODEL_CONFIG_SOURCE="local"  # Default to local
 
-    while getopts "n:N:m:M:" opt; do
+    # Parse standard arguments using getopts
+    while getopts "n:N:m:M:c:C:" opt; do
         case $opt in
             n|N) DEFAULT_NAMESPACE="$OPTARG"
                  ;;
             m|M) LLAMA_MODEL_NAMESPACE="$OPTARG"
+                 ;;
+            c|C) MODEL_CONFIG_SOURCE="$OPTARG"
                  ;;
             *) echo -e "${RED}❌ INVALID option: [$OPTARG]${NC}"
                usage
@@ -64,6 +73,14 @@ parse_args() {
     # Validate arguments
     if [ -z "$DEFAULT_NAMESPACE" ]; then
         echo -e "${RED}❌ Default namespace is required. Please specify using -n or -N${NC}"
+        usage
+        exit 1
+    fi
+
+    # Validate model config source
+    if [[ "$MODEL_CONFIG_SOURCE" != "local" && "$MODEL_CONFIG_SOURCE" != "cluster" ]]; then
+        echo -e "${RED}❌ Invalid model config source: $MODEL_CONFIG_SOURCE${NC}"
+        echo -e "${YELLOW}   Valid options: 'local' or 'cluster'${NC}"
         usage
         exit 1
     fi
@@ -85,10 +102,15 @@ cleanup() {
     echo -e "\n${YELLOW}🧹 Cleaning up services and port-forwards...${NC}"
     ensure_port_free "$METRICS_API_PORT"
     ensure_port_free "$MCP_PORT"
+    ensure_port_free "$TEMPO_PORT"
     pkill -f "oc port-forward" || true
     pkill -f "uvicorn.*metrics_api:app" || true
     pkill -f "mcp_server.main" || true
     pkill -f "streamlit run ui.py" || true
+    
+    # Clean up old log files
+    echo -e "${YELLOW}🗑️  Cleaning up old log files...${NC}"
+    rm -f /tmp/summarizer-*.log
 
     # Deactivate virtual environment if it was activated
     if [ -n "$VIRTUAL_ENV" ]; then
@@ -140,7 +162,7 @@ start_port_forwards() {
     
     if [ -n "$THANOS_POD" ]; then
         echo -e "${GREEN}✅ Found Thanos pod: $THANOS_POD${NC}"
-        oc port-forward pod/"$THANOS_POD" "$THANOS_PORT:9090" -n "$PROMETHEUS_NAMESPACE" &
+        oc port-forward pod/"$THANOS_POD" "$THANOS_PORT:9090" -n "$PROMETHEUS_NAMESPACE" >/dev/null 2>&1 &
         echo -e "${GREEN}   📊 Thanos available at: http://localhost:$THANOS_PORT${NC}"
     else
         echo -e "${RED}❌ No Thanos/Prometheus pod found${NC}"
@@ -151,7 +173,7 @@ start_port_forwards() {
     LLAMASTACK_POD=$(oc get pods -n "$DEFAULT_NAMESPACE" -o name | grep -E "(llama-stack|llamastack)" | head -1 | cut -d'/' -f2 || echo "")
     if [ -n "$LLAMASTACK_POD" ]; then
         echo -e "${GREEN}✅ Found LlamaStack pod: $LLAMASTACK_POD${NC}"
-        oc port-forward pod/"$LLAMASTACK_POD" "$LLAMASTACK_PORT:8321" -n "$DEFAULT_NAMESPACE" &
+        oc port-forward pod/"$LLAMASTACK_POD" "$LLAMASTACK_PORT:8321" -n "$DEFAULT_NAMESPACE" >/dev/null 2>&1 &
         echo -e "${GREEN}   🦙 LlamaStack available at: http://localhost:$LLAMASTACK_PORT${NC}"
     else
         echo -e "${RED}❌  LlamaStack pod not found. Exiting...${NC}"
@@ -162,11 +184,21 @@ start_port_forwards() {
     LLAMA_MODEL_SERVICE=$(oc get services -n "$LLAMA_MODEL_NAMESPACE" -o name | grep -E "(llama-3|predictor)" | grep -v stack | head -1 | cut -d'/' -f2 || echo "")
     if [ -n "$LLAMA_MODEL_SERVICE" ]; then
         echo -e "${GREEN}✅ Found Llama Model service: $LLAMA_MODEL_SERVICE in [$LLAMA_MODEL_NAMESPACE] namespace${NC}"
-        oc port-forward service/"$LLAMA_MODEL_SERVICE" "$LLAMA_MODEL_PORT:8080" -n "$LLAMA_MODEL_NAMESPACE" &
+        oc port-forward service/"$LLAMA_MODEL_SERVICE" "$LLAMA_MODEL_PORT:8080" -n "$LLAMA_MODEL_NAMESPACE" >/dev/null 2>&1 &
         echo -e "${GREEN}   🤖 Llama Model available at: http://localhost:$LLAMA_MODEL_PORT${NC}"
     else
         echo -e "${RED}❌  Llama Model service not found in namespace: $LLAMA_MODEL_NAMESPACE. Exiting...${NC}"
         exit 1
+    fi
+    
+    # Find Tempo gateway service
+    TEMPO_SERVICE=$(oc get services -n "$OBSERVABILITY_NAMESPACE" -o name -l 'app.kubernetes.io/name=tempo,app.kubernetes.io/component=gateway' | cut -d'/' -f2 || echo "")
+    if [ -n "$TEMPO_SERVICE" ]; then
+        echo -e "${GREEN}✅ Found Tempo gateway service: $TEMPO_SERVICE${NC}"
+        oc port-forward service/"$TEMPO_SERVICE" "$TEMPO_PORT:8080" -n "$OBSERVABILITY_NAMESPACE" >/dev/null 2>&1 &
+        echo -e "${GREEN}   🔍 Tempo available at: https://localhost:$TEMPO_PORT${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Tempo gateway service not found - trace functionality will NOT be available${NC}"
     fi
     
     sleep 3  # Give port-forwards time to establish
@@ -195,21 +227,14 @@ ensure_port_free() {
 # This function sets "MODEL_CONFIG" environment variable from cluster deployment or local file
 set_model_config() {
     echo -e "${BLUE}🔧 Setting up MODEL_CONFIG...${NC}"
-    
-    # Check if local model-config.json exists
-    LOCAL_MODEL_CONFIG="deploy/helm/model-config.json"
-    if [ -f "$LOCAL_MODEL_CONFIG" ]; then
-        echo -e "${YELLOW}📋 Found local model config file: $LOCAL_MODEL_CONFIG${NC}"
-        echo -e "${YELLOW}   This includes additional models like Anthropic Claude for testing.${NC}"
-        echo ""
-        echo -e "${BLUE}Choose MODEL_CONFIG source:${NC}"
-        echo -e "  ${GREEN}1) Use CLUSTER config${NC} (production models from deployed metrics-api)"
-        echo -e "  ${YELLOW}2) Use LOCAL config${NC} (includes Anthropic/Claude and other test models)"
-        echo ""
-        read -p "Enter your choice (1 or 2) [default: 1]: " CONFIG_CHOICE
-        
-        if [ "$CONFIG_CHOICE" = "2" ]; then
-            echo -e "${YELLOW}🔧 Using LOCAL model config...${NC}"
+    echo -e "${BLUE}   Using config source: $MODEL_CONFIG_SOURCE${NC}"
+
+    if [ "$MODEL_CONFIG_SOURCE" = "local" ]; then
+        # Use local model config
+        LOCAL_MODEL_CONFIG="deploy/helm/model-config.json"
+        if [ -f "$LOCAL_MODEL_CONFIG" ]; then
+            echo -e "${YELLOW}📋 Using LOCAL model config from: $LOCAL_MODEL_CONFIG${NC}"
+            echo -e "${YELLOW}   This includes additional models like Anthropic Claude for testing.${NC}"
             export MODEL_CONFIG=$(cat "$LOCAL_MODEL_CONFIG")
             if [ -n "$MODEL_CONFIG" ]; then
                 echo -e "${GREEN}✅ LOCAL MODEL_CONFIG loaded successfully${NC}"
@@ -219,24 +244,28 @@ set_model_config() {
                 echo -e "${RED}❌ Failed to read local model config file${NC}"
                 exit 1
             fi
-        fi
-    fi
-    
-    # Default: Use cluster config
-    echo -e "${BLUE}🔧 Using CLUSTER model config...${NC}"
-    METRIC_API_DEPLOYMENT=$(oc get deploy "$METRIC_API_APP" -n "$DEFAULT_NAMESPACE")
-    if [ -n "$METRIC_API_DEPLOYMENT" ]; then
-        echo -e "${GREEN}✅ Found [$METRIC_API_APP] deployment: $METRIC_API_DEPLOYMENT${NC}"
-        export $(oc set env deployment/$METRIC_API_APP --list  -n "$DEFAULT_NAMESPACE" | grep MODEL_CONFIG)
-        if [ -n "$MODEL_CONFIG" ]; then
-          echo -e "${GREEN}✅ CLUSTER MODEL_CONFIG set successfully${NC}"
         else
-          echo -e "${RED}❌ Unable to set MODEL_CONFIG environment variable. It is required to run the UI locally.${NC}"
-          exit 1
+            echo -e "${RED}❌ Local model config file not found: $LOCAL_MODEL_CONFIG${NC}"
+            echo -e "${YELLOW}   Please ensure the file exists or use cluster config with -c cluster${NC}"
+            exit 1
         fi
     else
-        echo -e "${RED}❌ $METRIC_API_APP deployment not found. It is required to set MODEL_CONFIG.${NC}"
-        exit 1
+        # Use cluster config
+        echo -e "${BLUE}🔧 Using CLUSTER model config...${NC}"
+        METRIC_API_DEPLOYMENT=$(oc get deploy "$METRIC_API_APP" -n "$DEFAULT_NAMESPACE")
+        if [ -n "$METRIC_API_DEPLOYMENT" ]; then
+            echo -e "${YELLOW}✅ Found [$METRIC_API_APP] deployment:\n$METRIC_API_DEPLOYMENT${NC}"
+            export $(oc set env deployment/$METRIC_API_APP --list  -n "$DEFAULT_NAMESPACE" | grep MODEL_CONFIG)
+            if [ -n "$MODEL_CONFIG" ]; then
+              echo -e "${GREEN}✅ CLUSTER MODEL_CONFIG set successfully${NC}"
+            else
+              echo -e "${RED}❌ Unable to set MODEL_CONFIG environment variable. It is required to run the UI locally.${NC}"
+              exit 1
+            fi
+        else
+            echo -e "${RED}❌ $METRIC_API_APP deployment not found. It is required to set MODEL_CONFIG.${NC}"
+            exit 1
+        fi
     fi
 }
 
@@ -249,13 +278,23 @@ start_local_services() {
     
     # Set environment variables
     export PROMETHEUS_URL="http://localhost:$THANOS_PORT"
+    export TEMPO_URL="https://localhost:$TEMPO_PORT"
+    export TEMPO_TENANT_ID="dev"
+    export TEMPO_TOKEN="$TOKEN"
     export LLAMA_STACK_URL="http://localhost:$LLAMASTACK_PORT/v1/openai/v1"
     export THANOS_TOKEN="$TOKEN"
     export METRICS_API_URL="http://localhost:$METRICS_API_PORT"
     export MCP_URL="http://localhost:$MCP_PORT"
-    export PROM_URL="http://localhost:$THANOS_PORT"
+    export PROM_URL="$PROMETHEUS_URL"
     # Set log level (override with PYTHON_LOG_LEVEL=DEBUG for more verbose logging)
     export PYTHON_LOG_LEVEL="${PYTHON_LOG_LEVEL:-INFO}"
+    
+    # Set MCP transport protocol (override with MCP_TRANSPORT_PROTOCOL=sse for SSE transport)
+    export MCP_TRANSPORT_PROTOCOL="${MCP_TRANSPORT_PROTOCOL:-http}"
+
+    # SSL verification settings for Tempo HTTPS
+    export VERIFY_SSL=false
+    export PYTHONHTTPSVERIFY=0
 
     # macOS weasyprint support
     export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/lib:$DYLD_FALLBACK_LIBRARY_PATH"
@@ -265,7 +304,7 @@ start_local_services() {
     # Start Metrics API backend
     echo -e "${BLUE}🔧 Starting Metrics API backend...${NC}"
     ensure_port_free "$METRICS_API_PORT"
-    (cd src/api && python3 -m uvicorn metrics_api:app --host 0.0.0.0 --port $METRICS_API_PORT --reload > log.txt) &
+    (cd src/api && PYTHON_LOG_LEVEL="$PYTHON_LOG_LEVEL" python3 -m uvicorn metrics_api:app --host 0.0.0.0 --port $METRICS_API_PORT --reload > /tmp/summarizer-metrics-api.log 2>&1) &
     MCP_PID=$!
     
     # Wait for Metrics API to start
@@ -283,12 +322,17 @@ start_local_services() {
     echo -e "${BLUE}🧩 Starting MCP Server (HTTP)...${NC}"
     ensure_port_free "$MCP_PORT"
     (cd src && \
-      MCP_TRANSPORT_PROTOCOL=http \
+      MCP_TRANSPORT_PROTOCOL="$MCP_TRANSPORT_PROTOCOL" \
       MODEL_CONFIG="$MODEL_CONFIG" \
       PROMETHEUS_URL="$PROMETHEUS_URL" \
+      TEMPO_URL="$TEMPO_URL" \
+      TEMPO_TENANT_ID="$TEMPO_TENANT_ID" \
+      TEMPO_TOKEN="$TEMPO_TOKEN" \
       LLAMA_STACK_URL="$LLAMA_STACK_URL" \
       THANOS_TOKEN="$THANOS_TOKEN" \
-      python3 -m mcp_server.main > mcp_log.txt) &
+      VERIFY_SSL="$VERIFY_SSL" \
+      PYTHON_LOG_LEVEL="$PYTHON_LOG_LEVEL" \
+      python3 -m mcp_server.main > /tmp/summarizer-mcp-server.log 2>&1) &
     MCP_SRV_PID=$!
 
     # Wait for MCP server to start
@@ -306,11 +350,20 @@ start_local_services() {
     echo -e "${BLUE}🎨 Starting Streamlit UI...${NC}"
     (cd src/ui && \
       MCP_SERVER_URL="http://localhost:$MCP_PORT" \
+      PYTHON_LOG_LEVEL="$PYTHON_LOG_LEVEL" \
       streamlit run ui.py --server.port $UI_PORT --server.address 0.0.0.0 --server.headless true) &
     UI_PID=$!
     
     # Wait for UI to start
     sleep 5
+    
+    # Show log file locations for debugging
+    echo -e "${GREEN}📋 Log files for debugging (all in /tmp):${NC}"
+    echo -e "   🔧 MCP Server: /tmp/summarizer-mcp-server.log"
+    echo -e "   🎨 Streamlit UI: /tmp/summarizer-ui.log"
+    echo -e "   📊 Metrics API: /tmp/summarizer-metrics-api.log"
+    echo -e "   💡 To see live UI logs: tail -f /tmp/summarizer-ui.log"
+    echo -e "   💡 To see all logs: tail -f /tmp/summarizer-*.log"
     
     echo -e "${GREEN}✅ All services started successfully!${NC}"
 }
@@ -340,6 +393,7 @@ main() {
     echo -e "   ${YELLOW}🧩 MCP Server (health): http://localhost:$MCP_PORT/health${NC}"
     echo -e "   ${YELLOW}🧩 MCP HTTP Endpoint: http://localhost:$MCP_PORT/mcp${NC}"
     echo -e "   ${YELLOW}📊 Prometheus: http://localhost:$THANOS_PORT${NC}"
+    echo -e "   ${YELLOW}🔍 Tempo: https://localhost:$TEMPO_PORT${NC}"
     echo -e "   ${YELLOW}🦙 LlamaStack: http://localhost:$LLAMASTACK_PORT${NC}"
     echo -e "   ${YELLOW}🤖 Llama Model: http://localhost:$LLAMA_MODEL_PORT${NC}"
     

@@ -47,6 +47,10 @@ spec:
               value: "{{ .Values.env.MAX_TIME_RANGE_DAYS }}"
             - name: DEFAULT_TIME_RANGE_DAYS
               value: "{{ .Values.env.DEFAULT_TIME_RANGE_DAYS }}"
+            - name: TEMPO_URL
+              value: "{{ .Values.env.TEMPO_URL }}"
+            - name: TEMPO_TENANT_ID
+              value: "{{ .Values.env.TEMPO_TENANT_ID }}"
             - name: NAMESPACE
               value: "{{ .Release.Namespace }}"
             - name: THANOS_TOKEN

@@ -141,9 +141,14 @@ collector:
           exporters:
             - debug
             - otlphttp/dev
-      telemetry:
         metrics:
-          address: 0.0.0.0:8888
+          receivers:
+            - otlp
+          processors:
+            - batch
+            - memory_limiter
+          exporters:
+            - debug
 
 # Tempo configuration for exporters
 tempo:
