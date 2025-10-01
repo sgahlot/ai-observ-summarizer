@@ -898,8 +898,8 @@ def chat_tempo_mcp(question: str) -> Dict[str, Any]:
         Tempo chat analysis results
     """
     try:
-        print(f"DEBUG: Chatting with Tempo: {question}")
-        print(f"DEBUG: Calling chat_tempo_tool with question: {question}")
+        logger.debug(f"Chatting with Tempo: {question}")
+        logger.debug(f"Calling chat_tempo_tool with question: {question}")
         
         result = mcp_client.call_tool_sync("chat_tempo_tool", {
             "question": question
@@ -907,7 +907,7 @@ def chat_tempo_mcp(question: str) -> Dict[str, Any]:
         
         print(f"DEBUG: chat_tempo_tool result: {result}")
         
-        print("DEBUG: Tempo chat completed successfully")
+        logger.debug("Tempo chat completed successfully")
         return {
             "status": "success",
             "data": result,

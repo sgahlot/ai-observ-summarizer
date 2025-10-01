@@ -288,9 +288,6 @@ start_local_services() {
     export PROM_URL="$PROMETHEUS_URL"
     # Set log level (override with PYTHON_LOG_LEVEL=DEBUG for more verbose logging)
     export PYTHON_LOG_LEVEL="${PYTHON_LOG_LEVEL:-INFO}"
-    
-    # Set MCP transport protocol (override with MCP_TRANSPORT_PROTOCOL=sse for SSE transport)
-    export MCP_TRANSPORT_PROTOCOL="${MCP_TRANSPORT_PROTOCOL:-http}"
 
     # SSL verification settings for Tempo HTTPS
     export VERIFY_SSL=false
@@ -378,9 +375,10 @@ main() {
 
     echo ""
     echo -e "${BLUE}--------------------------------${NC}"
-    echo -e "${BLUE}Namespaces being used for setup:${NC}"
+    echo -e "${BLUE}Configuration being used for setup:${NC}"
     echo -e "${BLUE}  DEFAULT_NAMESPACE: $DEFAULT_NAMESPACE${NC}"
     echo -e "${BLUE}  LLAMA_MODEL_NAMESPACE: $LLAMA_MODEL_NAMESPACE${NC}"
+    echo -e "${BLUE}  MODEL_CONFIG_SOURCE: $MODEL_CONFIG_SOURCE${NC}"
     echo -e "${BLUE}--------------------------------${NC}\n"
 
     start_port_forwards
@@ -389,12 +387,12 @@ main() {
     echo -e "\n${GREEN}🎉 Setup complete! All services are running.${NC}"
     echo -e "\n${BLUE}📋 Services Available:${NC}"
     echo -e "   ${YELLOW}🎨 Streamlit UI: http://localhost:$UI_PORT${NC}"
-    echo -e "   ${YELLOW}🔧 Metrics API: http://localhost:$METRICS_API_PORT/docs${NC}"
-    echo -e "   ${YELLOW}🧩 MCP Server (health): http://localhost:$MCP_PORT/health${NC}"
-    echo -e "   ${YELLOW}🧩 MCP HTTP Endpoint: http://localhost:$MCP_PORT/mcp${NC}"
-    echo -e "   ${YELLOW}📊 Prometheus: http://localhost:$THANOS_PORT${NC}"
-    echo -e "   ${YELLOW}🔍 Tempo: https://localhost:$TEMPO_PORT${NC}"
-    echo -e "   ${YELLOW}🦙 LlamaStack: http://localhost:$LLAMASTACK_PORT${NC}"
+    echo -e "   ${YELLOW}🔧 Metrics API: $METRICS_API_URL/docs${NC}"
+    echo -e "   ${YELLOW}🧩 MCP Server (health): $MCP_URL/health${NC}"
+    echo -e "   ${YELLOW}🧩 MCP HTTP Endpoint: $MCP_URL/mcp${NC}"
+    echo -e "   ${YELLOW}📊 Prometheus: $PROMETHEUS_URL${NC}"
+    echo -e "   ${YELLOW}🔍 TempoStack: $TEMPO_URL${NC}"
+    echo -e "   ${YELLOW}🦙 LlamaStack: $LLAMA_STACK_URL${NC}"
     echo -e "   ${YELLOW}🤖 Llama Model: http://localhost:$LLAMA_MODEL_PORT${NC}"
     
     echo -e "\n${GREEN}🎯 Ready to use! Open your browser to http://localhost:$UI_PORT${NC}"

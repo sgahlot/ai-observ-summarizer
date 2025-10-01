@@ -16,11 +16,15 @@ The MCP server provides the following tools:
 - **`analyze_openshift`** - Analyze OpenShift metrics by category and scope, returning an LLM summary
 - **`list_openshift_metric_groups`** - List all cluster-wide OpenShift metric categories
 - **`list_openshift_namespace_metric_groups`** - List OpenShift categories that support namespace-scoped analysis
+- **`query_tempo_tool`** - Query traces from Tempo by service, operation, and time range
+- **`get_trace_details_tool`** - Get detailed trace information by trace ID
+- **`chat_tempo_tool`** - Conversational interface for Tempo trace analysis
 
 ## 📋 Prerequisites
 
 - Development Environment: Running via `scripts/local-dev.sh`
 - Prometheus Access: Port 9090 accessible (usually via port-forward)
+- Tempo Access: Port 8082 accessible (usually via port-forward)
 - vLLM Models: Deployed in OpenShift with metrics enabled
 - Python 3.11+: For MCP server execution
 
@@ -115,6 +119,43 @@ Explicit tool invocation (for MCP Inspector or advanced users):
 ### Analyze OpenShift Metrics
 - "Analyze OpenShift Fleet Overview for the last hour."
 - "Analyze OpenShift Workloads & Pods in namespace myns from 12:00 to 13:00 UTC."
+
+### Tempo Trace Analysis
+- "Show me traces from the last 24 hours"
+- "Find slow traces from the last week"
+- "Show me traces from ui service"
+- "Get details for trace 60c62fb63e30036df58e6bcf4e224c63"
+
+Explicit tool invocation for Tempo:
+```json
+{
+  "tool": "query_tempo_tool",
+  "args": {
+    "query": "service.name=ui",
+    "start_time": "2024-01-01T00:00:00Z",
+    "end_time": "2024-01-01T23:59:59Z",
+    "limit": 20
+  }
+}
+```
+
+```json
+{
+  "tool": "get_trace_details_tool",
+  "args": {
+    "trace_id": "60c62fb63e30036df58e6bcf4e224c63"
+  }
+}
+```
+
+```json
+{
+  "tool": "chat_tempo_tool",
+  "args": {
+    "question": "Show me slow traces from the last 24 hours"
+  }
+}
+```
 
 Explicit tool invocation:
 ```json
@@ -281,7 +322,17 @@ Troubleshooting tips:
 | `list_openshift_metric_groups` | Lists cluster-wide OpenShift categories | Bullet list of categories |
 | `list_openshift_namespace_metric_groups` | Lists namespace-capable categories | Bullet list of categories |
 
-The vLLM discovery tools query Prometheus metrics using identical logic as the main metrics API. The model config tool reads environment configuration for LLM models. 
+The vLLM discovery tools query Prometheus metrics using identical logic as the main metrics API. The model config tool reads environment configuration for LLM models.
+
+The Tempo tools provide distributed tracing analysis capabilities for OpenShift applications.
+
+### Tempo Tools
+
+| Tool | Description | Returns |
+|------|-------------|---------|
+| `query_tempo_tool` | Query traces from Tempo by service/operation/time | List of trace information with analysis |
+| `get_trace_details_tool` | Get detailed trace information by trace ID | Detailed trace data with spans |
+| `chat_tempo_tool` | Conversational interface for trace analysis | Natural language analysis of traces | 
 
 ## 🔗 Integration Architecture
 

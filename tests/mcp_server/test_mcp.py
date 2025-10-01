@@ -19,7 +19,7 @@ def test_observability_mcp_server_imports():
 def test_observability_mcp_server_class_exists():
     """Test that ObservabilityMCPServer class has expected methods."""
     from mcp_server.observability_mcp import ObservabilityMCPServer
-    
+
     # Check that the class has the expected methods
     assert hasattr(ObservabilityMCPServer, '__init__')
     assert hasattr(ObservabilityMCPServer, '_register_mcp_tools')

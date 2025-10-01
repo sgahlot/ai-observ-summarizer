@@ -1437,9 +1437,9 @@ elif page == "Chat with Prometheus":
                 trace_analysis = None
                 skip_claude = False  # Flag to skip Claude analysis for pure trace questions
                 
-                # Debug: Log trace detection result
-                print(f"DEBUG: Question: {user_question}")
-                print(f"DEBUG: Is trace question: {is_trace_question}")
+                # Log trace detection result
+                logger.debug(f"Question: {user_question}")
+                logger.debug(f"Is trace question: {is_trace_question}")
                 
                 if is_trace_question:
                     message_placeholder.markdown("🔍 **Detected trace question - analyzing traces...**")
