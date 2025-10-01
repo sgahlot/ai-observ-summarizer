@@ -107,10 +107,6 @@ cleanup() {
     pkill -f "uvicorn.*metrics_api:app" || true
     pkill -f "mcp_server.main" || true
     pkill -f "streamlit run ui.py" || true
-    
-    # Clean up old log files
-    echo -e "${YELLOW}🗑️  Cleaning up old log files...${NC}"
-    rm -f /tmp/summarizer-*.log
 
     # Deactivate virtual environment if it was activated
     if [ -n "$VIRTUAL_ENV" ]; then
@@ -319,7 +315,7 @@ start_local_services() {
     echo -e "${BLUE}🧩 Starting MCP Server (HTTP)...${NC}"
     ensure_port_free "$MCP_PORT"
     (cd src && \
-      MCP_TRANSPORT_PROTOCOL="$MCP_TRANSPORT_PROTOCOL" \
+      MCP_TRANSPORT_PROTOCOL=http \
       MODEL_CONFIG="$MODEL_CONFIG" \
       PROMETHEUS_URL="$PROMETHEUS_URL" \
       TEMPO_URL="$TEMPO_URL" \

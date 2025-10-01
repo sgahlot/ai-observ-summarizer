@@ -9,25 +9,25 @@ This module provides async MCP tools for interacting with Tempo traces:
 import httpx
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
-import logging
+from common.pylogger import get_python_logger
 
 # Note: Removed unused imports for analyze_traces_tool that was removed
 
-logger = logging.getLogger(__name__)
+logger = get_python_logger()
 
 
 class TempoQueryTool:
     """Tool for querying Tempo traces with async support."""
 
     def __init__(self):
-        # Tempo configuration based on TMP/observability/tempo/values.yaml
+        # Tempo configuration based on deploy/helm/observability/tempo/values.yaml
         # Use environment variable for local development or OpenShift deployment
         import os
         self.tempo_url = os.getenv(
             "TEMPO_URL",
             "https://tempo-tempostack-gateway.observability-hub.svc.cluster.local:8080"
         )
-        # Tenant ID not needed for standard Jaeger API endpoints
+        # Tenant ID required for multi-tenant Tempo API endpoints
         self.tenant_id = os.getenv("TEMPO_TENANT_ID", "dev")
         self.namespace = "observability-hub"
         
@@ -738,7 +738,28 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
             elif "performance" in question_lower or "latency" in question_lower:
                 query = "duration>1s"
             elif "service" in question_lower and ("list" in question_lower or "show" in question_lower):
-                query = "service.name=*"
+                # Check if a specific service is mentioned
+                service_name = None
+                # Look for patterns like "from ui service", "ui service", "service ui", etc.
+                service_patterns = [
+                    r'from\s+(\w+)\s+service',
+                    r'(\w+)\s+service',
+                    r'service\s+(\w+)',
+                    r'traces\s+from\s+(\w+)',
+                    r'(\w+)\s+traces'
+                ]
+                
+                for pattern in service_patterns:
+                    match = re.search(pattern, question_lower)
+                    if match:
+                        service_name = match.group(1)
+                        break
+                
+                if service_name and service_name not in ["all", "every", "any"]:
+                    query = f"service.name={service_name}"
+                    logger.info(f"Detected service-specific query for: {service_name}")
+                else:
+                    query = "service.name=*"
             elif any(keyword in question_lower for keyword in ["show me", "what traces", "available traces", "all traces"]):
                 # For general trace queries, don't apply duration filter
                 query = "service.name=*"
