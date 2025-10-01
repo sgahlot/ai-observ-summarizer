@@ -174,9 +174,10 @@ create_port_forward() {
     local remote_port="$4"
     local namespace="$5"
     local description="$6"
+    local emoji="$7"
     
     oc port-forward $resource_type/"$resource_name" "$local_port:$remote_port" -n "$namespace" >/dev/null 2>&1 &
-    echo -e "${GREEN}✅ Found $description: 📊 ($resource_type: $resource_name, ns: $namespace) available at: http://localhost:$local_port${NC}"
+    echo -e "${GREEN}✅ Found $description: $emoji ($resource_type: $resource_name, ns: $namespace) available at: http://localhost:$local_port${NC}"
 }
 
 # Helper function to check port-forward status
@@ -222,19 +223,19 @@ start_port_forwards() {
         # Fallback to pod if service not found
         THANOS_POD=$(oc get pods -n "$PROMETHEUS_NAMESPACE" -o name | grep thanos-querier | head -1 | cut -d'/' -f2 || echo "")
         if [ -n "$THANOS_POD" ]; then
-            create_port_forward "pod" "$THANOS_POD" "$THANOS_PORT" "9091" "$PROMETHEUS_NAMESPACE" "Thanos"
+            create_port_forward "pod" "$THANOS_POD" "$THANOS_PORT" "9091" "$PROMETHEUS_NAMESPACE" "Thanos" "📊"
         else
             echo -e "${RED}❌ No Thanos service or pod found${NC}"
             exit 1
         fi
     else
-        create_port_forward "service" "$THANOS_SERVICE" "$THANOS_PORT" "9091" "$PROMETHEUS_NAMESPACE" "Thanos"
+        create_port_forward "service" "$THANOS_SERVICE" "$THANOS_PORT" "9091" "$PROMETHEUS_NAMESPACE" "Thanos" "📊"
     fi
     
     # Find LlamaStack pod
     LLAMASTACK_POD=$(oc get pods -n "$DEFAULT_NAMESPACE" -o name | grep -E "(llama-stack|llamastack)" | head -1 | cut -d'/' -f2 || echo "")
     if [ -n "$LLAMASTACK_POD" ]; then
-        create_port_forward "pod" "$LLAMASTACK_POD" "$LLAMASTACK_PORT" "8321" "$DEFAULT_NAMESPACE" "LlamaStack"
+        create_port_forward "pod" "$LLAMASTACK_POD" "$LLAMASTACK_PORT" "8321" "$DEFAULT_NAMESPACE" "LlamaStack" "🦙"
     else
         echo -e "${RED}❌  LlamaStack pod not found. Exiting...${NC}"
         exit 1
@@ -243,7 +244,7 @@ start_port_forwards() {
     # Find Llama Model service
     LLAMA_MODEL_SERVICE=$(oc get services -n "$LLAMA_MODEL_NAMESPACE" -o name | grep -E "(llama-3|predictor)" | grep -v stack | head -1 | cut -d'/' -f2 || echo "")
     if [ -n "$LLAMA_MODEL_SERVICE" ]; then
-        create_port_forward "service" "$LLAMA_MODEL_SERVICE" "$LLAMA_MODEL_PORT" "8080" "$LLAMA_MODEL_NAMESPACE" "Llama Model"
+        create_port_forward "service" "$LLAMA_MODEL_SERVICE" "$LLAMA_MODEL_PORT" "8080" "$LLAMA_MODEL_NAMESPACE" "Llama Model" "🤖"
     else
         echo -e "${RED}❌  Llama Model service not found in namespace: $LLAMA_MODEL_NAMESPACE. Exiting...${NC}"
         exit 1
@@ -252,7 +253,7 @@ start_port_forwards() {
     # Find and port-forward TempoStack gateway
     TEMPO_SERVICE=$(oc get services -n "$OBSERVABILITY_NAMESPACE" -o name -l 'app.kubernetes.io/name=tempo' -l 'app.kubernetes.io/component=gateway' | cut -d'/' -f2 || echo "")
     if [ -n "$TEMPO_SERVICE" ]; then
-        create_port_forward "service" "$TEMPO_SERVICE" "$TEMPO_PORT" "8080" "$OBSERVABILITY_NAMESPACE" "Tempo"
+        create_port_forward "service" "$TEMPO_SERVICE" "$TEMPO_PORT" "8080" "$OBSERVABILITY_NAMESPACE" "Tempo" "🔍"
     else
         echo -e "${YELLOW}⚠️  TempoStack gateway not found in namespace: $OBSERVABILITY_NAMESPACE. Tempo functionality may not be available.${NC}"
     fi

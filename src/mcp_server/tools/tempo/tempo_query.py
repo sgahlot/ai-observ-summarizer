@@ -159,9 +159,9 @@ class TempoQueryService(TempoQueryTool):
             limit: Maximum number of traces to return
         """
         try:
-            # Convert times to Unix timestamps
-            start_ts = int(datetime.fromisoformat(start_time.replace('Z', '+00:00')).timestamp())
-            end_ts = int(datetime.fromisoformat(end_time.replace('Z', '+00:00')).timestamp())
+            # Convert times to Unix timestamps in microseconds (Tempo expects microseconds)
+            start_ts = int(datetime.fromisoformat(start_time.replace('Z', '+00:00')).timestamp() * 1000000)
+            end_ts = int(datetime.fromisoformat(end_time.replace('Z', '+00:00')).timestamp() * 1000000)
 
             headers = {
                 "X-Scope-OrgID": self.tenant_id,
