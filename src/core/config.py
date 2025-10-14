@@ -58,6 +58,17 @@ TEMPO_URL = os.getenv("TEMPO_URL", "http://localhost:8080")
 LLAMA_STACK_URL = os.getenv("LLAMA_STACK_URL", "http://localhost:8321/v1/openai/v1")
 LLM_API_TOKEN = os.getenv("LLM_API_TOKEN", "")
 
+# Tempo-specific configuration
+TEMPO_TENANT_ID = os.getenv("TEMPO_TENANT_ID", "dev")
+TEMPO_NAMESPACE = "observability-hub"
+
+# Default Tempo URL for OpenShift deployment
+DEFAULT_TEMPO_URL = "https://tempo-tempostack-gateway.observability-hub.svc.cluster.local:8080"
+
+# Kubernetes service account token configuration
+K8S_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+DEV_FALLBACK_TOKEN = "dev-token"
+
 # Load complex configurations
 MODEL_CONFIG = load_model_config()
 THANOS_TOKEN = load_thanos_token()
