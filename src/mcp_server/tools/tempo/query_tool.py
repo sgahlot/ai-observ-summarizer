@@ -6,6 +6,10 @@ from typing import Dict, Any, List
 from datetime import datetime
 
 from common.pylogger import get_python_logger
+from core.config import (
+    TEMPO_URL, TEMPO_TENANT_ID, TEMPO_NAMESPACE, 
+    K8S_SERVICE_ACCOUNT_TOKEN_PATH, DEV_FALLBACK_TOKEN
+)
 
 from .models import QueryResponse, TraceDetailsResponse
 from .error_handling import TempoErrorClassifier
@@ -23,28 +27,16 @@ class TempoQueryTool:
     DEFAULT_QUERY_LIMIT = 20  # Default limit for regular queries
     REQUEST_TIMEOUT_SECONDS = 30.0  # HTTP request timeout
 
-    # Default configuration values
-    DEFAULT_TEMPO_URL = "https://tempo-tempostack-gateway.observability-hub.svc.cluster.local:8080"
-    DEFAULT_TENANT_ID = "dev"
-    DEFAULT_NAMESPACE = "observability-hub"
-
-    # Kubernetes service account token path
-    K8S_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-    DEV_FALLBACK_TOKEN = "dev-token"
-
     def __init__(self):
-        # Tempo configuration based on deploy/helm/observability/tempo/values.yaml
-        # Use environment variable for local development or OpenShift deployment
-        import os
-        self.tempo_url = os.getenv("TEMPO_URL", self.DEFAULT_TEMPO_URL)
-        # Tenant ID required for multi-tenant Tempo API endpoints
-        self.tenant_id = os.getenv("TEMPO_TENANT_ID", self.DEFAULT_TENANT_ID)
-        self.namespace = self.DEFAULT_NAMESPACE
+        # Use centralized configuration from core.config
+        self.tempo_url = TEMPO_URL
+        self.tenant_id = TEMPO_TENANT_ID
+        self.namespace = TEMPO_NAMESPACE
 
     def _get_service_account_token(self) -> str:
         """Get the service account token for authentication."""
         try:
-            with open(self.K8S_SERVICE_ACCOUNT_TOKEN_PATH, 'r') as f:
+            with open(K8S_SERVICE_ACCOUNT_TOKEN_PATH, 'r') as f:
                 return f.read().strip()
         except FileNotFoundError:
             # Fallback for local development - use TEMPO_TOKEN if available
@@ -52,7 +44,7 @@ class TempoQueryTool:
             tempo_token = os.getenv("TEMPO_TOKEN")
             if tempo_token:
                 return tempo_token
-            return self.DEV_FALLBACK_TOKEN
+            return DEV_FALLBACK_TOKEN
 
     def _get_request_headers(self) -> Dict[str, str]:
         """
@@ -69,7 +61,7 @@ class TempoQueryTool:
         # Add service account token if running in cluster
         try:
             token = self._get_service_account_token()
-            if token and token != self.DEV_FALLBACK_TOKEN:
+            if token and token != DEV_FALLBACK_TOKEN:
                 headers["Authorization"] = f"Bearer {token}"
         except Exception as e:
             logger.debug(f"No service account token available: {e}")
