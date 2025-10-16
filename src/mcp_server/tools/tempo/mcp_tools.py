@@ -16,6 +16,7 @@ from .query_tool import TempoQueryTool
 from core.question_classification import TempoQuestionClassifier as QuestionClassifier, QuestionType, TraceErrorDetector
 from core.config import SLOW_TRACE_THRESHOLD_MS, DEFAULT_QUERY_LIMIT, DEFAULT_CHAT_QUERY_LIMIT
 from core.time_utils import extract_time_range_from_question, convert_time_range_to_iso, calculate_duration_ms
+from core.trace_analysis import TraceAnalyzer
 
 logger = get_python_logger()
 
@@ -320,47 +321,18 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
             content += f"**Found**: {len(traces)} traces\n\n"
 
             if traces:
-                # Analyze trace patterns
-                services = {}
-                error_traces = []
-                slow_traces = []
-                all_traces_with_duration = []
-
-                for trace in traces:
-                    service_name = trace.get("rootServiceName", "unknown")
-
-                    # Calculate duration using centralized function
-                    duration = calculate_duration_ms(trace)
-
-                    # Debug: Log duration information for first few traces
-                    if len(all_traces_with_duration) < 3:
-                        logger.info(f"Trace {len(all_traces_with_duration)+1} duration fields: {[k for k in trace.keys() if 'duration' in k.lower()]}, calculated duration: {duration}ms")
-
-                    # Count services
-                    services[service_name] = services.get(service_name, 0) + 1
-
-                    # Store all traces with duration for analysis
-                    trace_with_duration = trace.copy()
-                    trace_with_duration["durationMs"] = duration
-                    all_traces_with_duration.append(trace_with_duration)
-
-                    # Identify slow traces (>1 second)
-                    if duration > SLOW_TRACE_THRESHOLD_MS:
-                        slow_traces.append(trace_with_duration)
-
-                    # Check for error traces using robust classification
-                    if TraceErrorDetector.is_error_trace(trace):
-                        error_traces.append(trace_with_duration)
+                # Analyze trace patterns using centralized analyzer
+                analysis_result = TraceAnalyzer.analyze_traces(traces)
+                services = analysis_result.services
+                error_traces = analysis_result.error_traces
+                slow_traces = analysis_result.slow_traces
+                all_traces_with_duration = analysis_result.all_traces_with_duration
 
                 # Generate insights
                 content += "## 📊 **Analysis Results**\n\n"
 
                 # Service distribution
-                if services:
-                    content += "**Services Activity**:\n"
-                    for service, count in sorted(services.items(), key=lambda x: x[1], reverse=True)[:5]:
-                        content += f"- {service}: {count} traces\n"
-                    content += "\n"
+                content += TraceAnalyzer.generate_service_activity_summary(services)
 
                 # Performance insights - analyze by service for fastest/slowest queries
                 if any(keyword in question_lower for keyword in ["fastest", "slowest", "performance"]):
