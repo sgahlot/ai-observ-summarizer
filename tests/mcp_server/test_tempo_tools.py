@@ -301,14 +301,11 @@ class TestTempoQueryToolClass:
         from src.mcp_server.tools.tempo import TempoQueryTool
         tool = TempoQueryTool()
         
-        # The refactored code now uses centralized config from core.config
-        # Test that the tool initializes correctly with the centralized config
-        assert tool.tempo_url is not None
-        assert tool.tenant_id is not None
-        assert tool.namespace == "observability-hub"
-        assert hasattr(tool, 'tempo_url')
-        assert hasattr(tool, 'tenant_id')
-        assert hasattr(tool, 'namespace')
+        # The refactored code now uses centralized service
+        # Test that the tool initializes correctly with the centralized service
+        assert hasattr(tool, 'service')
+        assert tool.service is not None
+        assert hasattr(tool.service, 'client')
 
     @patch("httpx.AsyncClient")
     def test_tempo_query_tool_default_config(self, mock_client):
@@ -316,22 +313,16 @@ class TestTempoQueryToolClass:
         from src.mcp_server.tools.tempo import TempoQueryTool
         tool = TempoQueryTool()
         
-        # The refactored code now uses centralized config from core.config
-        # which has default values from environment or hardcoded defaults
-        assert tool.tempo_url is not None
-        assert tool.tenant_id is not None
-        assert tool.namespace == "observability-hub"
+        # The refactored code now uses centralized service
+        # Test that the tool initializes correctly with the centralized service
+        assert hasattr(tool, 'service')
+        assert tool.service is not None
+        assert hasattr(tool.service, 'client')
 
-    @patch("httpx.AsyncClient")
-    def test_get_available_services_success(self, mock_client):
+    @patch("core.tempo_service.TempoQueryService.get_available_services")
+    def test_get_available_services_success(self, mock_get_available_services):
         """Test successful service discovery."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": ["ui", "api", "database"]
-        }
-        
-        mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
+        mock_get_available_services.return_value = ["ui", "api", "database"]
         
         from src.mcp_server.tools.tempo import TempoQueryTool
         tool = TempoQueryTool()
@@ -341,14 +332,10 @@ class TestTempoQueryToolClass:
         
         assert services == ["ui", "api", "database"]
 
-    @patch("httpx.AsyncClient")
-    def test_get_available_services_error(self, mock_client):
+    @patch("core.tempo_service.TempoQueryService.get_available_services")
+    def test_get_available_services_error(self, mock_get_available_services):
         """Test service discovery with error response."""
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-        
-        mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
+        mock_get_available_services.return_value = []
         
         from src.mcp_server.tools.tempo import TempoQueryTool
         tool = TempoQueryTool()
