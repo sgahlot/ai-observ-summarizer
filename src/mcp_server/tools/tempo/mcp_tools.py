@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from common.pylogger import get_python_logger
 
 from .query_tool import TempoQueryTool
-from .classification import QuestionClassifier, QuestionType, TraceErrorDetector
+from core.question_classification import TempoQuestionClassifier as QuestionClassifier, QuestionType, TraceErrorDetector
 
 logger = get_python_logger()
 
