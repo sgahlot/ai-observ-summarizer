@@ -15,8 +15,7 @@ from .query_tool import TempoQueryTool
 from .mcp_tools import (
     query_tempo_tool,
     get_trace_details_tool,
-    chat_tempo_tool,
-    extract_time_range_from_question
+    chat_tempo_tool
 )
 from core.config import SLOW_TRACE_THRESHOLD_MS
 
@@ -37,6 +36,5 @@ __all__ = [
     "query_tempo_tool",
     "get_trace_details_tool",
     "chat_tempo_tool",
-    "extract_time_range_from_question",
     "SLOW_TRACE_THRESHOLD_MS",
 ]

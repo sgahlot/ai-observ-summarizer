@@ -276,7 +276,7 @@ class TestUtilityFunctions:
 
     def test_extract_time_range_from_question(self):
         """Test time range extraction from natural language questions."""
-        from src.mcp_server.tools.tempo import extract_time_range_from_question
+        from core.time_utils import extract_time_range_from_question
         
         test_cases = [
             ("Show me traces from the last 24 hours", "last 24h"),
