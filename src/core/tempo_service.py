@@ -10,7 +10,10 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from .http_client import TempoClient
-from .config import TEMPO_URL, TEMPO_TENANT_ID
+from .config import (
+    TEMPO_URL, TEMPO_TENANT_ID, 
+    MAX_PER_SERVICE_LIMIT, DEFAULT_QUERY_LIMIT, REQUEST_TIMEOUT_SECONDS
+)
 from .models import QueryResponse, TraceDetailsResponse
 from .error_handling import TempoErrorClassifier
 
@@ -21,12 +24,10 @@ logger = logging.getLogger(__name__)
 class TempoQueryService:
     """Centralized service for Tempo trace queries."""
     
-    # Configuration constants
-    SLOW_TRACE_THRESHOLD_MS = 1000
-    MAX_PER_SERVICE_LIMIT = 50
-    DEFAULT_CHAT_QUERY_LIMIT = 50
-    DEFAULT_QUERY_LIMIT = 20
-    REQUEST_TIMEOUT_SECONDS = 30.0
+    # Configuration constants (imported from core.config)
+    MAX_PER_SERVICE_LIMIT = MAX_PER_SERVICE_LIMIT
+    DEFAULT_QUERY_LIMIT = DEFAULT_QUERY_LIMIT
+    REQUEST_TIMEOUT_SECONDS = REQUEST_TIMEOUT_SECONDS
     
     def __init__(self):
         """Initialize the Tempo query service."""
