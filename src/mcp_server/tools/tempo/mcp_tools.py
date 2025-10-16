@@ -14,18 +14,17 @@ from common.pylogger import get_python_logger
 
 from .query_tool import TempoQueryTool
 from core.question_classification import TempoQuestionClassifier as QuestionClassifier, QuestionType, TraceErrorDetector
+from core.config import SLOW_TRACE_THRESHOLD_MS, DEFAULT_QUERY_LIMIT, DEFAULT_CHAT_QUERY_LIMIT
+from core.time_utils import extract_time_range_from_question, convert_time_range_to_iso, calculate_duration_ms
 
 logger = get_python_logger()
-
-# Module-level constants for trace analysis
-SLOW_TRACE_THRESHOLD_MS = 1000  # Traces slower than this are considered "slow"
 
 
 async def query_tempo_tool(
     query: str,
     start_time: str,
     end_time: str,
-    limit: int = TempoQueryTool.DEFAULT_QUERY_LIMIT
+    limit: int = DEFAULT_QUERY_LIMIT
 ) -> List[Dict[str, Any]]:
     """
     MCP tool function for querying Tempo traces.
@@ -159,46 +158,6 @@ async def get_trace_details_tool(trace_id: str) -> List[Dict[str, Any]]:
         return [{"type": "text", "text": error_content}]
 
 
-def extract_time_range_from_question(question: str) -> str:
-    """Extract time range from user question for trace analysis"""
-    question_lower = question.lower()
-
-    # Check for specific time ranges
-    if "last 24 hours" in question_lower or "last 24h" in question_lower or "yesterday" in question_lower:
-        return "last 24h"
-    elif "last week" in question_lower or "last 7 days" in question_lower:
-        return "last 7d"
-    elif "last month" in question_lower or "last 30 days" in question_lower:
-        return "last 30d"
-    elif "last 2 hours" in question_lower or "last 2h" in question_lower:
-        return "last 2h"
-    elif "last 6 hours" in question_lower or "last 6h" in question_lower:
-        return "last 6h"
-    elif "last 12 hours" in question_lower or "last 12h" in question_lower:
-        return "last 12h"
-    elif "last hour" in question_lower or "last 1h" in question_lower:
-        return "last 1h"
-    elif "last 30 minutes" in question_lower or "last 30m" in question_lower:
-        return "last 30m"
-    elif "last 15 minutes" in question_lower or "last 15m" in question_lower:
-        return "last 15m"
-    elif "last 5 minutes" in question_lower or "last 5m" in question_lower:
-        return "last 5m"
-    elif "week" in question_lower or "7 days" in question_lower:
-        # Catch references to week without "last"
-        return "last 7d"
-    elif "month" in question_lower or "30 days" in question_lower:
-        # Catch references to month without "last"
-        return "last 30d"
-    elif "day" in question_lower or "24 hours" in question_lower:
-        # Catch references to day without "last"
-        return "last 24h"
-    else:
-        # For follow-up questions without explicit time, default to 7 days to maintain context
-        # This helps when users ask follow-up questions about traces they previously queried
-        return "last 7d"
-
-
 async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
     """
     MCP tool function for conversational Tempo trace analysis.
@@ -217,35 +176,11 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
     tempo_tool = TempoQueryTool()
 
     try:
-        # Extract time range from the question
+        # Extract time range from the question and convert to ISO format
         extracted_time_range = extract_time_range_from_question(question)
         logger.info(f"Extracted time range from question: {extracted_time_range}")
 
-        # Parse time range to get start and end times
-        now = datetime.now()
-        if extracted_time_range.startswith("last "):
-            duration_str = extracted_time_range[5:]  # Remove "last "
-            if duration_str.endswith("h"):
-                hours = int(duration_str[:-1])
-                start_time = now - timedelta(hours=hours)
-            elif duration_str.endswith("d"):
-                days = int(duration_str[:-1])
-                start_time = now - timedelta(days=days)
-            elif duration_str.endswith("m"):
-                minutes = int(duration_str[:-1])
-                start_time = now - timedelta(minutes=minutes)
-            else:
-                # Default to 1 hour
-                start_time = now - timedelta(hours=1)
-        else:
-            # Default to 1 hour
-            start_time = now - timedelta(hours=1)
-
-        end_time = now
-
-        # Convert to ISO format
-        start_iso = start_time.isoformat() + "Z"
-        end_iso = end_time.isoformat() + "Z"
+        start_iso, end_iso = convert_time_range_to_iso(extracted_time_range)
 
         # Analyze the question to determine appropriate query
         question_lower = question.lower()
@@ -373,7 +308,7 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
 
         # Query traces
         logger.info(f"Executing Tempo query: '{query}' for time range {start_iso} to {end_iso}")
-        result = await tempo_tool.query_traces(query, start_iso, end_iso, limit=TempoQueryTool.DEFAULT_CHAT_QUERY_LIMIT)
+        result = await tempo_tool.query_traces(query, start_iso, end_iso, limit=DEFAULT_CHAT_QUERY_LIMIT)
 
         if result["success"]:
             traces = result["traces"]
@@ -394,16 +329,8 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
                 for trace in traces:
                     service_name = trace.get("rootServiceName", "unknown")
 
-                    # Try different duration field names and formats
-                    duration = 0
-                    if "durationMs" in trace:
-                        duration = trace.get("durationMs", 0)
-                    elif "duration" in trace:
-                        # Convert microseconds to milliseconds if needed
-                        duration = trace.get("duration", 0) / 1000
-                    elif "durationNanos" in trace:
-                        # Convert nanoseconds to milliseconds
-                        duration = trace.get("durationNanos", 0) / 1000000
+                    # Calculate duration using centralized function
+                    duration = calculate_duration_ms(trace)
 
                     # Debug: Log duration information for first few traces
                     if len(all_traces_with_duration) < 3:

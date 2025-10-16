@@ -69,6 +69,13 @@ DEFAULT_TEMPO_URL = "https://tempo-tempostack-gateway.observability-hub.svc.clus
 K8S_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 DEV_FALLBACK_TOKEN = "dev-token"
 
+# Tempo analysis constants
+SLOW_TRACE_THRESHOLD_MS = 1000  # Traces slower than this are considered "slow"
+MAX_PER_SERVICE_LIMIT = 50  # Maximum traces to fetch per service in wildcard queries
+DEFAULT_CHAT_QUERY_LIMIT = 50  # Default limit for chat tool queries
+DEFAULT_QUERY_LIMIT = 20  # Default limit for regular queries
+REQUEST_TIMEOUT_SECONDS = 30.0  # HTTP request timeout
+
 # Load complex configurations
 MODEL_CONFIG = load_model_config()
 THANOS_TOKEN = load_thanos_token()

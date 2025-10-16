@@ -4,19 +4,13 @@ from typing import Dict, Any, List
 
 from common.pylogger import get_python_logger
 from core.tempo_service import TempoQueryService
+from core.config import DEFAULT_QUERY_LIMIT
 
 logger = get_python_logger()
 
 
 class TempoQueryTool:
     """Tool for querying Tempo traces with async support."""
-
-    # Configuration constants
-    SLOW_TRACE_THRESHOLD_MS = 1000  # Traces slower than this are considered "slow"
-    MAX_PER_SERVICE_LIMIT = 50  # Maximum traces to fetch per service in wildcard queries
-    DEFAULT_CHAT_QUERY_LIMIT = 50  # Default limit for chat tool queries
-    DEFAULT_QUERY_LIMIT = 20  # Default limit for regular queries
-    REQUEST_TIMEOUT_SECONDS = 30.0  # HTTP request timeout
 
     def __init__(self):
         """Initialize the Tempo query tool with centralized service."""
