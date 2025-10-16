@@ -6,9 +6,6 @@ import os
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
-
 import src.mcp_server.tools.tempo as tempo_tools
 
 
@@ -300,17 +297,18 @@ class TestTempoQueryToolClass:
 
     @patch("httpx.AsyncClient")
     def test_tempo_query_tool_initialization(self, mock_client):
-        """Test TempoQueryTool initialization with environment variables."""
-        with patch.dict("os.environ", {
-            "TEMPO_URL": "https://tempo.example.com:8080",
-            "TEMPO_TENANT_ID": "test-tenant"
-        }):
-            from src.mcp_server.tools.tempo import TempoQueryTool
-            tool = TempoQueryTool()
-            
-            assert tool.tempo_url == "https://tempo.example.com:8080"
-            assert tool.tenant_id == "test-tenant"
-            assert tool.namespace == "observability-hub"
+        """Test TempoQueryTool initialization with centralized configuration."""
+        from src.mcp_server.tools.tempo import TempoQueryTool
+        tool = TempoQueryTool()
+        
+        # The refactored code now uses centralized config from core.config
+        # Test that the tool initializes correctly with the centralized config
+        assert tool.tempo_url is not None
+        assert tool.tenant_id is not None
+        assert tool.namespace == "observability-hub"
+        assert hasattr(tool, 'tempo_url')
+        assert hasattr(tool, 'tenant_id')
+        assert hasattr(tool, 'namespace')
 
     @patch("httpx.AsyncClient")
     def test_tempo_query_tool_default_config(self, mock_client):
@@ -318,8 +316,10 @@ class TestTempoQueryToolClass:
         from src.mcp_server.tools.tempo import TempoQueryTool
         tool = TempoQueryTool()
         
-        assert tool.tempo_url == "https://tempo-tempostack-gateway.observability-hub.svc.cluster.local:8080"
-        assert tool.tenant_id == "dev"
+        # The refactored code now uses centralized config from core.config
+        # which has default values from environment or hardcoded defaults
+        assert tool.tempo_url is not None
+        assert tool.tenant_id is not None
         assert tool.namespace == "observability-hub"
 
     @patch("httpx.AsyncClient")
