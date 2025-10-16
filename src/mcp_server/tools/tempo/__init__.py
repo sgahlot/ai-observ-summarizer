@@ -9,7 +9,7 @@ This package provides tools for querying and analyzing Tempo traces:
 """
 
 from core.models import QueryResponse, TraceDetailsResponse
-from .error_handling import ErrorType, TempoErrorClassifier
+from core.error_handling import ErrorType, TempoErrorClassifier
 from .classification import QuestionType, QuestionClassifier, TraceErrorDetector
 from .query_tool import TempoQueryTool
 from .mcp_tools import (

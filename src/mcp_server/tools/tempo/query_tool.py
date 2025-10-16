@@ -12,7 +12,7 @@ from core.config import (
 )
 from core.models import QueryResponse, TraceDetailsResponse
 
-from .error_handling import TempoErrorClassifier
+from core.error_handling import TempoErrorClassifier
 
 logger = get_python_logger()
 
