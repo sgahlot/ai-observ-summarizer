@@ -8,7 +8,7 @@ This package provides tools for querying and analyzing Tempo traces:
 - MCP tools: High-level MCP tool functions
 """
 
-from .models import QueryResponse, TraceDetailsResponse
+from core.models import QueryResponse, TraceDetailsResponse
 from .error_handling import ErrorType, TempoErrorClassifier
 from .classification import QuestionType, QuestionClassifier, TraceErrorDetector
 from .query_tool import TempoQueryTool

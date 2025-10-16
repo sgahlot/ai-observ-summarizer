@@ -10,8 +10,8 @@ from core.config import (
     TEMPO_URL, TEMPO_TENANT_ID, TEMPO_NAMESPACE, 
     K8S_SERVICE_ACCOUNT_TOKEN_PATH, DEV_FALLBACK_TOKEN
 )
+from core.models import QueryResponse, TraceDetailsResponse
 
-from .models import QueryResponse, TraceDetailsResponse
 from .error_handling import TempoErrorClassifier
 
 logger = get_python_logger()
