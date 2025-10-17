@@ -83,3 +83,19 @@ class TraceAnalyzer:
                 content += f"- {service}: {count} traces\n"
             content += "\n"
         return content
+
+    @staticmethod
+    def generate_slow_traces_summary(slow_traces: List[Dict[str, Any]]) -> str:
+        """Generate a markdown summary of slow traces."""
+        content = ""
+        if slow_traces:
+            content += f"**⚠️ Performance Issues**: {len(slow_traces)} slow traces found (>1000ms)\n"
+            content += "Slowest traces:\n"
+            top_slow_traces = sorted(slow_traces, key=lambda x: x.get("durationMs", 0), reverse=True)[:3]
+            for i, trace in enumerate(top_slow_traces, 1):
+                trace_id = trace.get("traceID", "unknown")
+                service = trace.get("rootServiceName", "unknown")
+                duration = trace.get("durationMs", 0)
+                content += f"{i}. **{service}**: {trace_id} ({duration:.2f}ms)\n"
+            content += "\n"
+        return content
