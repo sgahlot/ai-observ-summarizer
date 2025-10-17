@@ -136,19 +136,3 @@ class TempoErrorClassifier(ServiceErrorClassifier):
         return super().get_user_friendly_message(error_type, "Tempo", tempo_url)
 
 
-class PrometheusErrorClassifier(ServiceErrorClassifier):
-    """Prometheus-specific error classifier."""
-    
-    @classmethod
-    def get_user_friendly_message(cls, error_type: ErrorType, prometheus_url: str) -> str:
-        """Get Prometheus-specific user-friendly error message."""
-        return super().get_user_friendly_message(error_type, "Prometheus", prometheus_url)
-
-
-class LLMErrorClassifier(ServiceErrorClassifier):
-    """LLM service-specific error classifier."""
-    
-    @classmethod
-    def get_user_friendly_message(cls, error_type: ErrorType, llm_url: str) -> str:
-        """Get LLM-specific user-friendly error message."""
-        return super().get_user_friendly_message(error_type, "LLM", llm_url)
