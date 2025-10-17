@@ -576,23 +576,8 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
                 content += TraceAnalyzer.generate_error_traces_summary(error_traces)
 
                 # Recommendations
-                content += "## 💡 **Recommendations**\n\n"
-                if slow_traces:
-                    content += f"- **Investigate slow traces**: {len(slow_traces)} traces took >1 second\n"
-                    content += f"- **Slowest trace**: {slow_traces[0]['traceID']} ({slow_traces[0]['durationMs']}ms)\n"
-                    content += "- **Get trace details**: Use `get_trace_details_tool` with trace ID\n"
-                if error_traces:
-                    content += f"- **Check error traces**: {len(error_traces)} traces had errors\n"
-                    content += f"- **Error trace**: {error_traces[0]['traceID']}\n"
-                if len(services) > 5:
-                    content += "- **Service consolidation**: Consider consolidating {len(services)} services\n"
+                content += TraceAnalyzer.generate_recommendations(services, slow_traces, error_traces, traces)
 
-                content += "- **Query specific traces**: Use `query_tempo_tool` for filtered searches\n"
-                content += "- **Example queries**:\n"
-                if traces:
-                    content += f"  - `Get details for trace {traces[0]['traceID']}`\n"
-                content += "  - `Query traces with duration > 5000ms from last week`\n"
-                content += "  - `Show me traces with errors from last week`\n"
 
             else:
                 content += "No traces found for the specified criteria.\n\n"
