@@ -16,6 +16,7 @@ from .config import (
 )
 from .models import QueryResponse, TraceDetailsResponse
 from .error_handling import TempoErrorClassifier
+from .time_utils import convert_duration_to_milliseconds
 
 import logging
 logger = logging.getLogger(__name__)
@@ -217,14 +218,7 @@ class TempoQueryService:
                 duration_unit = duration_match.group(2) or 's'
 
                 # Convert to milliseconds
-                if duration_unit == 's':
-                    duration_filter = duration_value * 1000
-                elif duration_unit == 'm':
-                    duration_filter = duration_value * 60 * 1000
-                elif duration_unit == 'h':
-                    duration_filter = duration_value * 60 * 60 * 1000
-                else:
-                    duration_filter = duration_value * 1000
+                duration_filter = convert_duration_to_milliseconds(duration_value, duration_unit)
 
         return service_name, duration_filter
     

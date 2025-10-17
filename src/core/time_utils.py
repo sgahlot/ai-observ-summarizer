@@ -119,3 +119,25 @@ def calculate_duration_ms(trace: dict) -> int:
         duration = trace.get("durationNanos", 0) / 1000000
     
     return int(duration)
+
+
+def convert_duration_to_milliseconds(duration_value: int, duration_unit: str) -> int:
+    """
+    Convert a duration value with unit to milliseconds.
+    
+    Args:
+        duration_value: The numeric duration value
+        duration_unit: The unit ('s' for seconds, 'm' for minutes, 'h' for hours)
+        
+    Returns:
+        Duration in milliseconds
+    """
+    if duration_unit == 's':
+        return duration_value * 1000
+    elif duration_unit == 'm':
+        return duration_value * 60 * 1000
+    elif duration_unit == 'h':
+        return duration_value * 60 * 60 * 1000
+    else:
+        # Default to seconds
+        return duration_value * 1000
