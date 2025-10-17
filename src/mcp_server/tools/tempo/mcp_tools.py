@@ -573,14 +573,7 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
                 content += TraceAnalyzer.generate_slow_traces_summary(slow_traces)
 
                 # Error insights
-                if error_traces:
-                    content += f"**🚨 Error Traces**: {len(error_traces)} error traces found\n"
-                    content += "Recent error traces:\n"
-                    for trace in error_traces[:3]:
-                        trace_id = trace.get("traceID", "unknown")
-                        service = trace.get("rootServiceName", "unknown")
-                        content += f"- {service}: {trace_id}\n"
-                    content += "\n"
+                content += TraceAnalyzer.generate_error_traces_summary(error_traces)
 
                 # Recommendations
                 content += "## 💡 **Recommendations**\n\n"
