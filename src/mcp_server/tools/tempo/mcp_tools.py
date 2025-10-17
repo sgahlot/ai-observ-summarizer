@@ -570,20 +570,7 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
                         content += "\n"
 
                 # Show slow traces if any
-                if slow_traces:
-                    content += f"**⚠️ Performance Issues**: {len(slow_traces)} slow traces found (>1000ms)\n"
-                    content += "Slowest traces:\n"
-
-                    # Sort by duration and get top traces
-                    top_slow_traces = sorted(slow_traces, key=lambda x: x.get("durationMs", 0), reverse=True)[:3]
-
-                    for i, trace in enumerate(top_slow_traces, 1):
-                        trace_id = trace.get("traceID", "unknown")
-                        service = trace.get("rootServiceName", "unknown")
-                        duration = trace.get("durationMs", 0)
-                        content += f"{i}. **{service}**: {trace_id} ({duration:.2f}ms)\n"
-
-                    content += "\n"
+                content += TraceAnalyzer.generate_slow_traces_summary(slow_traces)
 
                 # Error insights
                 if error_traces:

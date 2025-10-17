@@ -39,7 +39,7 @@ def extract_time_range_from_question(question: str) -> str:
         return "last 6h"
     elif "last 12 hours" in question_lower or "last 12h" in question_lower:
         return "last 12h"
-    elif "last hour" in question_lower or "last 1h" in question_lower:
+    elif "last hour" in question_lower or "last 1h" in question_lower or "last 1 hour" in question_lower:
         return "last 1h"
     elif "last 30 minutes" in question_lower or "last 30m" in question_lower:
         return "last 30m"
