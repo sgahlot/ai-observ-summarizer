@@ -12,13 +12,38 @@ from datetime import datetime, timedelta
 
 from common.pylogger import get_python_logger
 
-from .query_tool import TempoQueryTool
 from core.question_classification import TempoQuestionClassifier as QuestionClassifier, QuestionType, TraceErrorDetector
 from core.config import SLOW_TRACE_THRESHOLD_MS, DEFAULT_QUERY_LIMIT, DEFAULT_CHAT_QUERY_LIMIT
 from core.time_utils import extract_time_range_from_question, convert_time_range_to_iso, calculate_duration_ms
 from core.trace_analysis import TraceAnalyzer
+from core.tempo_service import TempoQueryService
 
 logger = get_python_logger()
+
+
+class TempoQueryTool:
+    """Tool for querying Tempo traces with async support."""
+
+    def __init__(self):
+        self.service = TempoQueryService()
+
+    async def get_available_services(self) -> List[str]:
+        """Get list of available services from Tempo/Jaeger."""
+        return await self.service.get_available_services()
+
+    async def query_traces(
+        self,
+        query: str,
+        start_time: str,
+        end_time: str,
+        limit: int = DEFAULT_QUERY_LIMIT
+    ) -> Dict[str, Any]:
+        """Query traces from Tempo using TraceQL syntax."""
+        return await self.service.query_traces(query, start_time, end_time, limit)
+
+    async def get_trace_details(self, trace_id: str) -> Dict[str, Any]:
+        """Get detailed trace information."""
+        return await self.service.get_trace_details(trace_id)
 
 
 async def query_tempo_tool(
