@@ -12,20 +12,45 @@ from datetime import datetime, timedelta
 
 from common.pylogger import get_python_logger
 
-from .query_tool import TempoQueryTool
-from .classification import QuestionClassifier, QuestionType, TraceErrorDetector
+from core.question_classification import TempoQuestionClassifier as QuestionClassifier, QuestionType, TraceErrorDetector
+from core.config import SLOW_TRACE_THRESHOLD_MS, DEFAULT_QUERY_LIMIT, DEFAULT_CHAT_QUERY_LIMIT
+from core.time_utils import extract_time_range_from_question, convert_time_range_to_iso, calculate_duration_ms
+from core.trace_analysis import TraceAnalyzer
+from core.tempo_service import TempoQueryService
 
 logger = get_python_logger()
 
-# Module-level constants for trace analysis
-SLOW_TRACE_THRESHOLD_MS = 1000  # Traces slower than this are considered "slow"
+
+class TempoQueryTool:
+    """Tool for querying Tempo traces with async support."""
+
+    def __init__(self):
+        self.service = TempoQueryService()
+
+    async def get_available_services(self) -> List[str]:
+        """Get list of available services from Tempo/Jaeger."""
+        return await self.service.get_available_services()
+
+    async def query_traces(
+        self,
+        query: str,
+        start_time: str,
+        end_time: str,
+        limit: int = DEFAULT_QUERY_LIMIT
+    ) -> Dict[str, Any]:
+        """Query traces from Tempo using TraceQL syntax."""
+        return await self.service.query_traces(query, start_time, end_time, limit)
+
+    async def get_trace_details(self, trace_id: str) -> Dict[str, Any]:
+        """Get detailed trace information."""
+        return await self.service.get_trace_details(trace_id)
 
 
 async def query_tempo_tool(
     query: str,
     start_time: str,
     end_time: str,
-    limit: int = TempoQueryTool.DEFAULT_QUERY_LIMIT
+    limit: int = DEFAULT_QUERY_LIMIT
 ) -> List[Dict[str, Any]]:
     """
     MCP tool function for querying Tempo traces.
@@ -159,46 +184,6 @@ async def get_trace_details_tool(trace_id: str) -> List[Dict[str, Any]]:
         return [{"type": "text", "text": error_content}]
 
 
-def extract_time_range_from_question(question: str) -> str:
-    """Extract time range from user question for trace analysis"""
-    question_lower = question.lower()
-
-    # Check for specific time ranges
-    if "last 24 hours" in question_lower or "last 24h" in question_lower or "yesterday" in question_lower:
-        return "last 24h"
-    elif "last week" in question_lower or "last 7 days" in question_lower:
-        return "last 7d"
-    elif "last month" in question_lower or "last 30 days" in question_lower:
-        return "last 30d"
-    elif "last 2 hours" in question_lower or "last 2h" in question_lower:
-        return "last 2h"
-    elif "last 6 hours" in question_lower or "last 6h" in question_lower:
-        return "last 6h"
-    elif "last 12 hours" in question_lower or "last 12h" in question_lower:
-        return "last 12h"
-    elif "last hour" in question_lower or "last 1h" in question_lower:
-        return "last 1h"
-    elif "last 30 minutes" in question_lower or "last 30m" in question_lower:
-        return "last 30m"
-    elif "last 15 minutes" in question_lower or "last 15m" in question_lower:
-        return "last 15m"
-    elif "last 5 minutes" in question_lower or "last 5m" in question_lower:
-        return "last 5m"
-    elif "week" in question_lower or "7 days" in question_lower:
-        # Catch references to week without "last"
-        return "last 7d"
-    elif "month" in question_lower or "30 days" in question_lower:
-        # Catch references to month without "last"
-        return "last 30d"
-    elif "day" in question_lower or "24 hours" in question_lower:
-        # Catch references to day without "last"
-        return "last 24h"
-    else:
-        # For follow-up questions without explicit time, default to 7 days to maintain context
-        # This helps when users ask follow-up questions about traces they previously queried
-        return "last 7d"
-
-
 async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
     """
     MCP tool function for conversational Tempo trace analysis.
@@ -217,35 +202,11 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
     tempo_tool = TempoQueryTool()
 
     try:
-        # Extract time range from the question
+        # Extract time range from the question and convert to ISO format
         extracted_time_range = extract_time_range_from_question(question)
         logger.info(f"Extracted time range from question: {extracted_time_range}")
 
-        # Parse time range to get start and end times
-        now = datetime.now()
-        if extracted_time_range.startswith("last "):
-            duration_str = extracted_time_range[5:]  # Remove "last "
-            if duration_str.endswith("h"):
-                hours = int(duration_str[:-1])
-                start_time = now - timedelta(hours=hours)
-            elif duration_str.endswith("d"):
-                days = int(duration_str[:-1])
-                start_time = now - timedelta(days=days)
-            elif duration_str.endswith("m"):
-                minutes = int(duration_str[:-1])
-                start_time = now - timedelta(minutes=minutes)
-            else:
-                # Default to 1 hour
-                start_time = now - timedelta(hours=1)
-        else:
-            # Default to 1 hour
-            start_time = now - timedelta(hours=1)
-
-        end_time = now
-
-        # Convert to ISO format
-        start_iso = start_time.isoformat() + "Z"
-        end_iso = end_time.isoformat() + "Z"
+        start_iso, end_iso = convert_time_range_to_iso(extracted_time_range)
 
         # Analyze the question to determine appropriate query
         question_lower = question.lower()
@@ -373,7 +334,7 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
 
         # Query traces
         logger.info(f"Executing Tempo query: '{query}' for time range {start_iso} to {end_iso}")
-        result = await tempo_tool.query_traces(query, start_iso, end_iso, limit=TempoQueryTool.DEFAULT_CHAT_QUERY_LIMIT)
+        result = await tempo_tool.query_traces(query, start_iso, end_iso, limit=DEFAULT_CHAT_QUERY_LIMIT)
 
         if result["success"]:
             traces = result["traces"]
@@ -385,55 +346,18 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
             content += f"**Found**: {len(traces)} traces\n\n"
 
             if traces:
-                # Analyze trace patterns
-                services = {}
-                error_traces = []
-                slow_traces = []
-                all_traces_with_duration = []
-
-                for trace in traces:
-                    service_name = trace.get("rootServiceName", "unknown")
-
-                    # Try different duration field names and formats
-                    duration = 0
-                    if "durationMs" in trace:
-                        duration = trace.get("durationMs", 0)
-                    elif "duration" in trace:
-                        # Convert microseconds to milliseconds if needed
-                        duration = trace.get("duration", 0) / 1000
-                    elif "durationNanos" in trace:
-                        # Convert nanoseconds to milliseconds
-                        duration = trace.get("durationNanos", 0) / 1000000
-
-                    # Debug: Log duration information for first few traces
-                    if len(all_traces_with_duration) < 3:
-                        logger.info(f"Trace {len(all_traces_with_duration)+1} duration fields: {[k for k in trace.keys() if 'duration' in k.lower()]}, calculated duration: {duration}ms")
-
-                    # Count services
-                    services[service_name] = services.get(service_name, 0) + 1
-
-                    # Store all traces with duration for analysis
-                    trace_with_duration = trace.copy()
-                    trace_with_duration["durationMs"] = duration
-                    all_traces_with_duration.append(trace_with_duration)
-
-                    # Identify slow traces (>1 second)
-                    if duration > SLOW_TRACE_THRESHOLD_MS:
-                        slow_traces.append(trace_with_duration)
-
-                    # Check for error traces using robust classification
-                    if TraceErrorDetector.is_error_trace(trace):
-                        error_traces.append(trace_with_duration)
+                # Analyze trace patterns using centralized analyzer
+                analysis_result = TraceAnalyzer.analyze_traces(traces)
+                services = analysis_result.services
+                error_traces = analysis_result.error_traces
+                slow_traces = analysis_result.slow_traces
+                all_traces_with_duration = analysis_result.all_traces_with_duration
 
                 # Generate insights
                 content += "## 📊 **Analysis Results**\n\n"
 
                 # Service distribution
-                if services:
-                    content += "**Services Activity**:\n"
-                    for service, count in sorted(services.items(), key=lambda x: x[1], reverse=True)[:5]:
-                        content += f"- {service}: {count} traces\n"
-                    content += "\n"
+                content += TraceAnalyzer.generate_service_activity_summary(services)
 
                 # Performance insights - analyze by service for fastest/slowest queries
                 if any(keyword in question_lower for keyword in ["fastest", "slowest", "performance"]):
@@ -671,49 +595,14 @@ async def chat_tempo_tool(question: str) -> List[Dict[str, Any]]:
                         content += "\n"
 
                 # Show slow traces if any
-                if slow_traces:
-                    content += f"**⚠️ Performance Issues**: {len(slow_traces)} slow traces found (>1000ms)\n"
-                    content += "Slowest traces:\n"
-
-                    # Sort by duration and get top traces
-                    top_slow_traces = sorted(slow_traces, key=lambda x: x.get("durationMs", 0), reverse=True)[:3]
-
-                    for i, trace in enumerate(top_slow_traces, 1):
-                        trace_id = trace.get("traceID", "unknown")
-                        service = trace.get("rootServiceName", "unknown")
-                        duration = trace.get("durationMs", 0)
-                        content += f"{i}. **{service}**: {trace_id} ({duration:.2f}ms)\n"
-
-                    content += "\n"
+                content += TraceAnalyzer.generate_slow_traces_summary(slow_traces)
 
                 # Error insights
-                if error_traces:
-                    content += f"**🚨 Error Traces**: {len(error_traces)} error traces found\n"
-                    content += "Recent error traces:\n"
-                    for trace in error_traces[:3]:
-                        trace_id = trace.get("traceID", "unknown")
-                        service = trace.get("rootServiceName", "unknown")
-                        content += f"- {service}: {trace_id}\n"
-                    content += "\n"
+                content += TraceAnalyzer.generate_error_traces_summary(error_traces)
 
                 # Recommendations
-                content += "## 💡 **Recommendations**\n\n"
-                if slow_traces:
-                    content += f"- **Investigate slow traces**: {len(slow_traces)} traces took >1 second\n"
-                    content += f"- **Slowest trace**: {slow_traces[0]['traceID']} ({slow_traces[0]['durationMs']}ms)\n"
-                    content += "- **Get trace details**: Use `get_trace_details_tool` with trace ID\n"
-                if error_traces:
-                    content += f"- **Check error traces**: {len(error_traces)} traces had errors\n"
-                    content += f"- **Error trace**: {error_traces[0]['traceID']}\n"
-                if len(services) > 5:
-                    content += "- **Service consolidation**: Consider consolidating {len(services)} services\n"
+                content += TraceAnalyzer.generate_recommendations(services, slow_traces, error_traces, traces)
 
-                content += "- **Query specific traces**: Use `query_tempo_tool` for filtered searches\n"
-                content += "- **Example queries**:\n"
-                if traces:
-                    content += f"  - `Get details for trace {traces[0]['traceID']}`\n"
-                content += "  - `Query traces with duration > 5000ms from last week`\n"
-                content += "  - `Show me traces with errors from last week`\n"
 
             else:
                 content += "No traces found for the specified criteria.\n\n"

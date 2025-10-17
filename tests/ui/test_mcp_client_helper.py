@@ -6,8 +6,7 @@ import json
 import sys
 import os
 
-# Add src to path to import the UI modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../src"))
+# Python path is now handled by conftest.py
 
 # Import the module under test
 import ui.mcp_client_helper as mcp_helper
