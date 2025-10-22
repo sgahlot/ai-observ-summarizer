@@ -68,14 +68,18 @@ except Exception:
 try:
     # Try direct import first (works in container with proper package structure)
     from mcp_server.claude_integration import PrometheusChatBot
+    from mcp_server.chat_bot import GenericChatBot
 except ImportError:
     # Fallback: Add path and try again (works in local development)
     sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'mcp_server'))
     try:
         from claude_integration import PrometheusChatBot
+        from chat_bot import GenericChatBot
     except ImportError:
         # Final fallback: Direct file loading (most robust)
         claude_integration_path = os.path.join(os.path.dirname(__file__), '..', 'mcp_server', 'claude_integration.py')
+        chat_bot_path = os.path.join(os.path.dirname(__file__), '..', 'mcp_server', 'chat_bot.py')
+        
         if os.path.exists(claude_integration_path):
             spec = importlib.util.spec_from_file_location("claude_integration", claude_integration_path)
             claude_integration = importlib.util.module_from_spec(spec)
@@ -89,6 +93,22 @@ except ImportError:
                     self.error = "Claude integration not available"
                 def chat(self, *args, **kwargs):
                     return "❌ Claude integration not available. Please check deployment."
+                def test_connection(self):
+                    return False
+        
+        if os.path.exists(chat_bot_path):
+            spec = importlib.util.spec_from_file_location("chat_bot", chat_bot_path)
+            chat_bot = importlib.util.module_from_spec(spec)
+            sys.modules['chat_bot'] = chat_bot
+            spec.loader.exec_module(chat_bot)
+            GenericChatBot = chat_bot.GenericChatBot
+        else:
+            # If all else fails, create a dummy class to prevent crashes
+            class GenericChatBot:
+                def __init__(self, *args, **kwargs):
+                    self.error = "Generic chat bot not available"
+                def chat(self, *args, **kwargs):
+                    return "❌ Generic chat bot not available. Please check deployment."
                 def test_connection(self):
                     return False
 
@@ -855,24 +875,24 @@ elif page == "Chat with Prometheus":
     
     st.sidebar.markdown("---")
     
-    # --- Select Claude Model ---
-    st.sidebar.markdown("### 🤖 Select Claude Model")
-    st.sidebar.markdown("*Claude Desktop-powered analysis*")
+    # --- Select AI Model ---
+    st.sidebar.markdown("### 🤖 Select AI Model")
+    st.sidebar.markdown("*AI-powered analysis*")
 
-    # --- Claude-only model support for Chat with Prometheus ---
+    # --- Multi-provider model support for Chat with Prometheus ---
     all_models = get_multi_models()
-    # Filter for only Claude/Anthropic models since this page uses Claude Desktop intelligence
-    claude_models = [model for model in all_models if 'anthropic' in model.lower() or 'claude' in model.lower()]
+    # Show all available models (OpenAI, Google, Anthropic, local)
+    available_models = all_models
     
-    if not claude_models:
-        st.sidebar.error("❌ No Claude models found. Please check model configuration.")
-        claude_models = all_models  # Fallback to all models
+    if not available_models:
+        st.sidebar.error("❌ No models found. Please check model configuration.")
+        available_models = ["No models available"]
     
     multi_model_name = st.sidebar.selectbox(
-        "Select Claude model for Prometheus analysis",
-        claude_models,
-        key="chat_claude_model_selector",
-        help="Only Claude models are available for Chat with Prometheus due to superior observability analysis capabilities"
+        "Select AI model for Prometheus analysis",
+        available_models,
+        key="chat_ai_model_selector",
+        help="Choose from available AI models for observability analysis"
     )
 
     # --- Define model key requirements ---
@@ -1331,15 +1351,15 @@ elif page == "Chat with Prometheus":
     </div>
     """, unsafe_allow_html=True)
     
-    # Initialize Claude chat bot using user-entered API key or environment variable
-    claude_chatbot = None
-    user_api_key = api_key if api_key else os.getenv("ANTHROPIC_API_KEY")
+    # Initialize AI chat bot using user-entered API key or environment variable
+    ai_chatbot = None
+    user_api_key = api_key if api_key else None
     
-    if user_api_key:
+    if user_api_key or multi_model_name != "No models available":
         try:
-            claude_chatbot = PrometheusChatBot(api_key=user_api_key, model_name=multi_model_name)
+            ai_chatbot = GenericChatBot(model_name=multi_model_name, api_key=user_api_key)
         except Exception as e:
-            st.error(f"Failed to initialize Claude chat bot: {e}")
+            st.error(f"Failed to initialize AI chat bot: {e}")
     
     # Simple cluster-wide analysis
     st.markdown("🌐 **Cluster-wide analysis** - Ask about any metrics and traces across your infrastructure")
@@ -1347,16 +1367,16 @@ elif page == "Chat with Prometheus":
         "Ask questions like: `What's the GPU temperature?`, `How many pods are running?`, `Token generation rate?`, `Memory usage per model?`, `Show me traces with errors?`, `Find slow requests?` etc."
     )
     
-    # Claude integration status
-    if claude_chatbot:
-        st.success("✅ Claude AI is connected and ready!")
-        if claude_chatbot.test_connection():
+    # AI integration status
+    if ai_chatbot:
+        st.success("✅ AI is connected and ready!")
+        if ai_chatbot.test_connection():
             st.info("🔗 MCP tools are working properly")
         else:
             st.warning("⚠️ MCP tools connection issue")
     else:
         if current_model_requires_api_key and not user_api_key:
-            st.error("❌ Please enter your Anthropic API key in the sidebar.")
+            st.error("❌ Please enter your API key in the sidebar.")
         else:
             st.info("💡 **Smart Time Parsing**: Just mention time naturally in your question! "
                     "Examples: *'past 15 minutes'*, *'last 3 hours'*, *'yesterday'*, *'past 2 weeks'*")
@@ -1366,7 +1386,7 @@ elif page == "Chat with Prometheus":
         st.session_state.claude_messages = []  # List to store chat messages
 
     # Show suggested questions if no conversation started (like Claude Desktop)
-    if not st.session_state.claude_messages and claude_chatbot:
+    if not st.session_state.claude_messages and ai_chatbot:
         st.markdown("### 💡 Suggested Questions")
         
         col1, col2 = st.columns(2)
@@ -1410,9 +1430,9 @@ elif page == "Chat with Prometheus":
             st.markdown(message["content"])
 
     # Custom chat input with better placeholder
-    user_question = st.chat_input("Ask Claude about your metrics and traces... (e.g., 'What's the GPU usage?' or 'Show me CPU trends' or 'Show me traces with errors')")
+    user_question = st.chat_input("Ask AI about your metrics and traces... (e.g., 'What's the GPU usage?' or 'Show me CPU trends' or 'Show me traces with errors')")
     
-    if user_question and claude_chatbot:
+    if user_question and ai_chatbot:
         # Add user message to history and display it
         st.session_state.claude_messages.append({"role": "user", "content": user_question})
         with st.chat_message("user", avatar="👤"):
@@ -1436,7 +1456,7 @@ elif page == "Chat with Prometheus":
                 # Check if this is a trace-related question
                 is_trace_question = detect_trace_question(user_question)
                 trace_analysis = None
-                skip_claude = False  # Flag to skip Claude analysis for pure trace questions
+                skip_ai = False  # Flag to skip AI analysis for pure trace questions
 
                 # Log trace detection result
                 logger.debug(f"Question: {user_question}")
@@ -1477,22 +1497,22 @@ elif page == "Chat with Prometheus":
                                 message_placeholder.markdown(trace_analysis)
                                 full_response = trace_analysis
                                 st.session_state.claude_messages.append({"role": "assistant", "content": full_response})
-                                skip_claude = True  # Skip Claude/Prometheus analysis for pure trace questions
+                                skip_ai = True  # Skip AI/Prometheus analysis for pure trace questions
                         else:
                             message_placeholder.markdown("⚠️ **Trace analysis failed, continuing with metrics only**")
                     except Exception as e:
                         message_placeholder.markdown(f"⚠️ **Trace analysis error: {str(e)}, continuing with metrics only**")
 
-                # Get response from Claude with real-time progress (PromQL queries always included)
-                if not skip_claude:
-                    response = claude_chatbot.chat(
+                # Get response from AI with real-time progress (PromQL queries always included)
+                if not skip_ai:
+                    response = ai_chatbot.chat(
                         user_question,
                         namespace=None,  # Cluster-wide analysis
                         scope="cluster-wide",
                         progress_callback=update_progress
                     )
                 else:
-                    response = None  # Skip Claude analysis for pure trace questions
+                    response = None  # Skip AI analysis for pure trace questions
                 
                 # Display final response with better formatting
                 if response:
@@ -1505,12 +1525,12 @@ elif page == "Chat with Prometheus":
 
                     message_placeholder.markdown(formatted_response)
                     
-                    # Add Claude's response to history (including trace analysis if available)
+                    # Add AI's response to history (including trace analysis if available)
                     full_response = response
                     if trace_analysis:
                         full_response += "\n\n---\n\n## 🔍 **Trace Analysis**\n\n" + trace_analysis
                     st.session_state.claude_messages.append({"role": "assistant", "content": full_response})
-                elif skip_claude:
+                elif skip_ai:
                     # For pure trace questions, we already displayed the trace analysis above
                     # No additional processing needed
                     pass
@@ -1524,12 +1544,12 @@ elif page == "Chat with Prometheus":
                 message_placeholder.markdown(f"❌ **Error:** {error_msg}")
                 st.session_state.claude_messages.append({"role": "assistant", "content": error_msg})
     
-    elif user_question and not claude_chatbot:
+    elif user_question and not ai_chatbot:
         with st.chat_message("assistant", avatar="⚠️"):
             if current_model_requires_api_key and not user_api_key:
-                st.markdown("🔑 **API Key Required**\n\nPlease enter your Anthropic API key in the sidebar to start chatting with Claude.")
+                st.markdown("🔑 **API Key Required**\n\nPlease enter your API key in the sidebar to start chatting with AI.")
             else:
-                st.markdown("❌ **Connection Error**\n\nClaude AI is not available. Please check your configuration.")
+                st.markdown("❌ **Connection Error**\n\nAI is not available. Please check your configuration.")
 
 
 # --- 🔧 OpenShift Metrics Page ---
