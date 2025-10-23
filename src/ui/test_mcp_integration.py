@@ -10,8 +10,7 @@ import sys
 import logging
 
 # Add the parent directories to the path to import from core and ui modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.dirname(__file__))
+# Python path is now handled by conftest.py
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

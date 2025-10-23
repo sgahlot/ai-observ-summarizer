@@ -1,7 +1,8 @@
-"""Error handling and classification for Tempo queries."""
+"""Centralized error handling and classification for observability services."""
 
 import re
 from enum import Enum
+from typing import Dict, Optional
 
 
 class ErrorType(Enum):
@@ -12,11 +13,12 @@ class ErrorType(Enum):
     TIMEOUT = "timeout"
     AUTHENTICATION_FAILED = "authentication_failed"
     SERVICE_UNAVAILABLE = "service_unavailable"
+    RATE_LIMITED = "rate_limited"
     UNKNOWN = "unknown"
 
 
-class TempoErrorClassifier:
-    """Classifies Tempo-related errors for better error handling and user messaging."""
+class ServiceErrorClassifier:
+    """Classifies service-related errors for better error handling and user messaging."""
 
     # Define error patterns with their corresponding error types
     ERROR_PATTERNS = {
@@ -53,7 +55,13 @@ class TempoErrorClassifier:
             r"HTTP\s+503",
             r"\b503\b",
             r"Service Unavailable",
-            r"Tempo service not available"
+            r"service not available"
+        ],
+        ErrorType.RATE_LIMITED: [
+            r"HTTP\s+429",
+            r"\b429\b",
+            r"Too Many Requests",
+            r"Rate limit exceeded"
         ]
     }
 
@@ -61,12 +69,13 @@ class TempoErrorClassifier:
     HTTP_STATUS_MAPPING = {
         401: ErrorType.AUTHENTICATION_FAILED,
         403: ErrorType.AUTHENTICATION_FAILED,
+        429: ErrorType.RATE_LIMITED,
         503: ErrorType.SERVICE_UNAVAILABLE,
         504: ErrorType.TIMEOUT,
     }
 
     @classmethod
-    def classify_error(cls, error_message: str, status_code: int = None) -> ErrorType:
+    def classify_error(cls, error_message: str, status_code: Optional[int] = None) -> ErrorType:
         """
         Classify an error message into a specific error type.
 
@@ -91,25 +100,39 @@ class TempoErrorClassifier:
         return ErrorType.UNKNOWN
 
     @classmethod
-    def get_user_friendly_message(cls, error_type: ErrorType, tempo_url: str) -> str:
+    def get_user_friendly_message(cls, error_type: ErrorType, service_name: str, service_url: str) -> str:
         """
         Get a user-friendly error message based on the error type.
 
         Args:
             error_type: The classified error type
-            tempo_url: The Tempo URL that was being accessed
+            service_name: The name of the service (e.g., "Tempo", "Prometheus", "LLM")
+            service_url: The service URL that was being accessed
 
         Returns:
             str: A user-friendly error message
         """
         messages = {
-            ErrorType.CONNECTION_REFUSED: f"Tempo service refused connection at {tempo_url}. Check if Tempo is running in the observability-hub namespace.",
-            ErrorType.DNS_RESOLUTION_FAILED: f"Tempo service not reachable at {tempo_url}. This is expected when running locally. Deploy to OpenShift to access Tempo.",
-            ErrorType.HTTP_ERROR: f"HTTP error accessing Tempo at {tempo_url}. Check if the service is properly configured.",
-            ErrorType.TIMEOUT: f"Request to Tempo timed out at {tempo_url}. The service may be overloaded or unreachable.",
-            ErrorType.AUTHENTICATION_FAILED: f"Authentication failed when accessing Tempo at {tempo_url}. Check your credentials.",
-            ErrorType.SERVICE_UNAVAILABLE: f"Tempo service is temporarily unavailable at {tempo_url}. Please try again later.",
-            ErrorType.UNKNOWN: f"Unexpected error accessing Tempo at {tempo_url}"
+            ErrorType.CONNECTION_REFUSED: f"{service_name} service refused connection at {service_url}. Check if {service_name} is running.",
+            ErrorType.DNS_RESOLUTION_FAILED: f"{service_name} service not reachable at {service_url}. This is expected when running locally. Deploy to OpenShift to access {service_name}.",
+            ErrorType.HTTP_ERROR: f"HTTP error accessing {service_name} at {service_url}. Check if the service is properly configured.",
+            ErrorType.TIMEOUT: f"Request to {service_name} timed out at {service_url}. The service may be overloaded or unreachable.",
+            ErrorType.AUTHENTICATION_FAILED: f"Authentication failed when accessing {service_name} at {service_url}. Check your credentials.",
+            ErrorType.SERVICE_UNAVAILABLE: f"{service_name} service is temporarily unavailable at {service_url}. Please try again later.",
+            ErrorType.RATE_LIMITED: f"Rate limit exceeded for {service_name} at {service_url}. Please wait before making more requests.",
+            ErrorType.UNKNOWN: f"Unexpected error accessing {service_name} at {service_url}"
         }
 
         return messages.get(error_type, messages[ErrorType.UNKNOWN])
+
+
+# Service-specific error classifiers for backward compatibility
+class TempoErrorClassifier(ServiceErrorClassifier):
+    """Tempo-specific error classifier for backward compatibility."""
+    
+    @classmethod
+    def get_user_friendly_message(cls, error_type: ErrorType, tempo_url: str) -> str:
+        """Get Tempo-specific user-friendly error message."""
+        return super().get_user_friendly_message(error_type, "Tempo", tempo_url)
+
+
