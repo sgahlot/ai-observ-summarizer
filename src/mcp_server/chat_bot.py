@@ -447,7 +447,7 @@ class GenericChatBot:
         openai_tools = [{"type": "function", "function": tool} for tool in tools]
 
         # Iterative tool calling loop (like Anthropic's implementation)
-        max_iterations = 15
+        max_iterations = 30  # Match Anthropic's limit for comprehensive analysis
         iteration = 0
 
         while iteration < max_iterations:
@@ -564,24 +564,300 @@ class GenericChatBot:
         return "Analysis incomplete. Please try a more specific question."
 
     def _chat_with_external_tools(self, user_question: str, system_prompt: str, progress_callback: Optional[Callable] = None) -> str:
-        """Handle tool calling for external providers (OpenAI, Google) - to be implemented."""
-        # TODO: Implement OpenAI/Google tool calling
-        # For now, fall back to simple call
-        messages = [{"role": "user", "content": user_question}]
-        prompt = f"{system_prompt}\n\nUser Question: {user_question}"
+        """Handle tool calling for external providers (OpenAI, Google)."""
 
-        try:
-            response = summarize_with_llm(
-                prompt=prompt,
-                summarize_model_id=self.model_name,
-                response_type=ResponseType.GENERAL_CHAT,
-                api_key=self.api_key,
-                messages=messages
-            )
-            return response
-        except Exception as e:
-            logger.error(f"Error calling external LLM: {e}")
-            return f"Error generating response: {str(e)}"
+        if self.provider == "openai":
+            return self._chat_with_openai_tools(user_question, system_prompt, progress_callback)
+        elif self.provider == "google":
+            # TODO: Implement Google Gemini tool calling
+            return self._chat_with_google_tools(user_question, system_prompt, progress_callback)
+        else:
+            # Fallback for unknown external providers
+            messages = [{"role": "user", "content": user_question}]
+            prompt = f"{system_prompt}\n\nUser Question: {user_question}"
+
+            try:
+                response = summarize_with_llm(
+                    prompt=prompt,
+                    summarize_model_id=self.model_name,
+                    response_type=ResponseType.GENERAL_CHAT,
+                    api_key=self.api_key,
+                    messages=messages
+                )
+                return response
+            except Exception as e:
+                logger.error(f"Error calling external LLM: {e}")
+                return f"Error generating response: {str(e)}"
+
+    def _chat_with_openai_tools(self, user_question: str, system_prompt: str, progress_callback: Optional[Callable] = None) -> str:
+        """Handle tool calling for OpenAI models using their function calling API."""
+        import requests
+        import json
+
+        # Prepare messages with system prompt
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_question}
+        ]
+
+        # Convert tools to OpenAI format
+        tools = self._convert_to_openai_functions(self._get_mcp_tools())
+        openai_tools = [{"type": "function", "function": tool} for tool in tools]
+
+        # Get API URL and model name from config
+        api_url = self.model_config.get("apiUrl", "https://api.openai.com/v1/chat/completions")
+        model_name = self.model_config.get("modelName", "gpt-4o-mini")
+
+        # Iterative tool calling loop
+        max_iterations = 30
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+            logger.info(f"🤖 OpenAI tool calling iteration {iteration}")
+
+            if progress_callback:
+                progress_callback(f"🤖 Thinking... (iteration {iteration})")
+
+            try:
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}"
+                }
+
+                payload = {
+                    "model": model_name,
+                    "messages": messages,
+                    "tools": openai_tools,
+                    "temperature": 0
+                }
+
+                response = requests.post(api_url, headers=headers, json=payload)
+                response.raise_for_status()
+                result = response.json()
+
+                choice = result['choices'][0]
+                finish_reason = choice.get('finish_reason', '')
+                message = choice['message']
+
+                # Add assistant's response to conversation
+                messages.append(message)
+
+                # If model wants to use tools, execute them
+                if finish_reason == 'tool_calls' and 'tool_calls' in message:
+                    logger.info(f"OpenAI is using {len(message['tool_calls'])} tool(s)")
+
+                    tool_results = []
+                    for tool_call in message['tool_calls']:
+                        tool_name = tool_call['function']['name']
+                        tool_args_str = tool_call['function']['arguments']
+                        tool_id = tool_call['id']
+
+                        logger.info(f"🔧 Calling tool: {tool_name}")
+                        if progress_callback:
+                            progress_callback(f"🔧 Using tool: {tool_name}")
+
+                        # Parse arguments
+                        try:
+                            tool_args = json.loads(tool_args_str)
+                        except json.JSONDecodeError:
+                            tool_args = {}
+
+                        # Route to MCP server
+                        tool_result = self._route_tool_call_to_mcp(tool_name, tool_args)
+
+                        # Truncate large results
+                        if isinstance(tool_result, str) and len(tool_result) > 3000:
+                            tool_result = tool_result[:3000] + "\n... [Result truncated]"
+
+                        tool_results.append({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "content": tool_result
+                        })
+
+                    # Add tool results to conversation
+                    messages.extend(tool_results)
+
+                    # Limit conversation history
+                    if len(messages) > 10:
+                        messages = [messages[0]] + messages[-8:]
+
+                    # Continue loop
+                    continue
+
+                else:
+                    # Model is done, return final response
+                    final_response = message.get('content', '')
+                    logger.info(f"OpenAI tool calling completed in {iteration} iterations")
+                    return final_response
+
+            except Exception as e:
+                logger.error(f"Error in OpenAI tool calling iteration {iteration}: {e}")
+                return f"Error during OpenAI tool calling: {str(e)}"
+
+        # Hit max iterations
+        logger.warning(f"Hit max iterations ({max_iterations})")
+        return "Analysis incomplete. Please try a more specific question."
+
+    def _chat_with_google_tools(self, user_question: str, system_prompt: str, progress_callback: Optional[Callable] = None) -> str:
+        """Handle tool calling for Google Gemini using their function calling API."""
+        import requests
+        import json
+
+        # Get API URL and model name from config
+        # Gemini API URL format: https://generativelanguage.googleapis.com/v1beta/models/MODEL_NAME:generateContent
+        api_base = self.model_config.get("apiUrl", "")
+        model_name = self.model_config.get("modelName", "gemini-2.5-flash")
+
+        # Construct the full API URL with API key
+        if "?" in api_base:
+            api_url = f"{api_base}&key={self.api_key}"
+        else:
+            api_url = f"{api_base}?key={self.api_key}"
+
+        # Convert MCP tools to Google Gemini format
+        gemini_tools = self._convert_to_gemini_functions(self._get_mcp_tools())
+
+        # Build conversation history (Gemini uses a different format)
+        contents = [
+            {
+                "role": "user",
+                "parts": [{"text": f"{system_prompt}\n\n{user_question}"}]
+            }
+        ]
+
+        # Iterative tool calling loop
+        max_iterations = 30
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+            logger.info(f"🤖 Google Gemini tool calling iteration {iteration}")
+
+            if progress_callback:
+                progress_callback(f"🤖 Thinking... (iteration {iteration})")
+
+            try:
+                headers = {"Content-Type": "application/json"}
+
+                payload = {
+                    "contents": contents,
+                    "tools": gemini_tools,
+                    "generationConfig": {
+                        "temperature": 0
+                    }
+                }
+
+                response = requests.post(api_url, headers=headers, json=payload)
+
+                # Log the error details if request fails
+                if response.status_code != 200:
+                    logger.error(f"Gemini API error: {response.status_code}")
+                    logger.error(f"Response body: {response.text}")
+                    return f"Gemini API error ({response.status_code}): {response.text[:500]}"
+
+                response.raise_for_status()
+                result = response.json()
+
+                # Extract the candidate response
+                if "candidates" not in result or len(result["candidates"]) == 0:
+                    return "Error: No response from Google Gemini"
+
+                candidate = result["candidates"][0]
+                content = candidate.get("content", {})
+                parts = content.get("parts", [])
+
+                # Add model's response to conversation
+                contents.append(content)
+
+                # Check if model wants to use tools
+                has_function_calls = any("functionCall" in part for part in parts)
+
+                if has_function_calls:
+                    logger.info("Google Gemini is using tools")
+
+                    function_responses = []
+                    for part in parts:
+                        if "functionCall" in part:
+                            func_call = part["functionCall"]
+                            tool_name = func_call["name"]
+                            tool_args = func_call.get("args", {})
+
+                            logger.info(f"🔧 Calling tool: {tool_name}")
+                            if progress_callback:
+                                progress_callback(f"🔧 Using tool: {tool_name}")
+
+                            # Route to MCP server
+                            tool_result = self._route_tool_call_to_mcp(tool_name, tool_args)
+
+                            # Truncate large results
+                            if isinstance(tool_result, str) and len(tool_result) > 3000:
+                                tool_result = tool_result[:3000] + "\n... [Result truncated]"
+
+                            # Format for Gemini
+                            function_responses.append({
+                                "functionResponse": {
+                                    "name": tool_name,
+                                    "response": {
+                                        "content": tool_result
+                                    }
+                                }
+                            })
+
+                    # Add function responses to conversation
+                    contents.append({
+                        "role": "function",
+                        "parts": function_responses
+                    })
+
+                    # Limit conversation history
+                    if len(contents) > 10:
+                        contents = contents[-8:]
+
+                    # Continue loop
+                    continue
+
+                else:
+                    # Model is done, extract final text response
+                    final_response = ""
+                    for part in parts:
+                        if "text" in part:
+                            final_response += part["text"]
+
+                    logger.info(f"Google Gemini tool calling completed in {iteration} iterations")
+                    return final_response
+
+            except Exception as e:
+                logger.error(f"Error in Google Gemini tool calling iteration {iteration}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return f"Error during Google Gemini tool calling: {str(e)}"
+
+        # Hit max iterations
+        logger.warning(f"Hit max iterations ({max_iterations})")
+        return "Analysis incomplete. Please try a more specific question."
+
+    def _convert_to_gemini_functions(self, mcp_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert MCP tools to Google Gemini function calling format."""
+        all_declarations = []
+
+        for tool in mcp_tools:
+            # MCP tools use 'input_schema', Gemini uses 'parameters'
+            parameters = tool.get("input_schema", tool.get("parameters", {}))
+
+            gemini_function = {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": parameters
+            }
+            all_declarations.append(gemini_function)
+
+        # Gemini expects a single tools object with all function declarations
+        if all_declarations:
+            return [{"functionDeclarations": all_declarations}]
+
+        return []
 
     def _chat_with_prompt(self, user_question: str, system_prompt: str, progress_callback: Optional[Callable] = None) -> str:
         """Handle chat with prompt-based approach for local models."""
@@ -904,8 +1180,8 @@ You have access to monitoring tools and should provide focused, targeted respons
 4. Report the specific answer to their question - DONE!
 
 **CORE PRINCIPLES:**
-- **MAXIMUM 3 TOOL CALLS** per question
-- **STOP SEARCHING** once you find a relevant metric  
+- **BE THOROUGH BUT FOCUSED**: Use as many tools as needed to answer comprehensively
+- **STOP when you have enough data** to answer the question well
 - **ANSWER ONLY** what they asked for
 - **NO EXPLORATION** beyond their specific question
 - **BE DIRECT** - don't analyze everything about a topic
