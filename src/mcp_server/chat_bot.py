@@ -590,9 +590,15 @@ class GenericChatBot:
                 return f"Error generating response: {str(e)}"
 
     def _chat_with_openai_tools(self, user_question: str, system_prompt: str, progress_callback: Optional[Callable] = None) -> str:
-        """Handle tool calling for OpenAI models using their function calling API."""
-        import requests
-        import json
+        """Handle tool calling for OpenAI models using their official SDK."""
+        try:
+            from openai import OpenAI
+        except ImportError:
+            logger.error("OpenAI SDK not installed. Install with: pip install openai")
+            return "Error: OpenAI SDK not installed. Please install it with: pip install openai"
+
+        # Initialize OpenAI client
+        client = OpenAI(api_key=self.api_key)
 
         # Prepare messages with system prompt
         messages = [
@@ -604,8 +610,7 @@ class GenericChatBot:
         tools = self._convert_to_openai_functions(self._get_mcp_tools())
         openai_tools = [{"type": "function", "function": tool} for tool in tools]
 
-        # Get API URL and model name from config
-        api_url = self.model_config.get("apiUrl", "https://api.openai.com/v1/chat/completions")
+        # Get model name from config
         model_name = self.model_config.get("modelName", "gpt-4o-mini")
 
         # Iterative tool calling loop
@@ -620,44 +625,57 @@ class GenericChatBot:
                 progress_callback(f"🤖 Thinking... (iteration {iteration})")
 
             try:
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}"
+                # Call OpenAI API using SDK
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    tools=openai_tools,
+                    temperature=0
+                )
+
+                choice = response.choices[0]
+                finish_reason = choice.finish_reason
+                message = choice.message
+
+                # Convert message to dict format for conversation history
+                message_dict = {
+                    "role": "assistant",
+                    "content": message.content
                 }
 
-                payload = {
-                    "model": model_name,
-                    "messages": messages,
-                    "tools": openai_tools,
-                    "temperature": 0
-                }
-
-                response = requests.post(api_url, headers=headers, json=payload)
-                response.raise_for_status()
-                result = response.json()
-
-                choice = result['choices'][0]
-                finish_reason = choice.get('finish_reason', '')
-                message = choice['message']
+                # Add tool calls if present
+                if message.tool_calls:
+                    message_dict["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in message.tool_calls
+                    ]
 
                 # Add assistant's response to conversation
-                messages.append(message)
+                messages.append(message_dict)
 
                 # If model wants to use tools, execute them
-                if finish_reason == 'tool_calls' and 'tool_calls' in message:
-                    logger.info(f"OpenAI is using {len(message['tool_calls'])} tool(s)")
+                if finish_reason == 'tool_calls' and message.tool_calls:
+                    logger.info(f"OpenAI is using {len(message.tool_calls)} tool(s)")
 
                     tool_results = []
-                    for tool_call in message['tool_calls']:
-                        tool_name = tool_call['function']['name']
-                        tool_args_str = tool_call['function']['arguments']
-                        tool_id = tool_call['id']
+                    for tool_call in message.tool_calls:
+                        tool_name = tool_call.function.name
+                        tool_args_str = tool_call.function.arguments
+                        tool_id = tool_call.id
 
                         logger.info(f"🔧 Calling tool: {tool_name}")
                         if progress_callback:
                             progress_callback(f"🔧 Using tool: {tool_name}")
 
                         # Parse arguments
+                        import json
                         try:
                             tool_args = json.loads(tool_args_str)
                         except json.JSONDecodeError:
@@ -688,12 +706,27 @@ class GenericChatBot:
 
                 else:
                     # Model is done, return final response
-                    final_response = message.get('content', '')
+                    final_response = message.content or ''
+
+                    # Strip markdown code fences if OpenAI wrapped the response
+                    # OpenAI sometimes wraps responses in ```markdown ... ``` for complex queries
+                    if final_response.startswith('```') and final_response.endswith('```'):
+                        # Remove opening fence (```markdown or ```)
+                        lines = final_response.split('\n')
+                        if lines[0].startswith('```'):
+                            lines = lines[1:]
+                        # Remove closing fence
+                        if lines and lines[-1].strip() == '```':
+                            lines = lines[:-1]
+                        final_response = '\n'.join(lines).strip()
+
                     logger.info(f"OpenAI tool calling completed in {iteration} iterations")
                     return final_response
 
             except Exception as e:
                 logger.error(f"Error in OpenAI tool calling iteration {iteration}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return f"Error during OpenAI tool calling: {str(e)}"
 
         # Hit max iterations
@@ -701,31 +734,33 @@ class GenericChatBot:
         return "Analysis incomplete. Please try a more specific question."
 
     def _chat_with_google_tools(self, user_question: str, system_prompt: str, progress_callback: Optional[Callable] = None) -> str:
-        """Handle tool calling for Google Gemini using their function calling API."""
-        import requests
-        import json
+        """Handle tool calling for Google Gemini using their official SDK."""
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            logger.error("Google Generative AI SDK not installed. Install with: pip install google-generativeai")
+            return "Error: Google Generative AI SDK not installed. Please install it with: pip install google-generativeai"
 
-        # Get API URL and model name from config
-        # Gemini API URL format: https://generativelanguage.googleapis.com/v1beta/models/MODEL_NAME:generateContent
-        api_base = self.model_config.get("apiUrl", "")
+        # Configure API key
+        genai.configure(api_key=self.api_key)
+
+        # Get model name from config
         model_name = self.model_config.get("modelName", "gemini-2.5-flash")
 
-        # Construct the full API URL with API key
-        if "?" in api_base:
-            api_url = f"{api_base}&key={self.api_key}"
-        else:
-            api_url = f"{api_base}?key={self.api_key}"
-
         # Convert MCP tools to Google Gemini format
-        gemini_tools = self._convert_to_gemini_functions(self._get_mcp_tools())
+        gemini_tools = self._convert_to_gemini_tools_sdk_format(self._get_mcp_tools())
 
-        # Build conversation history (Gemini uses a different format)
-        contents = [
-            {
-                "role": "user",
-                "parts": [{"text": f"{system_prompt}\n\n{user_question}"}]
-            }
-        ]
+        # Initialize the model with tools
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            tools=gemini_tools
+        )
+
+        # Start a chat session
+        chat = model.start_chat(enable_automatic_function_calling=False)
+
+        # Send initial message with system prompt
+        initial_message = f"{system_prompt}\n\n{user_question}"
 
         # Iterative tool calling loop
         max_iterations = 30
@@ -739,94 +774,73 @@ class GenericChatBot:
                 progress_callback(f"🤖 Thinking... (iteration {iteration})")
 
             try:
-                headers = {"Content-Type": "application/json"}
-
-                payload = {
-                    "contents": contents,
-                    "tools": gemini_tools,
-                    "generationConfig": {
-                        "temperature": 0
-                    }
-                }
-
-                response = requests.post(api_url, headers=headers, json=payload)
-
-                # Log the error details if request fails
-                if response.status_code != 200:
-                    logger.error(f"Gemini API error: {response.status_code}")
-                    logger.error(f"Response body: {response.text}")
-                    return f"Gemini API error ({response.status_code}): {response.text[:500]}"
-
-                response.raise_for_status()
-                result = response.json()
-
-                # Extract the candidate response
-                if "candidates" not in result or len(result["candidates"]) == 0:
-                    return "Error: No response from Google Gemini"
-
-                candidate = result["candidates"][0]
-                content = candidate.get("content", {})
-                parts = content.get("parts", [])
-
-                # Add model's response to conversation
-                contents.append(content)
+                # Send message to model
+                if iteration == 1:
+                    # First iteration - send the initial question
+                    response = chat.send_message(
+                        initial_message,
+                        generation_config=genai.GenerationConfig(temperature=0)
+                    )
+                else:
+                    # Subsequent iterations - send function responses
+                    response = chat.send_message(
+                        function_responses,
+                        generation_config=genai.GenerationConfig(temperature=0)
+                    )
 
                 # Check if model wants to use tools
-                has_function_calls = any("functionCall" in part for part in parts)
+                if response.candidates[0].content.parts:
+                    parts = response.candidates[0].content.parts
 
-                if has_function_calls:
-                    logger.info("Google Gemini is using tools")
+                    # Check for function calls
+                    has_function_calls = any(hasattr(part, 'function_call') and part.function_call for part in parts)
 
-                    function_responses = []
-                    for part in parts:
-                        if "functionCall" in part:
-                            func_call = part["functionCall"]
-                            tool_name = func_call["name"]
-                            tool_args = func_call.get("args", {})
+                    if has_function_calls:
+                        logger.info("Google Gemini is using tools")
 
-                            logger.info(f"🔧 Calling tool: {tool_name}")
-                            if progress_callback:
-                                progress_callback(f"🔧 Using tool: {tool_name}")
+                        # Build function responses for next iteration
+                        function_responses = []
+                        for part in parts:
+                            if hasattr(part, 'function_call') and part.function_call:
+                                func_call = part.function_call
+                                tool_name = func_call.name
+                                tool_args = dict(func_call.args)
 
-                            # Route to MCP server
-                            tool_result = self._route_tool_call_to_mcp(tool_name, tool_args)
+                                logger.info(f"🔧 Calling tool: {tool_name}")
+                                if progress_callback:
+                                    progress_callback(f"🔧 Using tool: {tool_name}")
 
-                            # Truncate large results
-                            if isinstance(tool_result, str) and len(tool_result) > 3000:
-                                tool_result = tool_result[:3000] + "\n... [Result truncated]"
+                                # Route to MCP server
+                                tool_result = self._route_tool_call_to_mcp(tool_name, tool_args)
 
-                            # Format for Gemini
-                            function_responses.append({
-                                "functionResponse": {
-                                    "name": tool_name,
-                                    "response": {
-                                        "content": tool_result
-                                    }
-                                }
-                            })
+                                # Truncate large results
+                                if isinstance(tool_result, str) and len(tool_result) > 3000:
+                                    tool_result = tool_result[:3000] + "\n... [Result truncated]"
 
-                    # Add function responses to conversation
-                    contents.append({
-                        "role": "function",
-                        "parts": function_responses
-                    })
+                                # Create function response for Gemini SDK
+                                function_responses.append(
+                                    genai.protos.Part(
+                                        function_response=genai.protos.FunctionResponse(
+                                            name=tool_name,
+                                            response={"content": tool_result}
+                                        )
+                                    )
+                                )
 
-                    # Limit conversation history
-                    if len(contents) > 10:
-                        contents = contents[-8:]
+                        # Continue loop to send function responses
+                        continue
 
-                    # Continue loop
-                    continue
+                    else:
+                        # Model is done, extract final text response
+                        final_response = ""
+                        for part in parts:
+                            if hasattr(part, 'text') and part.text:
+                                final_response += part.text
 
+                        logger.info(f"Google Gemini tool calling completed in {iteration} iterations")
+                        return final_response
                 else:
-                    # Model is done, extract final text response
-                    final_response = ""
-                    for part in parts:
-                        if "text" in part:
-                            final_response += part["text"]
-
-                    logger.info(f"Google Gemini tool calling completed in {iteration} iterations")
-                    return final_response
+                    return "Error: No response from Google Gemini"
 
             except Exception as e:
                 logger.error(f"Error in Google Gemini tool calling iteration {iteration}: {e}")
@@ -839,7 +853,7 @@ class GenericChatBot:
         return "Analysis incomplete. Please try a more specific question."
 
     def _convert_to_gemini_functions(self, mcp_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Convert MCP tools to Google Gemini function calling format."""
+        """Convert MCP tools to Google Gemini function calling format (for REST API)."""
         all_declarations = []
 
         for tool in mcp_tools:
@@ -858,6 +872,58 @@ class GenericChatBot:
             return [{"functionDeclarations": all_declarations}]
 
         return []
+
+    def _convert_to_gemini_tools_sdk_format(self, mcp_tools: List[Dict[str, Any]]) -> List:
+        """Convert MCP tools to Google Gemini SDK format."""
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            logger.error("Google Generative AI SDK not installed")
+            return []
+
+        # Convert to SDK tool format
+        sdk_tools = []
+        for tool in mcp_tools:
+            # MCP tools use 'input_schema', Gemini SDK uses 'parameters'
+            parameters = tool.get("input_schema", tool.get("parameters", {}))
+
+            # Create a function declaration for the SDK
+            sdk_tools.append(
+                genai.protos.FunctionDeclaration(
+                    name=tool["name"],
+                    description=tool["description"],
+                    parameters=genai.protos.Schema(
+                        type=genai.protos.Type.OBJECT,
+                        properties={
+                            k: genai.protos.Schema(
+                                type=self._json_type_to_gemini_type(v.get("type", "string")),
+                                description=v.get("description", "")
+                            )
+                            for k, v in parameters.get("properties", {}).items()
+                        },
+                        required=parameters.get("required", [])
+                    )
+                )
+            )
+
+        return sdk_tools
+
+    def _json_type_to_gemini_type(self, json_type: str):
+        """Convert JSON schema type to Gemini proto type."""
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            return None
+
+        type_mapping = {
+            "string": genai.protos.Type.STRING,
+            "number": genai.protos.Type.NUMBER,
+            "integer": genai.protos.Type.INTEGER,
+            "boolean": genai.protos.Type.BOOLEAN,
+            "array": genai.protos.Type.ARRAY,
+            "object": genai.protos.Type.OBJECT
+        }
+        return type_mapping.get(json_type, genai.protos.Type.STRING)
 
     def _chat_with_prompt(self, user_question: str, system_prompt: str, progress_callback: Optional[Callable] = None) -> str:
         """Handle chat with prompt-based approach for local models."""
