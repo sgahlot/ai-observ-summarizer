@@ -161,9 +161,10 @@ class GenericChatBot:
             if "70b" in model_lower:
                 return True
 
-        # Llama 3.2 3B and smaller have poor tool calling - use deterministic parsing
+        # Llama 3.2 3B and smaller have poor tool calling (67% accuracy)
+        # Tested with OpenAI SDK - still produces malformed tool calls
         if "llama-3.2" in model_lower or "llama-3-2" in model_lower:
-            return False
+            return False  # Use deterministic parsing for reliability
 
         # Unknown models - default to deterministic parsing for safety
         logger.warning(f"Unknown model tool calling capability for {self.model_name}, defaulting to deterministic parsing")
@@ -391,25 +392,7 @@ class GenericChatBot:
 
         # For external models, delegate to the appropriate provider
         if self.provider == "anthropic":
-            # Anthropic has its own implementation in PrometheusChatBot
-            # For now, fall back to simple LLM call
-            messages = [{"role": "user", "content": user_question}]
-            prompt = f"{system_prompt}\n\nUser Question: {user_question}"
-
-            try:
-                response = summarize_with_llm(
-                    prompt=prompt,
-                    summarize_model_id=self.model_name,
-                    response_type=ResponseType.GENERAL_CHAT,
-                    api_key=self.api_key,
-                    messages=messages
-                )
-                return response
-            except Exception as e:
-                logger.error(f"Error calling LLM: {e}")
-                return f"Error generating response: {str(e)}"
-
-        # For OpenAI and Google, implement tool calling
+            return self._chat_with_anthropic_tools(user_question, system_prompt, progress_callback)
         elif self.provider in ["openai", "google"]:
             return self._chat_with_external_tools(user_question, system_prompt, progress_callback)
 
@@ -431,10 +414,133 @@ class GenericChatBot:
                 logger.error(f"Error calling LLM: {e}")
                 return f"Error generating response: {str(e)}"
 
+    def _chat_with_anthropic_tools(self, user_question: str, system_prompt: str, progress_callback: Optional[Callable] = None) -> str:
+        """Handle tool calling for Anthropic Claude using their official SDK."""
+        try:
+            import anthropic
+        except ImportError:
+            logger.error("Anthropic SDK not installed. Install with: pip install anthropic")
+            return "Error: Anthropic SDK not installed. Please install it with: pip install anthropic"
+
+        # Initialize Anthropic client
+        client = anthropic.Anthropic(api_key=self.api_key)
+
+        # Get model name from config (strip provider prefix if present)
+        model_name = self.model_name
+        if "/" in model_name:
+            model_name = model_name.split("/", 1)[1]  # e.g., "anthropic/claude-3-5-haiku" -> "claude-3-5-haiku"
+
+        # MCP tools are already in Anthropic format (input_schema)
+        claude_tools = self._get_mcp_tools()
+
+        # Initial message
+        messages = [{"role": "user", "content": user_question}]
+
+        # Iterative tool calling loop
+        max_iterations = 30
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+            logger.info(f"🤖 Anthropic tool calling iteration {iteration}")
+
+            if progress_callback:
+                progress_callback(f"🤖 Thinking... (iteration {iteration})")
+
+            try:
+                # Call Anthropic API
+                response = client.messages.create(
+                    model=model_name,
+                    max_tokens=4000,
+                    system=system_prompt,
+                    messages=messages,
+                    tools=claude_tools
+                )
+
+                # Add assistant's response to conversation
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content
+                })
+
+                # If Claude wants to use tools, execute them
+                if response.stop_reason == "tool_use":
+                    logger.info("Anthropic is using tools")
+
+                    tool_results = []
+                    for content_block in response.content:
+                        if content_block.type == "tool_use":
+                            tool_name = content_block.name
+                            tool_args = content_block.input
+                            tool_id = content_block.id
+
+                            logger.info(f"🔧 Calling tool: {tool_name}")
+                            if progress_callback:
+                                progress_callback(f"🔧 Using tool: {tool_name}")
+
+                            # Route to MCP server
+                            tool_result = self._route_tool_call_to_mcp(tool_name, tool_args)
+
+                            # Truncate large results
+                            if isinstance(tool_result, str) and len(tool_result) > 3000:
+                                tool_result = tool_result[:3000] + "\n... [Result truncated]"
+
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": tool_result
+                            })
+
+                    # Add tool results to conversation
+                    messages.append({
+                        "role": "user",
+                        "content": tool_results
+                    })
+
+                    # Limit conversation history
+                    if len(messages) > 8:
+                        messages = messages[-8:]
+
+                    # Continue loop
+                    continue
+
+                else:
+                    # Model is done, extract final text response
+                    final_response = ""
+                    for content_block in response.content:
+                        if content_block.type == "text":
+                            final_response += content_block.text
+
+                    logger.info(f"Anthropic tool calling completed in {iteration} iterations")
+                    return final_response
+
+            except Exception as e:
+                logger.error(f"Error in Anthropic tool calling iteration {iteration}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return f"Error during Anthropic tool calling: {str(e)}"
+
+        # Hit max iterations
+        logger.warning(f"Hit max iterations ({max_iterations})")
+        return "Analysis incomplete. Please try a more specific question."
+
     def _chat_with_local_tools(self, user_question: str, system_prompt: str, progress_callback: Optional[Callable] = None) -> str:
-        """Handle tool calling for local LlamaStack models using OpenAI-compatible API."""
-        import requests
-        # Config variables are imported at the top of the file
+        """Handle tool calling for local LlamaStack models using OpenAI SDK with base_url."""
+        try:
+            from openai import OpenAI
+        except ImportError:
+            logger.error("OpenAI SDK not installed. Install with: pip install openai")
+            return "Error: OpenAI SDK not installed. Please install it with: pip install openai"
+
+        # Use model_name directly (e.g., "meta-llama/Llama-3.2-3B-Instruct")
+        # The OpenAI SDK expects the simple format from MODEL_CONFIG
+        model_id = self.model_name
+
+        # Initialize OpenAI client pointing to LlamaStack
+        client = OpenAI(
+            base_url=f"{LLAMA_STACK_CHAT_URL}/chat/completions".replace("/chat/completions", ""),
+            api_key=LLM_API_TOKEN or "dummy"  # LlamaStack may not require a real API key
+        )
 
         # Prepare messages with system prompt
         messages = [
@@ -446,73 +552,62 @@ class GenericChatBot:
         tools = self._convert_to_openai_functions(self._get_mcp_tools())
         openai_tools = [{"type": "function", "function": tool} for tool in tools]
 
-        # Iterative tool calling loop (like Anthropic's implementation)
-        max_iterations = 30  # Match Anthropic's limit for comprehensive analysis
+        # Iterative tool calling loop
+        max_iterations = 30
         iteration = 0
 
         while iteration < max_iterations:
             iteration += 1
-            logger.info(f"🤖 Tool calling iteration {iteration}")
+            logger.info(f"🤖 LlamaStack tool calling iteration {iteration}")
 
             if progress_callback:
                 progress_callback(f"🤖 Thinking... (iteration {iteration})")
 
             try:
-                # Call LlamaStack chat completions endpoint with tools
-                headers = {"Content-Type": "application/json"}
-                if LLM_API_TOKEN:
-                    headers["Authorization"] = f"Bearer {LLM_API_TOKEN}"
-
-                # For chat completions, use the full MODEL_CONFIG key (e.g., "meta-llama/Llama-3.2-3B-Instruct")
-                # For local models, the serviceName format is "llama-3-2-3b-instruct/meta-llama/Llama-3.2-3B-Instruct"
-                # Construct it from serviceName and model_name
-                service_name = self.model_config.get("serviceName", "")
-                if service_name and "/" not in service_name:
-                    # If serviceName doesn't have the full format, construct it
-                    model_id = f"{service_name}/{self.model_name}"
-                elif service_name:
-                    # Already in full format
-                    model_id = service_name
-                else:
-                    # Fall back to model_name
-                    model_id = self.model_name
-
-                payload = {
-                    "model": model_id,
-                    "messages": messages,
-                    "tools": openai_tools,
-                    "temperature": 0
-                }
-
-                # Use the dedicated chat completions URL
-                chat_url = f"{LLAMA_STACK_CHAT_URL}/chat/completions"
-
-                response = requests.post(
-                    chat_url,
-                    headers=headers,
-                    json=payload,
-                    verify=VERIFY_SSL
+                # Call LlamaStack via OpenAI SDK
+                response = client.chat.completions.create(
+                    model=model_id,
+                    messages=messages,
+                    tools=openai_tools,
+                    temperature=0
                 )
 
-                response.raise_for_status()
-                result = response.json()
+                choice = response.choices[0]
+                finish_reason = choice.finish_reason
+                message = choice.message
 
-                choice = result['choices'][0]
-                finish_reason = choice.get('finish_reason', '')
-                message = choice['message']
+                # Convert message to dict format for conversation history
+                message_dict = {
+                    "role": "assistant",
+                    "content": message.content
+                }
+
+                # Add tool calls if present
+                if message.tool_calls:
+                    message_dict["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in message.tool_calls
+                    ]
 
                 # Add assistant's response to conversation
-                messages.append(message)
+                messages.append(message_dict)
 
                 # If model wants to use tools, execute them
-                if finish_reason == 'tool_calls' and 'tool_calls' in message:
-                    logger.info(f"Model is using {len(message['tool_calls'])} tool(s)")
+                if finish_reason == 'tool_calls' and message.tool_calls:
+                    logger.info(f"LlamaStack model is using {len(message.tool_calls)} tool(s)")
 
                     tool_results = []
-                    for tool_call in message['tool_calls']:
-                        tool_name = tool_call['function']['name']
-                        tool_args_str = tool_call['function']['arguments']
-                        tool_id = tool_call['id']
+                    for tool_call in message.tool_calls:
+                        tool_name = tool_call.function.name
+                        tool_args_str = tool_call.function.arguments
+                        tool_id = tool_call.id
 
                         logger.info(f"🔧 Calling tool: {tool_name}")
                         if progress_callback:
@@ -551,13 +646,15 @@ class GenericChatBot:
 
                 else:
                     # Model is done, return final response
-                    final_response = message.get('content', '')
-                    logger.info(f"Tool calling completed in {iteration} iterations")
+                    final_response = message.content or ''
+                    logger.info(f"LlamaStack tool calling completed in {iteration} iterations")
                     return final_response
 
             except Exception as e:
-                logger.error(f"Error in tool calling iteration {iteration}: {e}")
-                return f"Error during tool calling: {str(e)}"
+                logger.error(f"Error in LlamaStack tool calling iteration {iteration}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return f"Error during LlamaStack tool calling: {str(e)}"
 
         # Hit max iterations
         logger.warning(f"Hit max iterations ({max_iterations})")
