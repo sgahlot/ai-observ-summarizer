@@ -14,7 +14,6 @@ from typing import Optional, List, Dict, Any, Callable
 
 from mcp_server.observability_mcp import ObservabilityMCPServer
 from common.pylogger import get_python_logger
-from core.config import KORREL8R_ENABLED
 from .tool_executor import ToolExecutor
 
 logger = get_python_logger()
@@ -27,15 +26,18 @@ class BaseChatBot(ABC):
         self,
         model_name: str,
         api_key: Optional[str] = None,
-        tool_executor: Optional[ToolExecutor] = None
+        tool_executor: ToolExecutor = None
     ):
         """Initialize base chat bot.
 
         Args:
             model_name: Model identifier (e.g., "anthropic/claude-3-5-sonnet-20241022")
             api_key: API key for external models (None for local models)
-            tool_executor: Tool executor for calling MCP tools (injected dependency)
+            tool_executor: Tool executor for calling MCP tools (required, injected dependency)
         """
+        if tool_executor is None:
+            raise ValueError("tool_executor is required - must be injected via dependency injection")
+
         self.model_name = model_name
         # Let each subclass decide how to get its API key
         self.api_key = api_key if api_key is not None else self._get_api_key()
@@ -77,151 +79,19 @@ class BaseChatBot(ABC):
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
         """Get available MCP tools dynamically via tool executor.
 
-        If tool_executor is provided, fetches tools dynamically from MCP server.
-        Otherwise, returns minimal fallback set for backward compatibility.
+        Fetches tools directly from the MCP server via the injected tool executor.
 
         Returns:
             List of tool definitions with name, description, and input_schema
         """
-        if self.tool_executor is not None:
-            # Get tools dynamically from executor
-            try:
-                tools = asyncio.run(self.tool_executor.get_tools())
-                tool_names = [tool.get('name', 'unknown') for tool in tools]
-                logger.info(f"🧰 Fetched {len(tools)} tools from tool executor: {', '.join(tool_names)}")
-                return tools
-            except Exception as e:
-                logger.error(f"Error fetching tools from executor: {e}, using fallback")
-                return self._get_fallback_tools()
-        else:
-            # Use fallback tools for backward compatibility
-            logger.warning("No tool executor provided, using fallback tools")
-            return self._get_fallback_tools()
-
-    def _get_fallback_tools(self) -> List[Dict[str, Any]]:
-        """Get fallback tools when tool executor is not available.
-
-        This is for backward compatibility and includes a minimal set of essential tools.
-
-        Returns:
-            List of minimal tool definitions
-        """
-        tools = [
-            {
-                "name": "search_metrics",
-                "description": "Search for Prometheus metrics by pattern (regex supported). Essential for discovering relevant metrics.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Search pattern or regex for metric names (e.g., 'pod', 'gpu', 'memory')"
-                        }
-                    },
-                    "required": ["pattern"]
-                }
-            },
-            {
-                "name": "get_metric_metadata",
-                "description": "Get detailed metadata about a specific metric including type, help text, available labels, and query examples.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "metric_name": {
-                            "type": "string",
-                            "description": "Exact name of the metric to get metadata for"
-                        }
-                    },
-                    "required": ["metric_name"]
-                }
-            },
-            {
-                "name": "execute_promql",
-                "description": "Execute a PromQL query against Prometheus/Thanos and get results. Use this to get actual metric values.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Valid PromQL query to execute (use metrics discovered through search_metrics or find_best_metric tools)"
-                        },
-                        "time_range": {
-                            "type": "string",
-                            "description": "Optional time range (e.g., '5m', '1h', '1d')",
-                            "default": "now"
-                        }
-                    },
-                    "required": ["query"]
-                }
-            },
-            {
-                "name": "get_label_values",
-                "description": "Get all possible values for a specific label across metrics.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "label_name": {
-                            "type": "string",
-                            "description": "Name of the label to get values for (e.g., 'namespace', 'phase', 'job')"
-                        }
-                    },
-                    "required": ["label_name"]
-                }
-            },
-            {
-                "name": "suggest_queries",
-                "description": "Get PromQL query suggestions based on intent or description.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "intent": {
-                            "type": "string",
-                            "description": "What you want to query about the infrastructure (describe in natural language)"
-                        }
-                    },
-                    "required": ["intent"]
-                }
-            },
-            {
-                "name": "explain_results",
-                "description": "Get human-readable explanation of query results and metrics data.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "data": {
-                            "type": "string",
-                            "description": "Query results or metrics data to explain"
-                        }
-                    },
-                    "required": ["data"]
-                }
-            }
-        ]
-
-        # Conditionally expose Korrel8r tools
-        if KORREL8R_ENABLED:
-            tools.append({
-                "name": "korrel8r_get_correlated",
-                "description": "Get correlated objects by first listing goal queries then fetching objects for each via Korrel8r.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "goals": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Korrel8r goal classes to correlate. Examples: ['trace:span','log:application','log:infrastructure','metric:metric']"
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": 'Starting Korrel8r domain query (same format as korrel8r_query_objects). Examples: alert:alert:{"alertname":"PodDisruptionBudgetAtLimit"}, k8s:Pod:{"namespace":"llm-serving"}, loki:log:{"kubernetes.namespace_name":"llm-serving","kubernetes.pod_name":"p-abc"}, trace:span:{".k8s.namespace.name":"llm-serving"}'
-                        }
-                    },
-                    "required": ["goals", "query"]
-                }
-            })
-            logger.info("Korrel8r tool added to base MCP tools")
-
-        return tools
+        try:
+            tools = asyncio.run(self.tool_executor.get_tools())
+            tool_names = [tool.get('name', 'unknown') for tool in tools]
+            logger.info(f"🧰 Fetched {len(tools)} tools from tool executor: {', '.join(tool_names)}")
+            return tools
+        except Exception as e:
+            logger.error(f"Error fetching tools from executor: {e}")
+            raise
 
     def _normalize_korrel8r_query(self, q: str) -> str:
         """Normalize common Korrel8r query issues for AI-provided inputs.
@@ -429,6 +299,20 @@ You have access to monitoring tools and should provide focused, targeted respons
 - get_label_values: Get available label values
 - suggest_queries: Get PromQL suggestions based on user intent
 - explain_results: Get human-readable explanation of query results
+- korrel8r_query_objects: Query for specific observability objects (alerts, logs, traces, metrics) - available if Korrel8r is configured
+- korrel8r_get_correlated: Get correlated observability data across domains (find logs/traces/metrics related to alerts) - available if Korrel8r is configured
+
+**🚨 CRITICAL: Tool Selection for Alert Queries:**
+When the user asks about alerts or firing alerts:
+1. **PRIMARY METHOD**: Use `execute_promql` with the `ALERTS` metric
+   - Query firing alerts: `ALERTS{{alertstate="firing"}}`
+   - Query specific alerts: `ALERTS{{alertstate="firing", alertname="HighCPU"}}`
+   - Query alerts by namespace: `ALERTS{{alertstate="firing", namespace="llm-serving"}}`
+2. **CORRELATION ONLY**: Use Korrel8r tools ONLY when the user explicitly asks for:
+   - "What logs/traces are related to this alert?"
+   - "Find correlated data for alert X"
+   - "Show me everything related to this alert"
+3. **NEVER** use Korrel8r for basic alert queries like "Any alerts firing?" or "Show me alerts"
 
 **🧠 Your Intelligence Style:**
 

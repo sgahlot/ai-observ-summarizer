@@ -22,7 +22,7 @@ logger = get_python_logger()
 def create_chatbot(
     model_name: str,
     api_key: Optional[str] = None,
-    tool_executor: Optional[ToolExecutor] = None
+    tool_executor: ToolExecutor = None
 ) -> BaseChatBot:
     """
     Factory function to create the appropriate chatbot based on model capabilities.
@@ -30,13 +30,15 @@ def create_chatbot(
     Args:
         model_name: Name of the model to use
         api_key: Optional API key for external models
-        tool_executor: Optional tool executor for calling MCP tools (injected dependency)
+        tool_executor: Tool executor for calling MCP tools (required, injected dependency)
 
     Returns:
         Instance of the appropriate chatbot class
 
     Examples:
-        >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...")
+        >>> from mcp_server.chatbots.mcp_tool_executor import MCPToolExecutor
+        >>> executor = MCPToolExecutor(server)
+        >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...", tool_executor=executor)
         >>> response = chatbot.chat("What's the CPU usage?")
 
         >>> chatbot = create_chatbot("meta-llama/Llama-3.1-8B-Instruct")
