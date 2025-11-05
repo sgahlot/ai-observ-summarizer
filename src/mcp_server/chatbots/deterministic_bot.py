@@ -7,16 +7,25 @@ that don't have reliable tool calling capabilities (<75% accuracy).
 
 import json
 import re
-import logging
 from typing import Optional, Callable, List, Dict, Any
 
 from .base import BaseChatBot
+from .tool_executor import ToolExecutor
+from common.pylogger import get_python_logger
 
-logger = logging.getLogger(__name__)
+logger = get_python_logger()
 
 
 class DeterministicChatBot(BaseChatBot):
     """Deterministic parsing implementation for small models without reliable tool calling."""
+
+    def __init__(
+        self,
+        model_name: str,
+        api_key: Optional[str] = None,
+        tool_executor: Optional[ToolExecutor] = None
+    ):
+        super().__init__(model_name, api_key, tool_executor)
 
     def _get_api_key(self) -> Optional[str]:
         """Local models don't require API keys."""

@@ -1,11 +1,17 @@
 """FastAPI application setup for Observability MCP Server with report endpoints."""
 
+import logging
+from typing import Optional
+from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 
 from mcp_server.observability_mcp import ObservabilityMCPServer
 from mcp_server.settings import settings
+
+# Use stdlib logger - structlog is initialized in main.py
+logger = logging.getLogger(__name__)
 
 # Import report-related modules with error handling for clearer diagnostics
 try:
@@ -28,6 +34,23 @@ except ImportError as e:
     ) from e
 
 server = ObservabilityMCPServer()
+
+
+# === CHAT ENDPOINT MODELS ===
+
+class ChatRequest(BaseModel):
+    """Request model for chat endpoint"""
+    model_name: str
+    api_key: Optional[str] = None
+    message: str
+    namespace: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    """Response model for chat endpoint"""
+    response: str
+    model: str
+
 
 # Select transport protocol
 if settings.MCP_TRANSPORT_PROTOCOL == "sse":
@@ -60,7 +83,8 @@ async def health_check():
             "service": "observability-mcp-server",
             "transport_protocol": settings.MCP_TRANSPORT_PROTOCOL,
             "mcp_endpoint": "/mcp",
-            "report_endpoints": ["POST /generate_report", "GET /download_report/{report_id}"]
+            "report_endpoints": ["POST /generate_report", "GET /download_report/{report_id}"],
+            "chat_endpoint": "POST /v1/chat"
         },
     )
 
@@ -128,6 +152,63 @@ def generate_report(request: ReportRequest):
     except Exception as e:
         # Handle any other exceptions
         raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
+
+
+# === CHAT ENDPOINT ===
+
+@app.post("/v1/chat", response_model=ChatResponse)
+async def chat_with_llm(request: ChatRequest):
+    """
+    Chat endpoint that handles chatbot initialization and execution.
+
+    This endpoint:
+    1. Creates appropriate chatbot based on model_name
+    2. Initializes it with MCPToolExecutor (direct server access)
+    3. Executes the chat query
+    4. Returns the response
+
+    The tool executor pattern ensures clean architecture and testability.
+    """
+    try:
+        from mcp_server.chatbots import create_chatbot
+        from mcp_server.chatbots.mcp_tool_executor import MCPToolExecutor
+
+        print(f"[DEBUG] Chat request received for model: {request.model_name}")
+        logger.info(f"Chat request received for model: {request.model_name}")
+
+        # Create tool executor with direct server access
+        tool_executor = MCPToolExecutor(server)
+
+        # Create chatbot with injected executor
+        chatbot = create_chatbot(
+            model_name=request.model_name,
+            api_key=request.api_key,
+            tool_executor=tool_executor
+        )
+
+        print(f"[DEBUG] Initialized {request.model_name} chatbot")
+        logger.info(f"Initialized {request.model_name} chatbot for chat request")
+
+        # Execute chat (LLM calls happen here in MCP Server)
+        print(f"[DEBUG] About to call chatbot.chat() with message: {request.message[:100]}")
+        logger.info(f"Calling chatbot.chat() with message: {request.message[:100]}")
+
+        response = chatbot.chat(
+            user_question=request.message,
+            namespace=request.namespace
+        )
+
+        print(f"[DEBUG] Received response from chatbot: {response[:100]}")
+        logger.info(f"Chat completed, response length: {len(response)}")
+
+        return ChatResponse(
+            response=response,
+            model=request.model_name
+        )
+
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # === CRITICAL: MCP app must be mounted LAST ===

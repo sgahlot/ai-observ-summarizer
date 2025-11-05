@@ -6,12 +6,13 @@ This module provides OpenAI GPT-specific implementation using the official SDK.
 
 import os
 import json
-import logging
 from typing import Optional, Callable, List, Dict, Any
 
 from .base import BaseChatBot
+from .tool_executor import ToolExecutor
+from common.pylogger import get_python_logger
 
-logger = logging.getLogger(__name__)
+logger = get_python_logger()
 
 
 class OpenAIChatBot(BaseChatBot):
@@ -25,8 +26,13 @@ class OpenAIChatBot(BaseChatBot):
         """GPT-4 supports 128K token context - 10K chars is reasonable."""
         return 10000
 
-    def __init__(self, model_name: str, api_key: Optional[str] = None):
-        super().__init__(model_name, api_key)
+    def __init__(
+        self,
+        model_name: str,
+        api_key: Optional[str] = None,
+        tool_executor: Optional[ToolExecutor] = None
+    ):
+        super().__init__(model_name, api_key, tool_executor)
 
         # Import OpenAI SDK
         try:
@@ -146,7 +152,7 @@ class OpenAIChatBot(BaseChatBot):
 
                 # If model wants to use tools, execute them
                 if finish_reason == 'tool_calls' and message.tool_calls:
-                    logger.info(f"OpenAI is using {len(message.tool_calls)} tool(s)")
+                    logger.info(f"🤖 OpenAI requesting {len(message.tool_calls)} tool(s)")
 
                     tool_results = []
                     for tool_call in message.tool_calls:
@@ -154,17 +160,16 @@ class OpenAIChatBot(BaseChatBot):
                         tool_args_str = tool_call.function.arguments
                         tool_id = tool_call.id
 
-                        logger.info(f"🔧 Calling tool: {tool_name}")
-                        if progress_callback:
-                            progress_callback(f"🔧 Using tool: {tool_name}")
-
                         # Parse arguments
                         try:
                             tool_args = json.loads(tool_args_str)
                         except json.JSONDecodeError:
                             tool_args = {}
 
-                        # Get tool result with automatic truncation
+                        if progress_callback:
+                            progress_callback(f"🔧 Using tool: {tool_name}")
+
+                        # Get tool result with automatic truncation (logging handled in base class)
                         tool_result = self._get_tool_result(tool_name, tool_args)
 
                         tool_results.append({

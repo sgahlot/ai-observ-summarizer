@@ -5,26 +5,32 @@ This module provides a factory function to create the appropriate chatbot
 based on model capabilities and provider.
 """
 
-import logging
 from typing import Optional
 
 from .base import BaseChatBot
+from .tool_executor import ToolExecutor
 from .anthropic_bot import AnthropicChatBot
 from .openai_bot import OpenAIChatBot
 from .google_bot import GoogleChatBot
 from .llama_bot import LlamaChatBot
 from .deterministic_bot import DeterministicChatBot
+from common.pylogger import get_python_logger
 
-logger = logging.getLogger(__name__)
+logger = get_python_logger()
 
 
-def create_chatbot(model_name: str, api_key: Optional[str] = None) -> BaseChatBot:
+def create_chatbot(
+    model_name: str,
+    api_key: Optional[str] = None,
+    tool_executor: Optional[ToolExecutor] = None
+) -> BaseChatBot:
     """
     Factory function to create the appropriate chatbot based on model capabilities.
 
     Args:
         model_name: Name of the model to use
         api_key: Optional API key for external models
+        tool_executor: Optional tool executor for calling MCP tools (injected dependency)
 
     Returns:
         Instance of the appropriate chatbot class
@@ -59,16 +65,16 @@ def create_chatbot(model_name: str, api_key: Optional[str] = None) -> BaseChatBo
     if is_external:
         if provider == "anthropic":
             logger.info(f"Creating AnthropicChatBot for {model_name}")
-            return AnthropicChatBot(model_name, api_key)
+            return AnthropicChatBot(model_name, api_key, tool_executor)
         elif provider == "openai":
             logger.info(f"Creating OpenAIChatBot for {model_name}")
-            return OpenAIChatBot(model_name, api_key)
+            return OpenAIChatBot(model_name, api_key, tool_executor)
         elif provider == "google":
             logger.info(f"Creating GoogleChatBot for {model_name}")
-            return GoogleChatBot(model_name, api_key)
+            return GoogleChatBot(model_name, api_key, tool_executor)
         else:
             logger.warning(f"Unknown external provider {provider}, using OpenAI as fallback")
-            return OpenAIChatBot(model_name, api_key)
+            return OpenAIChatBot(model_name, api_key, tool_executor)
     else:
         # Local models - check if they support reliable tool calling
         model_lower = model_name.lower()
@@ -77,19 +83,19 @@ def create_chatbot(model_name: str, api_key: Optional[str] = None) -> BaseChatBo
         if "llama-3.1" in model_lower or "llama-3-1" in model_lower:
             if any(size in model_lower for size in ["8b", "70b", "405b"]):
                 logger.info(f"Creating LlamaChatBot for {model_name} (tool calling capable)")
-                return LlamaChatBot(model_name, api_key)
+                return LlamaChatBot(model_name, api_key, tool_executor)
 
         # Llama 3.3 (70B) has good tool calling (~85% accuracy)
         if "llama-3.3" in model_lower or "llama-3-3" in model_lower:
             if "70b" in model_lower:
                 logger.info(f"Creating LlamaChatBot for {model_name} (tool calling capable)")
-                return LlamaChatBot(model_name, api_key)
+                return LlamaChatBot(model_name, api_key, tool_executor)
 
         # Llama 3.2 and smaller - use deterministic parsing (67% accuracy is too low)
         if "llama-3.2" in model_lower or "llama-3-2" in model_lower:
             logger.info(f"Creating DeterministicChatBot for {model_name} (67% tool calling accuracy - using deterministic parsing)")
-            return DeterministicChatBot(model_name, api_key)
+            return DeterministicChatBot(model_name, api_key, tool_executor)
 
         # Unknown local models - use deterministic parsing for safety
         logger.info(f"Creating DeterministicChatBot for {model_name} (unknown capability - using deterministic parsing)")
-        return DeterministicChatBot(model_name, api_key)
+        return DeterministicChatBot(model_name, api_key, tool_executor)

@@ -7,14 +7,15 @@ All provider-specific implementations inherit from BaseChatBot.
 
 import os
 import re
-import logging
 import importlib.util
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Callable
 
 from mcp_server.observability_mcp import ObservabilityMCPServer
 from common.pylogger import get_python_logger
 from core.config import KORREL8R_ENABLED
+from .tool_executor import ToolExecutor
 
 logger = get_python_logger()
 
@@ -22,13 +23,27 @@ logger = get_python_logger()
 class BaseChatBot(ABC):
     """Base class for all chat bot implementations with common functionality."""
 
-    def __init__(self, model_name: str, api_key: Optional[str] = None):
-        """Initialize base chat bot."""
+    def __init__(
+        self,
+        model_name: str,
+        api_key: Optional[str] = None,
+        tool_executor: Optional[ToolExecutor] = None
+    ):
+        """Initialize base chat bot.
+
+        Args:
+            model_name: Model identifier (e.g., "anthropic/claude-3-5-sonnet-20241022")
+            api_key: API key for external models (None for local models)
+            tool_executor: Tool executor for calling MCP tools (injected dependency)
+        """
         self.model_name = model_name
         # Let each subclass decide how to get its API key
         self.api_key = api_key if api_key is not None else self._get_api_key()
 
-        # Initialize MCP server (our tools)
+        # Store injected tool executor
+        self.tool_executor = tool_executor
+
+        # Initialize MCP server (for backward compatibility - may be removed later)
         self.mcp_server = ObservabilityMCPServer()
 
         logger.info(f"{self.__class__.__name__} initialized with model: {self.model_name}")
@@ -60,7 +75,37 @@ class BaseChatBot(ABC):
         return self.model_name
 
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
-        """Get the base MCP tools that we want to expose."""
+        """Get available MCP tools dynamically via tool executor.
+
+        If tool_executor is provided, fetches tools dynamically from MCP server.
+        Otherwise, returns minimal fallback set for backward compatibility.
+
+        Returns:
+            List of tool definitions with name, description, and input_schema
+        """
+        if self.tool_executor is not None:
+            # Get tools dynamically from executor
+            try:
+                tools = asyncio.run(self.tool_executor.get_tools())
+                tool_names = [tool.get('name', 'unknown') for tool in tools]
+                logger.info(f"🧰 Fetched {len(tools)} tools from tool executor: {', '.join(tool_names)}")
+                return tools
+            except Exception as e:
+                logger.error(f"Error fetching tools from executor: {e}, using fallback")
+                return self._get_fallback_tools()
+        else:
+            # Use fallback tools for backward compatibility
+            logger.warning("No tool executor provided, using fallback tools")
+            return self._get_fallback_tools()
+
+    def _get_fallback_tools(self) -> List[Dict[str, Any]]:
+        """Get fallback tools when tool executor is not available.
+
+        This is for backward compatibility and includes a minimal set of essential tools.
+
+        Returns:
+            List of minimal tool definitions
+        """
         tools = [
             {
                 "name": "search_metrics",
@@ -228,7 +273,17 @@ class BaseChatBot(ABC):
             return q
 
     def _route_tool_call_to_mcp(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Route tool call to our MCP server with optional korrel8r query normalization."""
+        """Route tool call via injected tool executor.
+
+        Args:
+            tool_name: Name of the tool to call
+            arguments: Tool arguments
+
+        Returns:
+            Tool execution result as string
+        """
+        logger.info(f"🔧 Routing tool call: {tool_name} with arguments: {arguments}")
+
         # Normalize Korrel8r query inputs when needed before calling MCP
         if tool_name == "korrel8r_get_correlated":
             try:
@@ -243,6 +298,25 @@ class BaseChatBot(ABC):
                 # Best-effort normalization; continue with original arguments on error
                 pass
 
+        # Use tool executor if available
+        if self.tool_executor is not None:
+            try:
+                result = self.tool_executor.execute_tool(tool_name, arguments)
+                logger.info(f"✅ Tool {tool_name} returned result (length: {len(str(result))}): {str(result)[:200]}...")
+                return result
+            except Exception as e:
+                logger.error(f"❌ Error calling tool {tool_name} via executor: {e}")
+                return f"Error executing {tool_name}: {str(e)}"
+
+        # Fallback to old method for backward compatibility (will be removed later)
+        logger.warning(f"No tool executor configured, using legacy MCP client import for {tool_name}")
+        return self._legacy_route_tool_call(tool_name, arguments)
+
+    def _legacy_route_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Legacy method for routing tool calls (backward compatibility only).
+
+        This method will be deprecated once all code uses tool_executor.
+        """
         try:
             # Import MCP client helper to call our tools
             import sys
@@ -295,13 +369,22 @@ class BaseChatBot(ABC):
         Returns:
             Tool result, truncated if it exceeds max length
         """
+        # Log tool request with arguments
+        logger.info(f"🔧 Requesting tool: {tool_name} with args: {tool_args}")
+
         # Route to MCP server
         tool_result = self._route_tool_call_to_mcp(tool_name, tool_args)
+
+        # Log result preview
+        logger.info(f"📬 Returning result for tool {tool_name}: {str(tool_result)[:200]}...")
 
         # Truncate large results to prevent context overflow
         max_length = self._get_max_tool_result_length()
         if isinstance(tool_result, str) and len(tool_result) > max_length:
+            logger.info(f"✂️ Truncating result from {len(tool_result)} to {max_length} chars")
             tool_result = tool_result[:max_length] + "\n... [Result truncated due to size]"
+        else:
+            logger.info(f"📦 Tool result size: {len(str(tool_result))} chars (within limit of {max_length})")
 
         return tool_result
 

@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import io
 import time
 import logging
+from typing import Optional, Callable
 from mcp_client_helper import (
     mcp_client,
     get_namespaces_mcp,
@@ -64,33 +65,45 @@ try:
 except Exception:
     pass
 
-# Multi-model chatbot support - Direct import with robust fallbacks
-try:
-    # Try direct import first (works in container with proper package structure)
-    from mcp_server.chatbots import create_chatbot
-except ImportError:
-    # Fallback: Add both parent paths to ensure relative imports work
-    src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    mcp_server_path = os.path.join(src_path, 'mcp_server')
+# Multi-model chatbot support - Call MCP server's /v1/chat endpoint
+def call_chat_endpoint(model_name: str, api_key: str, message: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    """Call MCP server's chat endpoint instead of creating chatbot locally.
 
-    if src_path not in sys.path:
-        sys.path.insert(0, src_path)
-    if mcp_server_path not in sys.path:
-        sys.path.insert(0, mcp_server_path)
+    Args:
+        model_name: Model identifier (e.g., "anthropic/claude-3-5-sonnet-20241022")
+        api_key: API key for the model
+        message: User's question/message
+        namespace: Optional namespace filter
+        progress_callback: Optional callback for progress updates
 
+    Returns:
+        LLM response as string
+    """
     try:
-        from mcp_server.chatbots import create_chatbot
-    except ImportError:
-        # If package imports fail, create dummy factory function
-        def create_chatbot(model_name: str, api_key=None):
-            class DummyChatBot:
-                def __init__(self, *args, **kwargs):
-                    self.error = "Chat bot package not available"
-                def chat(self, *args, **kwargs):
-                    return "❌ Chat bot package not available. Please check deployment."
-                def test_mcp_tools(self):
-                    return False
-            return DummyChatBot()
+        # Note: progress_callback won't work with HTTP POST (no streaming)
+        # Progress updates would require SSE or WebSocket implementation
+
+        response = requests.post(
+            f"{MCP_SERVER_URL}/v1/chat",
+            json={
+                "model_name": model_name,
+                "api_key": api_key,
+                "message": message,
+                "namespace": namespace
+            },
+            timeout=180  # 3 minute timeout for LLM responses
+        )
+        response.raise_for_status()
+        return response.json()["response"]
+    except requests.exceptions.Timeout:
+        logger.error("Chat endpoint request timed out")
+        return "❌ Request timed out. The query may be too complex. Please try a simpler question."
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error calling MCP chat endpoint: {e}")
+        return f"❌ Error communicating with chat service: {str(e)}"
+    except Exception as e:
+        logger.error(f"Unexpected error in chat endpoint call: {e}")
+        return f"❌ Unexpected error: {str(e)}"
 
 # --- Config ---
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8085")
@@ -1331,18 +1344,13 @@ elif page == "Chat with Prometheus":
     </div>
     """, unsafe_allow_html=True)
     
-    # Initialize AI chat bot using user-entered API key or environment variable
-    ai_chatbot = None
+    # Check if AI chat is available (model and API key configured)
+    ai_chat_available = False
     user_api_key = api_key if api_key else None
 
     if user_api_key or multi_model_name != "No models available":
-        try:
-            logger.info(f"🤖 Creating chatbot for model: {multi_model_name}")
-            ai_chatbot = create_chatbot(model_name=multi_model_name, api_key=user_api_key)
-            logger.info(f"✅ Chatbot created: {ai_chatbot.__class__.__name__} for model {multi_model_name}")
-        except Exception as e:
-            logger.error(f"❌ Failed to create chatbot for {multi_model_name}: {e}")
-            st.error(f"Failed to initialize AI chat bot: {e}")
+        ai_chat_available = True
+        logger.info(f"🤖 AI chat configured for model: {multi_model_name}")
     
     # Simple cluster-wide analysis
     st.markdown("🌐 **Cluster-wide analysis** - Ask about any metrics and traces across your infrastructure")
@@ -1351,12 +1359,9 @@ elif page == "Chat with Prometheus":
     )
     
     # AI integration status
-    if ai_chatbot:
+    if ai_chat_available:
         st.success("✅ AI is connected and ready!")
-        if ai_chatbot.test_mcp_tools():
-            st.info("🔗 MCP tools are working properly")
-        else:
-            st.warning("⚠️ MCP tools connection issue")
+        st.info("🔗 Using MCP server chat endpoint for AI responses")
     else:
         if current_model_requires_api_key and not user_api_key:
             st.error("❌ Please enter your API key in the sidebar.")
@@ -1369,7 +1374,7 @@ elif page == "Chat with Prometheus":
         st.session_state.claude_messages = []  # List to store chat messages
 
     # Show suggested questions if no conversation started (like Claude Desktop)
-    if not st.session_state.claude_messages and ai_chatbot:
+    if not st.session_state.claude_messages and ai_chat_available:
         st.markdown("### 💡 Suggested Questions")
         
         col1, col2 = st.columns(2)
@@ -1414,8 +1419,8 @@ elif page == "Chat with Prometheus":
 
     # Custom chat input with better placeholder
     user_question = st.chat_input("Ask AI about your metrics and traces... (e.g., 'What's the GPU usage?' or 'Show me CPU trends' or 'Show me traces with errors')")
-    
-    if user_question and ai_chatbot:
+
+    if user_question and ai_chat_available:
         # Add user message to history and display it
         st.session_state.claude_messages.append({"role": "user", "content": user_question})
         with st.chat_message("user", avatar="👤"):
@@ -1424,17 +1429,21 @@ elif page == "Chat with Prometheus":
         # Create assistant message placeholder for streaming-like effect
         with st.chat_message("assistant", avatar="🤖"):
             message_placeholder = st.empty()
-            
-            # Show thinking state
-            message_placeholder.markdown("🔍 **Analyzing your request...**")
-            
+
             try:
-                # Create progress callback to show tool usage like Claude Desktop
+                # Extract friendly model name
+                friendly_name = multi_model_name.split("/")[-1] if "/" in multi_model_name else multi_model_name
+
+                # Truncate question for display
+                display_question = user_question if len(user_question) <= 60 else user_question[:57] + "..."
+
+                # Create status container - don't write inside so completion message is clean
+                status_label = f"Using **{friendly_name}** and tools to analyze your question. Might take 10-30 seconds..."
+                status_container = st.status(status_label, expanded=False)
+
+                # Progress callback (won't get real-time updates due to HTTP blocking, but keeping for compatibility)
                 def update_progress(status_msg):
-                    message_placeholder.markdown(f"**{status_msg}**")
-                
-                # Update status
-                message_placeholder.markdown("⚡ **Starting analysis...**")
+                    pass  # HTTP doesn't support streaming progress
                 
                 # Check if this is a trace-related question
                 is_trace_question = detect_trace_question(user_question)
@@ -1488,17 +1497,24 @@ elif page == "Chat with Prometheus":
 
                 # Get response from AI with real-time progress (PromQL queries always included)
                 if not skip_ai:
-                    logger.info(f"📤 Calling {ai_chatbot.__class__.__name__}.chat() with model={ai_chatbot.model_name} for question: {user_question[:50]}...")
-                    response = ai_chatbot.chat(
-                        user_question,
+                    logger.info(f"📤 Calling /v1/chat endpoint with model={multi_model_name} for question: {user_question[:50]}...")
+                    response = call_chat_endpoint(
+                        model_name=multi_model_name,
+                        api_key=user_api_key,
+                        message=user_question,
                         namespace=None,  # Cluster-wide analysis
-                        scope="cluster-wide",
                         progress_callback=update_progress
                     )
-                    logger.info(f"📥 Received response from {ai_chatbot.model_name}: {len(response) if response else 0} chars")
+                    logger.info(f"📥 Received response from {multi_model_name}: {len(response) if response else 0} chars")
+
+                    # Update status to show completion
+                    status_container.update(label="✅ Analysis complete!", state="complete", expanded=False)
                 else:
                     response = None  # Skip AI analysis for pure trace questions
-                
+
+                    # Update status to show completion
+                    status_container.update(label="✅ Analysis complete!", state="complete", expanded=False)
+
                 # Display final response with better formatting
                 if response:
                     # Format the response for better readability
@@ -1521,15 +1537,19 @@ elif page == "Chat with Prometheus":
                     pass
                 else:
                     error_msg = "I couldn't generate a response. Please try again."
+                    # Update status with error message
+                    status_container.update(label="❌ Error generating response", state="error", expanded=False)
                     message_placeholder.markdown(f"❌ **Error:** {error_msg}")
                     st.session_state.claude_messages.append({"role": "assistant", "content": error_msg})
 
             except Exception as e:
                 error_msg = f"I encountered an error: {str(e)}. Please try again."
+                # Update status with error message
+                status_container.update(label=f"❌ Error: {str(e)[:50]}", state="error", expanded=False)
                 message_placeholder.markdown(f"❌ **Error:** {error_msg}")
                 st.session_state.claude_messages.append({"role": "assistant", "content": error_msg})
     
-    elif user_question and not ai_chatbot:
+    elif user_question and not ai_chat_available:
         with st.chat_message("assistant", avatar="⚠️"):
             if current_model_requires_api_key and not user_api_key:
                 st.markdown("🔑 **API Key Required**\n\nPlease enter your API key in the sidebar to start chatting with AI.")
