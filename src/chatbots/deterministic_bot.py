@@ -7,10 +7,10 @@ that don't have reliable tool calling capabilities (<75% accuracy).
 
 import json
 import re
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 
 from .base import BaseChatBot
-from .tool_executor import ToolExecutor
+from chatbots.mcp_tools_interface import MCPToolsInterface
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -23,15 +23,14 @@ class DeterministicChatBot(BaseChatBot):
         self,
         model_name: str,
         api_key: Optional[str] = None,
-        tool_executor: Optional[ToolExecutor] = None
-    ):
-        super().__init__(model_name, api_key, tool_executor)
+        mcp_tools: MCPToolsInterface = None):
+        super().__init__(model_name, api_key, mcp_tools)
 
     def _get_api_key(self) -> Optional[str]:
         """Local models don't require API keys."""
         return None
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, scope: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
         """Chat using deterministic parsing approach."""
         if progress_callback:
             progress_callback("🔍 Analyzing your question...")

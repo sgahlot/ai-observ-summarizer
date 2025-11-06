@@ -163,34 +163,25 @@ async def chat_with_llm(request: ChatRequest):
 
     This endpoint:
     1. Creates appropriate chatbot based on model_name
-    2. Initializes it with MCPToolExecutor (direct server access)
-    3. Executes the chat query
-    4. Returns the response
+    2. Executes the chat query (chatbot accesses MCP tools directly)
+    3. Returns the response
 
-    The tool executor pattern ensures clean architecture and testability.
+    Note: Chatbots access MCP server directly via self.mcp_server (no tool_executor needed).
     """
     try:
-        from mcp_server.chatbots import create_chatbot
-        from mcp_server.chatbots.mcp_tool_executor import MCPToolExecutor
+        from chatbots import create_chatbot
 
-        print(f"[DEBUG] Chat request received for model: {request.model_name}")
         logger.info(f"Chat request received for model: {request.model_name}")
 
-        # Create tool executor with direct server access
-        tool_executor = MCPToolExecutor(server)
-
-        # Create chatbot with injected executor
+        # Create chatbot (no tool_executor needed - uses self.mcp_server directly)
         chatbot = create_chatbot(
             model_name=request.model_name,
-            api_key=request.api_key,
-            tool_executor=tool_executor
+            api_key=request.api_key
         )
 
-        print(f"[DEBUG] Initialized {request.model_name} chatbot")
         logger.info(f"Initialized {request.model_name} chatbot for chat request")
 
         # Execute chat (LLM calls happen here in MCP Server)
-        print(f"[DEBUG] About to call chatbot.chat() with message: {request.message[:100]}")
         logger.info(f"Calling chatbot.chat() with message: {request.message[:100]}")
 
         response = chatbot.chat(
@@ -198,7 +189,6 @@ async def chat_with_llm(request: ChatRequest):
             namespace=request.namespace
         )
 
-        print(f"[DEBUG] Received response from chatbot: {response[:100]}")
         logger.info(f"Chat completed, response length: {len(response)}")
 
         return ChatResponse(

@@ -24,6 +24,11 @@ if _SRC_ROOT not in sys.path:
 
 from error_handler import parse_mcp_error, display_mcp_error
 from common.pylogger import get_python_logger, force_reconfigure_all_loggers
+from common.mcp_utils import (
+    extract_text_from_mcp_result,
+    is_double_encoded_mcp_response,
+    extract_from_double_encoded_response
+)
 
 # Initialize shared structured logging once per process
 get_python_logger(os.getenv("PYTHON_LOG_LEVEL", "INFO"))
@@ -130,6 +135,37 @@ class MCPClientHelper:
                 return content_list
             return []
 
+    async def _list_tools_async(self) -> Any:
+        """Async list_tools via fastmcp.Client."""
+        try:
+            # Ensure site-packages is in sys.path
+            site_paths: List[str] = []
+            try:
+                site_paths.extend(site.getsitepackages())  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                user_site = site.getusersitepackages()
+                if isinstance(user_site, str):
+                    site_paths.append(user_site)
+            except Exception:
+                pass
+            for p in reversed([p for p in site_paths if p and p not in sys.path]):
+                sys.path.insert(0, p)
+        except Exception:
+            pass
+
+        # Import fastmcp lazily
+        import importlib
+        fastmcp_module = importlib.import_module("fastmcp")
+        Client = fastmcp_module.Client
+
+        client = Client(self.config)
+        async with client:
+            # List tools from MCP server
+            tools_result = await client.list_tools()
+            return tools_result
+
     def call_tool_sync(self, tool_name: str, parameters: Dict[str, Any] = None) -> Any:
         """Sync wrapper for Streamlit - runs the async fastmcp call."""
         try:
@@ -152,6 +188,28 @@ class MCPClientHelper:
                 return None
         except Exception as e:
             logger.error(f"Error calling MCP tool '{tool_name}': {e}")
+            return None
+
+    def list_tools_sync(self) -> Any:
+        """Sync wrapper for list_tools."""
+        try:
+            return asyncio.run(self._list_tools_async())
+        except RuntimeError:
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    return loop.run_until_complete(self._list_tools_async())
+                finally:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.error(f"Error listing tools with new event loop: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"Error listing tools: {e}")
             return None
 
     def parse_list_response(self, result: Any, item_prefix: str = "•") -> List[str]:
@@ -195,37 +253,7 @@ class MCPClientHelper:
 mcp_client = MCPClientHelper()
 
 
-def extract_text_from_mcp_result(result: Any) -> Optional[str]:
-    """Helper function to extract text from MCP tool result.
-    
-    Args:
-        result: MCP tool result (typically a list with dict items)
-        
-    Returns:
-        Extracted text string, or None if extraction fails
-    """
-    try:
-        if result and isinstance(result, list) and len(result) > 0:
-            first_item = result[0]
-            if isinstance(first_item, dict) and "text" in first_item:
-                base_text = first_item["text"]
-                # If the base_text itself is a serialized MCP content list, unwrap it
-                try:
-                    if isinstance(base_text, str):
-                        parsed = json.loads(base_text)
-                        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) and "text" in parsed[0]:
-                            inner_text = parsed[0]["text"]
-                            return inner_text
-                except Exception:
-                    # Fallback to base_text
-                    pass
-                return base_text
-            else:
-                return str(first_item)
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting text from MCP result: {e}")
-        return None
+# extract_text_from_mcp_result now imported from common.mcp_utils
 
 
 def check_mcp_response_for_errors(result: Any) -> Dict[str, Any]:
@@ -246,54 +274,7 @@ def check_mcp_response_for_errors(result: Any) -> Dict[str, Any]:
     return {}
 
 
-def is_double_encoded_mcp_response(parsed_json: Any) -> bool:
-    """Check if the parsed JSON is a double-encoded MCP response.
-    
-    A double-encoded MCP response is a list containing a dict with a 'text' key
-    that contains another JSON string.
-    
-    Args:
-        parsed_json: The parsed JSON object to check
-        
-    Returns:
-        True if this appears to be a double-encoded MCP response
-    """
-    if not isinstance(parsed_json, list):
-        return False
-        
-    if len(parsed_json) == 0:
-        return False
-        
-    first_item = parsed_json[0]
-    return isinstance(first_item, dict) and "text" in first_item
-
-
-def extract_from_double_encoded_response(parsed_json: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Extract content from a double-encoded MCP response.
-    
-    Args:
-        parsed_json: The list containing the double-encoded response
-        
-    Returns:
-        The extracted and parsed inner JSON, or None if extraction fails
-    """
-    try:
-        inner_text = parsed_json[0]["text"]
-        logger.debug(f"Found double-encoded response, trying to parse inner text: {inner_text[:100]}...")
-        
-        inner_json = json.loads(inner_text)
-        if isinstance(inner_json, dict):
-            return inner_json
-        else:
-            logger.error(f"Inner JSON is not a dict: {type(inner_json)}")
-            return None
-            
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse inner JSON from double-encoded response: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting from double-encoded response: {e}")
-        return None
+# is_double_encoded_mcp_response and extract_from_double_encoded_response now imported from common.mcp_utils
 
 
 def get_namespaces_mcp() -> List[str]:
@@ -1185,3 +1166,168 @@ def chat_vllm_mcp(
             "error": str(e),
             "error_type": "mcp_structured",
         }
+
+
+def chat_with_ai_mcp(
+    model_name: str,
+    message: str,
+    api_key: Optional[str] = None,
+    namespace: Optional[str] = None,
+    scope: Optional[str] = None,
+    progress_callback: Optional[callable] = None
+) -> str:
+    """
+    Chat with AI using MCP chat tool.
+
+    Calls the MCP 'chat' tool and replays progress updates to the UI.
+
+    Args:
+        model_name: Model identifier (e.g., "anthropic/claude-3-5-sonnet-20241022")
+        message: User's question
+        api_key: Optional API key for external models
+        namespace: Optional namespace filter
+        scope: Optional scope
+        progress_callback: Optional callback for progress updates
+
+    Returns:
+        AI response string
+
+    Example:
+        >>> def update_status(msg):
+        ...     st.write(msg)
+        >>> response = chat_with_ai_mcp(
+        ...     model_name="anthropic/claude-3-5-sonnet-20241022",
+        ...     message="What's the CPU usage?",
+        ...     api_key="sk-ant-...",
+        ...     progress_callback=update_status
+        ... )
+    """
+    try:
+        if not mcp_client.check_server_health():
+            return "❌ MCP server is not available"
+
+        # Prepare parameters
+        params = {
+            "model_name": model_name,
+            "message": message,
+        }
+        if api_key:
+            params["api_key"] = api_key
+        if namespace:
+            params["namespace"] = namespace
+        if scope:
+            params["scope"] = scope
+
+        logger.info(f"💬 Calling MCP chat tool: {model_name}")
+
+        # Call MCP tool
+        result = mcp_client.call_tool_sync("chat", params)
+
+        # Extract and parse result
+        response_text = extract_text_from_mcp_result(result)
+        if not response_text:
+            return "❌ No response from chat tool"
+
+        # Parse JSON response
+        try:
+            parsed = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse chat response: {e}")
+            return response_text
+
+        # Check for errors
+        if "error" in parsed:
+            error_msg = parsed["error"]
+            logger.error(f"Chat tool error: {error_msg}")
+            return f"❌ {error_msg}"
+
+        # Replay progress updates to UI
+        if progress_callback and "progress_log" in parsed:
+            for entry in parsed["progress_log"]:
+                progress_callback(entry["message"])
+
+        # Log stats
+        iterations = parsed.get("iterations", 0)
+        progress_count = len(parsed.get("progress_log", []))
+        logger.info(f"✅ Chat completed: {iterations} iterations, {progress_count} progress updates")
+
+        return parsed["response"]
+
+    except Exception as e:
+        logger.error(f"Error calling MCP chat tool: {e}", exc_info=True)
+        return f"❌ Error: {str(e)}"
+
+
+def chat_with_ai_direct(
+    model_name: str,
+    message: str,
+    api_key: Optional[str] = None,
+    namespace: Optional[str] = None,
+    progress_callback: Optional[callable] = None
+) -> str:
+    """
+    Chat with AI by directly importing chatbots (real-time progress).
+
+    This function imports chatbots directly and uses the MCP client adapter
+    to call tools via MCP protocol, enabling real-time progress updates.
+
+    Args:
+        model_name: Model identifier (e.g., "anthropic/claude-3-5-sonnet-20241022")
+        message: User's question
+        api_key: Optional API key for external models
+        namespace: Optional namespace filter
+        progress_callback: Optional callback for REAL-TIME progress updates
+
+    Returns:
+        AI response string
+
+    Example:
+        >>> def update_status(msg):
+        ...     st.write(msg)
+        >>> response = chat_with_ai_direct(
+        ...     model_name="anthropic/claude-3-5-sonnet-20241022",
+        ...     message="What's the CPU usage?",
+        ...     api_key="sk-ant-...",
+        ...     progress_callback=update_status  # Updates shown in real-time!
+        ... )
+    """
+    try:
+        # Import chatbots package and adapter
+        from chatbots import create_chatbot
+        from ui.mcp_client_adapter import MCPClientAdapter
+
+        logger.info(f"💬 Creating chatbot for model: {model_name}")
+
+        # Create MCP client adapter using our existing MCP client session
+        # The adapter wraps the MCP session to implement MCPToolsInterface
+        mcp_session = mcp_client  # Use existing MCPClientHelper instance
+        mcp_tools = MCPClientAdapter(mcp_session)
+
+        # Create chatbot with MCP tools adapter
+        chatbot = create_chatbot(
+            model_name=model_name,
+            api_key=api_key,
+            mcp_tools=mcp_tools
+        )
+
+        logger.info(f"✅ Created {chatbot.__class__.__name__}")
+
+        # Call chat with REAL-TIME progress callback
+        if progress_callback:
+            progress_callback(f"🤖 Starting chat with {model_name}")
+
+        response = chatbot.chat(
+            user_question=message,
+            namespace=namespace,
+            progress_callback=progress_callback  # Real-time updates!
+        )
+
+        if progress_callback:
+            progress_callback("✅ Chat completed")
+
+        logger.info(f"✅ Chat completed successfully")
+        return response
+
+    except Exception as e:
+        logger.error(f"Error in direct chatbot call: {e}", exc_info=True)
+        return f"❌ Error: {str(e)}"

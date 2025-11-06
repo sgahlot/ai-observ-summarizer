@@ -4,11 +4,12 @@ WORKDIR /app
 # Copy required dependencies that UI imports (build context is src/)
 COPY core/ /app/core/
 COPY common/ /app/common/
-# REMOVED: COPY mcp_server/ /app/mcp_server/  - UI now calls /v1/chat endpoint instead
+COPY chatbots/ /app/chatbots/
 
 # Copy UI specific files
 COPY ui/ui.py .
 COPY ui/mcp_client_helper.py .
+COPY ui/mcp_client_adapter.py .
 COPY ui/error_handler.py .
 COPY ui/requirements.txt .
 

@@ -3,6 +3,9 @@ import logging
 from .settings import settings
 from common.pylogger import get_python_logger, force_reconfigure_all_loggers
 
+# Global server instance reference for chat_tool access
+_server_instance = None
+
 
 class ObservabilityMCPServer:
     def __init__(self) -> None:
@@ -13,6 +16,11 @@ class ObservabilityMCPServer:
         self.mcp = FastMCP("metrics-observability")
         # Ensure third-party loggers are reconfigured after FastMCP init
         force_reconfigure_all_loggers(settings.PYTHON_LOG_LEVEL)
+
+        # Set global instance for chat_tool access
+        global _server_instance
+        _server_instance = self
+
         self._register_mcp_tools()
         logging.getLogger(__name__).info("Observability MCP Server initialized")
 
@@ -95,3 +103,9 @@ class ObservabilityMCPServer:
             )
             self.mcp.tool()(korrel8r_query_objects)
             self.mcp.tool()(korrel8r_get_correlated)
+
+        # Register chat tool (unified chatbot interface)
+        from .tools.chat_tool import chat
+        self.mcp.tool()(chat)
+
+        logging.getLogger(__name__).info("✅ All MCP tools registered successfully")

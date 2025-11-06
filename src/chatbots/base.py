@@ -12,9 +12,8 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Callable
 
-from mcp_server.observability_mcp import ObservabilityMCPServer
+from chatbots.mcp_tools_interface import MCPToolsInterface
 from common.pylogger import get_python_logger
-from .tool_executor import ToolExecutor
 
 logger = get_python_logger()
 
@@ -26,27 +25,33 @@ class BaseChatBot(ABC):
         self,
         model_name: str,
         api_key: Optional[str] = None,
-        tool_executor: ToolExecutor = None
+        mcp_tools: MCPToolsInterface = None  # Type is non-optional, but runtime validates
     ):
         """Initialize base chat bot.
 
         Args:
-            model_name: Model identifier (e.g., "anthropic/claude-3-5-sonnet-20241022")
-            api_key: API key for external models (None for local models)
-            tool_executor: Tool executor for calling MCP tools (required, injected dependency)
+            model_name: Model identifier (e.g., "gpt-4", "claude-3-5-sonnet")
+            api_key: Optional API key for the model
+            mcp_tools: MCP tools interface for calling observability tools (REQUIRED)
+                      Pass an MCPToolsInterface implementation:
+                      - MCPServerAdapter (from MCP server context)
+                      - MCPClientAdapter (from UI context)
+
+        Raises:
+            ValueError: If mcp_tools is None
         """
-        if tool_executor is None:
-            raise ValueError("tool_executor is required - must be injected via dependency injection")
+        if mcp_tools is None:
+            raise ValueError(
+                "mcp_tools is required. Pass an MCPToolsInterface implementation "
+                "(MCPServerAdapter from MCP server or MCPClientAdapter from UI)"
+            )
 
         self.model_name = model_name
         # Let each subclass decide how to get its API key
         self.api_key = api_key if api_key is not None else self._get_api_key()
 
-        # Store injected tool executor
-        self.tool_executor = tool_executor
-
-        # Initialize MCP server (for backward compatibility - may be removed later)
-        self.mcp_server = ObservabilityMCPServer()
+        # Store MCP tools interface for calling observability tools
+        self.mcp_tools = mcp_tools
 
         logger.info(f"{self.__class__.__name__} initialized with model: {self.model_name}")
 
@@ -77,20 +82,30 @@ class BaseChatBot(ABC):
         return self.model_name
 
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
-        """Get available MCP tools dynamically via tool executor.
-
-        Fetches tools directly from the MCP server via the injected tool executor.
+        """Get available MCP tools via the interface.
 
         Returns:
             List of tool definitions with name, description, and input_schema
         """
         try:
-            tools = asyncio.run(self.tool_executor.get_tools())
-            tool_names = [tool.get('name', 'unknown') for tool in tools]
-            logger.info(f"🧰 Fetched {len(tools)} tools from tool executor: {', '.join(tool_names)}")
+            # Get tools from MCP tools interface
+            mcp_tools_list = self.mcp_tools.list_tools()
+
+            # Convert to expected format
+            tools = []
+            for mcp_tool in mcp_tools_list:
+                tool_def = {
+                    'name': mcp_tool.name,
+                    'description': mcp_tool.description,
+                    'input_schema': mcp_tool.input_schema
+                }
+                tools.append(tool_def)
+
+            tool_names = [tool['name'] for tool in tools]
+            logger.info(f"🧰 Fetched {len(tools)} tools via MCP interface: {', '.join(tool_names)}")
             return tools
         except Exception as e:
-            logger.error(f"Error fetching tools from executor: {e}")
+            logger.error(f"Error fetching tools from MCP server: {e}")
             raise
 
     def _normalize_korrel8r_query(self, q: str) -> str:
@@ -143,7 +158,9 @@ class BaseChatBot(ABC):
             return q
 
     def _route_tool_call_to_mcp(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Route tool call via injected tool executor.
+        """Route tool call via MCP tools interface.
+
+        Uses the injected MCPToolsInterface to call tools (works in both server and client contexts).
 
         Args:
             tool_name: Name of the tool to call
@@ -168,54 +185,17 @@ class BaseChatBot(ABC):
                 # Best-effort normalization; continue with original arguments on error
                 pass
 
-        # Use tool executor if available
-        if self.tool_executor is not None:
-            try:
-                result = self.tool_executor.execute_tool(tool_name, arguments)
-                logger.info(f"✅ Tool {tool_name} returned result (length: {len(str(result))}): {str(result)[:200]}...")
-                return result
-            except Exception as e:
-                logger.error(f"❌ Error calling tool {tool_name} via executor: {e}")
-                return f"Error executing {tool_name}: {str(e)}"
-
-        # Fallback to old method for backward compatibility (will be removed later)
-        logger.warning(f"No tool executor configured, using legacy MCP client import for {tool_name}")
-        return self._legacy_route_tool_call(tool_name, arguments)
-
-    def _legacy_route_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Legacy method for routing tool calls (backward compatibility only).
-
-        This method will be deprecated once all code uses tool_executor.
-        """
         try:
-            # Import MCP client helper to call our tools
-            import sys
-            ui_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'ui')
-            if ui_path not in sys.path:
-                sys.path.insert(0, ui_path)
+            logger.info(f"⚙️ Executing tool '{tool_name}' via MCP tools interface")
 
-            try:
-                from mcp_client_helper import MCPClientHelper
-            except ImportError:
-                # Load mcp_client_helper directly
-                mcp_helper_path = os.path.join(ui_path, 'mcp_client_helper.py')
-                spec = importlib.util.spec_from_file_location("mcp_client_helper", mcp_helper_path)
-                mcp_helper = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mcp_helper)
-                MCPClientHelper = mcp_helper.MCPClientHelper
+            # Call tool via interface (handles both server and client scenarios)
+            result = self.mcp_tools.call_tool(tool_name, arguments)
 
-            mcp_client = MCPClientHelper()
-
-            # Call the tool via MCP (after optional normalization)
-            result = mcp_client.call_tool_sync(tool_name, arguments)
-
-            if result and len(result) > 0:
-                return result[0]['text']
-            else:
-                return f"No results returned from {tool_name}"
+            logger.info(f"✅ Tool {tool_name} returned result (length: {len(result) if result else 0})")
+            return result
 
         except Exception as e:
-            logger.error(f"Error calling MCP tool {tool_name}: {e}")
+            logger.error(f"❌ Error calling tool {tool_name}: {e}")
             return f"Error executing {tool_name}: {str(e)}"
 
     def _get_max_tool_result_length(self) -> int:
@@ -293,26 +273,42 @@ You have access to monitoring tools and should provide focused, targeted respons
 - Tools: Direct access to Prometheus/Thanos metrics via MCP tools
 
 **Available Tools:**
+
+**Core Observability Tools:**
 - search_metrics: Pattern-based metric search - use for broad exploration
 - execute_promql: Execute PromQL queries for actual data
 - get_metric_metadata: Get detailed information about specific metrics
 - get_label_values: Get available label values
 - suggest_queries: Get PromQL suggestions based on user intent
 - explain_results: Get human-readable explanation of query results
+
+**Correlation & Advanced Analysis:**
 - korrel8r_query_objects: Query for specific observability objects (alerts, logs, traces, metrics) - available if Korrel8r is configured
 - korrel8r_get_correlated: Get correlated observability data across domains (find logs/traces/metrics related to alerts) - available if Korrel8r is configured
 
+**Note:** Additional specialized tools are available for specific use cases (VLLM metrics, OpenShift analysis, model management, etc.) and will be provided to you automatically via the function calling interface when needed.
+
 **🚨 CRITICAL: Tool Selection for Alert Queries:**
-When the user asks about alerts or firing alerts:
-1. **PRIMARY METHOD**: Use `execute_promql` with the `ALERTS` metric
+
+**Smart Two-Phase Approach:**
+- Start with Prometheus (fast, simple) for basic alert data
+- Escalate to Korrel8r only when needed for correlation or explicitly requested
+
+**1. USER EXPLICITLY REQUESTS KORREL8r ("use korrel8r", "query korrel8r")**:
+   - ALWAYS use Korrel8r tools immediately (korrel8r_query_objects or korrel8r_get_correlated)
+   - Query format: `alert:alert:{{\"alertname\":\"AlertName\"}}`
+   - Examples: "Use korrel8r to investigate AlertExampleDown", "Query korrel8r for HighCPU alert"
+
+**2. USER ASKS FOR INVESTIGATION/CORRELATION** (without mentioning korrel8r):
+   - Phase 1: Use `execute_promql` with ALERTS metric to get alert details
+   - Phase 2: Use Korrel8r to find related logs/traces/metrics
+   - Examples: "Investigate AlertExampleDown", "What's related to HighCPU alert?", "Find correlated data for alert X"
+
+**3. BASIC ALERT QUERIES** (listing/checking status only):
+   - Use ONLY `execute_promql` with the `ALERTS` metric - DO NOT use Korrel8r
    - Query firing alerts: `ALERTS{{alertstate="firing"}}`
    - Query specific alerts: `ALERTS{{alertstate="firing", alertname="HighCPU"}}`
-   - Query alerts by namespace: `ALERTS{{alertstate="firing", namespace="llm-serving"}}`
-2. **CORRELATION ONLY**: Use Korrel8r tools ONLY when the user explicitly asks for:
-   - "What logs/traces are related to this alert?"
-   - "Find correlated data for alert X"
-   - "Show me everything related to this alert"
-3. **NEVER** use Korrel8r for basic alert queries like "Any alerts firing?" or "Show me alerts"
+   - Examples: "Any alerts firing?", "Show me alerts", "List all critical alerts", "Check alert status"
 
 **🧠 Your Intelligence Style:**
 
@@ -398,14 +394,13 @@ Begin by finding the perfect metric for the user's question, then provide compre
         return prompt
 
     @abstractmethod
-    def chat(self, user_question: str, namespace: Optional[str] = None, scope: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
         """
         Chat with the model. Must be implemented by subclasses.
 
         Args:
             user_question: The user's question
             namespace: Optional namespace filter
-            scope: Optional scope filter
             progress_callback: Optional callback for progress updates
 
         Returns:
@@ -416,22 +411,19 @@ Begin by finding the perfect metric for the user's question, then provide compre
     def test_mcp_tools(self) -> bool:
         """Test if MCP tools server is initialized and has tools available."""
         try:
-            # Check if MCP server is available
-            if self.mcp_server is None:
-                logger.error("MCP server is None - not initialized")
+            # Check if MCP tools interface is available
+            if self.mcp_tools is None:
+                logger.error("MCP tools interface is None - not initialized")
                 return False
 
-            # Test MCP server
-            if hasattr(self.mcp_server, 'mcp') and hasattr(self.mcp_server.mcp, '_tool_manager'):
-                tool_count = len(self.mcp_server.mcp._tool_manager._tools)
-                if tool_count > 0:
-                    logger.info(f"MCP server working with {tool_count} tools")
-                    return True
-                else:
-                    logger.error("MCP server has no registered tools")
-                    return False
+            # Test MCP tools interface
+            tools = self.mcp_tools.list_tools()
+            tool_count = len(tools)
+            if tool_count > 0:
+                logger.info(f"MCP tools interface working with {tool_count} tools")
+                return True
             else:
-                logger.error("MCP server not properly initialized")
+                logger.error("MCP tools interface has no registered tools")
                 return False
 
         except Exception as e:

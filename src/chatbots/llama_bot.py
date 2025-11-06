@@ -5,10 +5,10 @@ This module provides Llama-specific implementation using LlamaStack's OpenAI-com
 """
 
 import json
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 
 from .base import BaseChatBot
-from .tool_executor import ToolExecutor
+from chatbots.mcp_tools_interface import MCPToolsInterface
 from core.config import LLAMA_STACK_URL, LLM_API_TOKEN
 from common.pylogger import get_python_logger
 
@@ -37,9 +37,9 @@ class LlamaChatBot(BaseChatBot):
         self,
         model_name: str,
         api_key: Optional[str] = None,
-        tool_executor: Optional[ToolExecutor] = None
+        mcp_tools: MCPToolsInterface = None
     ):
-        super().__init__(model_name, api_key, tool_executor)
+        super().__init__(model_name, api_key, mcp_tools)
 
         # Import OpenAI SDK (LlamaStack is OpenAI-compatible)
         try:
@@ -114,7 +114,7 @@ For Pod Status queries:
             })
         return openai_tools
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, scope: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
         """Chat with Llama using LlamaStack OpenAI-compatible API."""
         if not self.client:
             return "Error: OpenAI SDK not installed. Please install it with: pip install openai"

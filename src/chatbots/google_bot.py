@@ -5,10 +5,10 @@ This module provides Google Gemini-specific implementation using the official SD
 """
 
 import os
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 
 from .base import BaseChatBot
-from .tool_executor import ToolExecutor
+from chatbots.mcp_tools_interface import MCPToolsInterface
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -29,9 +29,8 @@ class GoogleChatBot(BaseChatBot):
         self,
         model_name: str,
         api_key: Optional[str] = None,
-        tool_executor: Optional[ToolExecutor] = None
-    ):
-        super().__init__(model_name, api_key, tool_executor)
+        mcp_tools: MCPToolsInterface = None):
+        super().__init__(model_name, api_key, mcp_tools)
 
         # Import Google SDK and configure
         try:
@@ -163,7 +162,7 @@ class GoogleChatBot(BaseChatBot):
 
         return sdk_tools
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, scope: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
         """Chat with Google Gemini using tool calling."""
         if not self.configured:
             return "Error: Google Generative AI SDK not installed. Please install it with: pip install google-generativeai"

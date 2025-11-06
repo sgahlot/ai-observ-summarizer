@@ -22,9 +22,6 @@ from mcp_client_helper import (
     analyze_vllm_mcp,
     calculate_metrics_mcp,
     get_vllm_metrics_mcp,
-    extract_text_from_mcp_result,
-    is_double_encoded_mcp_response,
-    extract_from_double_encoded_response,
     analyze_openshift_mcp,
     chat_openshift_mcp,
     parse_analyze_response,
@@ -33,6 +30,12 @@ from mcp_client_helper import (
     get_deployment_info_mcp,
     chat_vllm_mcp,
     chat_tempo_mcp,
+)
+# Import MCP utilities from common module (breaks circular dependency)
+from common.mcp_utils import (
+    extract_text_from_mcp_result,
+    is_double_encoded_mcp_response,
+    extract_from_double_encoded_response,
 )
 # Add current directory to Python path for consistent imports
 import sys
@@ -64,46 +67,6 @@ try:
         )
 except Exception:
     pass
-
-# Multi-model chatbot support - Call MCP server's /v1/chat endpoint
-def call_chat_endpoint(model_name: str, api_key: str, message: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
-    """Call MCP server's chat endpoint instead of creating chatbot locally.
-
-    Args:
-        model_name: Model identifier (e.g., "anthropic/claude-3-5-sonnet-20241022")
-        api_key: API key for the model
-        message: User's question/message
-        namespace: Optional namespace filter
-        progress_callback: Optional callback for progress updates
-
-    Returns:
-        LLM response as string
-    """
-    try:
-        # Note: progress_callback won't work with HTTP POST (no streaming)
-        # Progress updates would require SSE or WebSocket implementation
-
-        response = requests.post(
-            f"{MCP_SERVER_URL}/v1/chat",
-            json={
-                "model_name": model_name,
-                "api_key": api_key,
-                "message": message,
-                "namespace": namespace
-            },
-            timeout=180  # 3 minute timeout for LLM responses
-        )
-        response.raise_for_status()
-        return response.json()["response"]
-    except requests.exceptions.Timeout:
-        logger.error("Chat endpoint request timed out")
-        return "❌ Request timed out. The query may be too complex. Please try a simpler question."
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error calling MCP chat endpoint: {e}")
-        return f"❌ Error communicating with chat service: {str(e)}"
-    except Exception as e:
-        logger.error(f"Unexpected error in chat endpoint call: {e}")
-        return f"❌ Unexpected error: {str(e)}"
 
 # --- Config ---
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8085")
@@ -1431,19 +1394,10 @@ elif page == "Chat with Prometheus":
             message_placeholder = st.empty()
 
             try:
-                # Extract friendly model name
-                friendly_name = multi_model_name.split("/")[-1] if "/" in multi_model_name else multi_model_name
-
-                # Truncate question for display
-                display_question = user_question if len(user_question) <= 60 else user_question[:57] + "..."
-
-                # Create status container - don't write inside so completion message is clean
-                status_label = f"Using **{friendly_name}** and tools to analyze your question. Might take 10-30 seconds..."
-                status_container = st.status(status_label, expanded=False)
-
-                # Progress callback (won't get real-time updates due to HTTP blocking, but keeping for compatibility)
+                # Progress callback for live status updates via MCP chat tool
                 def update_progress(status_msg):
-                    pass  # HTTP doesn't support streaming progress
+                    """Display progress updates in the message placeholder."""
+                    message_placeholder.markdown(f"**{status_msg}**")
                 
                 # Check if this is a trace-related question
                 is_trace_question = detect_trace_question(user_question)
@@ -1497,23 +1451,19 @@ elif page == "Chat with Prometheus":
 
                 # Get response from AI with real-time progress (PromQL queries always included)
                 if not skip_ai:
-                    logger.info(f"📤 Calling /v1/chat endpoint with model={multi_model_name} for question: {user_question[:50]}...")
-                    response = call_chat_endpoint(
+                    logger.info(f"📤 Calling chatbot directly with model={multi_model_name} for question: {user_question[:50]}...")
+                    # Use direct chatbot import for REAL-TIME progress tracking
+                    from mcp_client_helper import chat_with_ai_direct
+                    response = chat_with_ai_direct(
                         model_name=multi_model_name,
-                        api_key=user_api_key,
                         message=user_question,
+                        api_key=user_api_key,
                         namespace=None,  # Cluster-wide analysis
-                        progress_callback=update_progress
+                        progress_callback=update_progress  # Real-time updates!
                     )
                     logger.info(f"📥 Received response from {multi_model_name}: {len(response) if response else 0} chars")
-
-                    # Update status to show completion
-                    status_container.update(label="✅ Analysis complete!", state="complete", expanded=False)
                 else:
                     response = None  # Skip AI analysis for pure trace questions
-
-                    # Update status to show completion
-                    status_container.update(label="✅ Analysis complete!", state="complete", expanded=False)
 
                 # Display final response with better formatting
                 if response:
@@ -1537,15 +1487,11 @@ elif page == "Chat with Prometheus":
                     pass
                 else:
                     error_msg = "I couldn't generate a response. Please try again."
-                    # Update status with error message
-                    status_container.update(label="❌ Error generating response", state="error", expanded=False)
                     message_placeholder.markdown(f"❌ **Error:** {error_msg}")
                     st.session_state.claude_messages.append({"role": "assistant", "content": error_msg})
 
             except Exception as e:
                 error_msg = f"I encountered an error: {str(e)}. Please try again."
-                # Update status with error message
-                status_container.update(label=f"❌ Error: {str(e)[:50]}", state="error", expanded=False)
                 message_placeholder.markdown(f"❌ **Error:** {error_msg}")
                 st.session_state.claude_messages.append({"role": "assistant", "content": error_msg})
     

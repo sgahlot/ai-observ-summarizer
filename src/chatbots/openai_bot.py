@@ -6,10 +6,10 @@ This module provides OpenAI GPT-specific implementation using the official SDK.
 
 import os
 import json
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 
 from .base import BaseChatBot
-from .tool_executor import ToolExecutor
+from chatbots.mcp_tools_interface import MCPToolsInterface
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -30,9 +30,8 @@ class OpenAIChatBot(BaseChatBot):
         self,
         model_name: str,
         api_key: Optional[str] = None,
-        tool_executor: Optional[ToolExecutor] = None
-    ):
-        super().__init__(model_name, api_key, tool_executor)
+        mcp_tools: MCPToolsInterface = None):
+        super().__init__(model_name, api_key, mcp_tools)
 
         # Import OpenAI SDK
         try:
@@ -78,7 +77,7 @@ class OpenAIChatBot(BaseChatBot):
             })
         return openai_tools
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, scope: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
         """Chat with OpenAI GPT using tool calling."""
         if not self.client:
             return "Error: OpenAI SDK not installed. Please install it with: pip install openai"

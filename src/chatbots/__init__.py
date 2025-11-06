@@ -27,13 +27,30 @@ Architecture:
     - create_chatbot(): Factory function to create appropriate bot
 """
 
-from .base import BaseChatBot
-from .anthropic_bot import AnthropicChatBot
-from .openai_bot import OpenAIChatBot
-from .google_bot import GoogleChatBot
-from .llama_bot import LlamaChatBot
-from .deterministic_bot import DeterministicChatBot
-from .factory import create_chatbot
+# Lazy imports to avoid loading SDKs until needed
+def __getattr__(name):
+    if name == 'BaseChatBot':
+        from .base import BaseChatBot
+        return BaseChatBot
+    elif name == 'AnthropicChatBot':
+        from .anthropic_bot import AnthropicChatBot
+        return AnthropicChatBot
+    elif name == 'OpenAIChatBot':
+        from .openai_bot import OpenAIChatBot
+        return OpenAIChatBot
+    elif name == 'GoogleChatBot':
+        from .google_bot import GoogleChatBot
+        return GoogleChatBot
+    elif name == 'LlamaChatBot':
+        from .llama_bot import LlamaChatBot
+        return LlamaChatBot
+    elif name == 'DeterministicChatBot':
+        from .deterministic_bot import DeterministicChatBot
+        return DeterministicChatBot
+    elif name == 'create_chatbot':
+        from .factory import create_chatbot
+        return create_chatbot
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 __all__ = [
     # Base class
