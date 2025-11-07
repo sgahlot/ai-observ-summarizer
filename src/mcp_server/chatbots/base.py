@@ -14,7 +14,6 @@ from typing import Optional, List, Dict, Any, Callable
 
 from mcp_server.observability_mcp import ObservabilityMCPServer
 from common.pylogger import get_python_logger
-from core.config import KORREL8R_ENABLED
 
 logger = get_python_logger()
 
@@ -60,123 +59,31 @@ class BaseChatBot(ABC):
         return self.model_name
 
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
-        """Get the base MCP tools that we want to expose."""
-        tools = [
-            {
-                "name": "search_metrics",
-                "description": "Search for Prometheus metrics by pattern (regex supported). Essential for discovering relevant metrics.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Search pattern or regex for metric names (e.g., 'pod', 'gpu', 'memory')"
-                        }
-                    },
-                    "required": ["pattern"]
-                }
-            },
-            {
-                "name": "get_metric_metadata",
-                "description": "Get detailed metadata about a specific metric including type, help text, available labels, and query examples.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "metric_name": {
-                            "type": "string",
-                            "description": "Exact name of the metric to get metadata for"
-                        }
-                    },
-                    "required": ["metric_name"]
-                }
-            },
-            {
-                "name": "execute_promql",
-                "description": "Execute a PromQL query against Prometheus/Thanos and get results. Use this to get actual metric values.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Valid PromQL query to execute (use metrics discovered through search_metrics or find_best_metric tools)"
-                        },
-                        "time_range": {
-                            "type": "string",
-                            "description": "Optional time range (e.g., '5m', '1h', '1d')",
-                            "default": "now"
-                        }
-                    },
-                    "required": ["query"]
-                }
-            },
-            {
-                "name": "get_label_values",
-                "description": "Get all possible values for a specific label across metrics.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "label_name": {
-                            "type": "string",
-                            "description": "Name of the label to get values for (e.g., 'namespace', 'phase', 'job')"
-                        }
-                    },
-                    "required": ["label_name"]
-                }
-            },
-            {
-                "name": "suggest_queries",
-                "description": "Get PromQL query suggestions based on intent or description.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "intent": {
-                            "type": "string",
-                            "description": "What you want to query about the infrastructure (describe in natural language)"
-                        }
-                    },
-                    "required": ["intent"]
-                }
-            },
-            {
-                "name": "explain_results",
-                "description": "Get human-readable explanation of query results and metrics data.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "data": {
-                            "type": "string",
-                            "description": "Query results or metrics data to explain"
-                        }
-                    },
-                    "required": ["data"]
-                }
-            }
-        ]
+        """Get available MCP tools via the interface.
 
-        # Conditionally expose Korrel8r tools
-        if KORREL8R_ENABLED:
-            tools.append({
-                "name": "korrel8r_get_correlated",
-                "description": "Get correlated objects by first listing goal queries then fetching objects for each via Korrel8r.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "goals": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Korrel8r goal classes to correlate. Examples: ['trace:span','log:application','log:infrastructure','metric:metric']"
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": 'Starting Korrel8r domain query (same format as korrel8r_query_objects). Examples: alert:alert:{"alertname":"PodDisruptionBudgetAtLimit"}, k8s:Pod:{"namespace":"llm-serving"}, loki:log:{"kubernetes.namespace_name":"llm-serving","kubernetes.pod_name":"p-abc"}, trace:span:{".k8s.namespace.name":"llm-serving"}'
-                        }
-                    },
-                    "required": ["goals", "query"]
-                }
-            })
-            logger.info("Korrel8r tool added to base MCP tools")
+        Returns:
+            List of tool definitions with name, description, and input_schema
+        """
+        try:
+            # Get tools from MCP tools interface
+            mcp_tools_list = self.mcp_tools.list_tools()
 
-        return tools
+            # Convert to expected format
+            tools = []
+            for mcp_tool in mcp_tools_list:
+                tool_def = {
+                    'name': mcp_tool.name,
+                    'description': mcp_tool.description,
+                    'input_schema': mcp_tool.input_schema
+                }
+                tools.append(tool_def)
+
+            tool_names = [tool['name'] for tool in tools]
+            logger.info(f"🧰 Fetched {len(tools)} tools via MCP interface: {', '.join(tool_names)}")
+            return tools
+        except Exception as e:
+            logger.error(f"Error fetching tools from MCP server: {e}")
+            raise
 
     def _normalize_korrel8r_query(self, q: str) -> str:
         """Normalize common Korrel8r query issues for AI-provided inputs.
@@ -229,6 +136,8 @@ class BaseChatBot(ABC):
 
     def _route_tool_call_to_mcp(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """Route tool call to our MCP server with optional korrel8r query normalization."""
+        logger.info(f"⚙️ Executing tool '{tool_name}' with args: {arguments}")
+
         # Normalize Korrel8r query inputs when needed before calling MCP
         if tool_name == "korrel8r_get_correlated":
             try:
@@ -266,8 +175,11 @@ class BaseChatBot(ABC):
             result = mcp_client.call_tool_sync(tool_name, arguments)
 
             if result and len(result) > 0:
-                return result[0]['text']
+                result_text = result[0]['text']
+                logger.info(f"✅ Tool {tool_name} returned result (length: {len(result_text)} chars)")
+                return result_text
             else:
+                logger.info(f"✅ Tool {tool_name} returned no results")
                 return f"No results returned from {tool_name}"
 
         except Exception as e:
@@ -295,13 +207,22 @@ class BaseChatBot(ABC):
         Returns:
             Tool result, truncated if it exceeds max length
         """
+        # Log tool request with arguments
+        logger.info(f"🔧 Requesting tool: {tool_name} with args: {tool_args}")
+
         # Route to MCP server
         tool_result = self._route_tool_call_to_mcp(tool_name, tool_args)
+
+        # Log result preview
+        logger.info(f"📬 Returning result for tool {tool_name}: {str(tool_result)[:200]}...")
 
         # Truncate large results to prevent context overflow
         max_length = self._get_max_tool_result_length()
         if isinstance(tool_result, str) and len(tool_result) > max_length:
+            logger.info(f"✂️ Truncating result from {len(tool_result)} to {max_length} chars")
             tool_result = tool_result[:max_length] + "\n... [Result truncated due to size]"
+        else:
+            logger.info(f"📦 Tool result size: {len(str(tool_result))} chars (within limit of {max_length})")
 
         return tool_result
 
@@ -339,13 +260,41 @@ You have access to monitoring tools and should provide focused, targeted respons
 - Scope: {namespace if namespace else 'Cluster-wide analysis'}
 - Tools: Direct access to Prometheus/Thanos metrics via MCP tools
 
-**Available Tools:**
+**Core Observability Tools:**
 - search_metrics: Pattern-based metric search - use for broad exploration
 - execute_promql: Execute PromQL queries for actual data
 - get_metric_metadata: Get detailed information about specific metrics
 - get_label_values: Get available label values
 - suggest_queries: Get PromQL suggestions based on user intent
 - explain_results: Get human-readable explanation of query results
+
+**Correlation & Advanced Analysis:**
+- korrel8r_query_objects: Query for specific observability objects (alerts, logs, traces, metrics) - available if Korrel8r is configured
+- korrel8r_get_correlated: Get correlated observability data across domains (find logs/traces/metrics related to alerts) - available if Korrel8r is configured
+
+**Note:** Additional specialized tools are available for specific use cases (VLLM metrics, OpenShift analysis, model management, etc.) and will be provided to you automatically via the function calling interface when needed.
+
+**🚨 CRITICAL: Tool Selection for Alert Queries:**
+
+**Smart Two-Phase Approach:**
+- Start with Prometheus (fast, simple) for basic alert data
+- Escalate to Korrel8r only when needed for correlation or explicitly requested
+
+**1. USER EXPLICITLY REQUESTS KORREL8r ("use korrel8r", "query korrel8r")**:
+   - ALWAYS use Korrel8r tools immediately (korrel8r_query_objects or korrel8r_get_correlated)
+   - Query format: `alert:alert:{{\"alertname\":\"AlertName\"}}`
+   - Examples: "Use korrel8r to investigate AlertExampleDown", "Query korrel8r for HighCPU alert"
+
+**2. USER ASKS FOR INVESTIGATION/CORRELATION** (without mentioning korrel8r):
+   - Phase 1: Use `execute_promql` with ALERTS metric to get alert details
+   - Phase 2: Use Korrel8r to find related logs/traces/metrics
+   - Examples: "Investigate AlertExampleDown", "What's related to HighCPU alert?", "Find correlated data for alert X"
+
+**3. BASIC ALERT QUERIES** (listing/checking status only):
+   - Use ONLY `execute_promql` with the `ALERTS` metric - DO NOT use Korrel8r
+   - Query firing alerts: `ALERTS{{alertstate="firing"}}`
+   - Query specific alerts: `ALERTS{{alertstate="firing", alertname="HighCPU"}}`
+   - Examples: "Any alerts firing?", "Show me alerts", "List all critical alerts", "Check alert status"
 
 **🧠 Your Intelligence Style:**
 

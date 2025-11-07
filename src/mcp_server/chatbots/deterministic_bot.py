@@ -7,12 +7,12 @@ that don't have reliable tool calling capabilities (<75% accuracy).
 
 import json
 import re
-import logging
 from typing import Optional, Callable, List, Dict, Any
 
 from .base import BaseChatBot
+from common.pylogger import get_python_logger
 
-logger = logging.getLogger(__name__)
+logger = get_python_logger()
 
 
 class DeterministicChatBot(BaseChatBot):

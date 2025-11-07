@@ -5,12 +5,12 @@ This module provides Anthropic Claude-specific implementation using the official
 """
 
 import os
-import logging
 from typing import Optional, Callable
 
 from .base import BaseChatBot
+from common.pylogger import get_python_logger
 
-logger = logging.getLogger(__name__)
+logger = get_python_logger()
 
 
 class AnthropicChatBot(BaseChatBot):

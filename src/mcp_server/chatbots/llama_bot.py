@@ -5,13 +5,13 @@ This module provides Llama-specific implementation using LlamaStack's OpenAI-com
 """
 
 import json
-import logging
 from typing import Optional, Callable, List, Dict, Any
 
 from .base import BaseChatBot
 from core.config import LLAMA_STACK_URL, LLM_API_TOKEN
+from common.pylogger import get_python_logger
 
-logger = logging.getLogger(__name__)
+logger = get_python_logger()
 
 
 class LlamaChatBot(BaseChatBot):

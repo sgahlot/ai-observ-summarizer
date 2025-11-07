@@ -6,12 +6,12 @@ This module provides OpenAI GPT-specific implementation using the official SDK.
 
 import os
 import json
-import logging
 from typing import Optional, Callable, List, Dict, Any
 
 from .base import BaseChatBot
+from common.pylogger import get_python_logger
 
-logger = logging.getLogger(__name__)
+logger = get_python_logger()
 
 
 class OpenAIChatBot(BaseChatBot):
