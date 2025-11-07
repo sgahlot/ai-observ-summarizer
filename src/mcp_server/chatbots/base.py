@@ -59,30 +59,40 @@ class BaseChatBot(ABC):
         return self.model_name
 
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
-        """Get available MCP tools via the interface.
+        """Get available MCP tools dynamically from the MCP server.
 
         Returns:
             List of tool definitions with name, description, and input_schema
         """
         try:
-            # Get tools from MCP tools interface
-            mcp_tools_list = self.mcp_tools.list_tools()
+            # Access tools directly from the MCP server's tool manager
+            if hasattr(self.mcp_server, 'mcp') and hasattr(self.mcp_server.mcp, '_tool_manager'):
+                tool_manager = self.mcp_server.mcp._tool_manager
+                tools = []
 
-            # Convert to expected format
-            tools = []
-            for mcp_tool in mcp_tools_list:
-                tool_def = {
-                    'name': mcp_tool.name,
-                    'description': mcp_tool.description,
-                    'input_schema': mcp_tool.input_schema
-                }
-                tools.append(tool_def)
+                for tool_name, tool_obj in tool_manager._tools.items():
+                    # Extract metadata from tool object
+                    fn = getattr(tool_obj, 'fn', None)
+                    description = getattr(tool_obj, 'description', '')
+                    input_schema = getattr(tool_obj, 'parameters', {})
 
-            tool_names = [tool['name'] for tool in tools]
-            logger.info(f"🧰 Fetched {len(tools)} tools via MCP interface: {', '.join(tool_names)}")
-            return tools
+                    tool_def = {
+                        'name': tool_name,
+                        'description': description,
+                        'input_schema': input_schema
+                    }
+                    tools.append(tool_def)
+
+                tool_names = [tool['name'] for tool in tools]
+                logger.info(f"🧰 Fetched {len(tools)} tools from MCP server: {', '.join(tool_names)}")
+                return tools
+            else:
+                logger.error("MCP server tool manager not accessible")
+                return []
         except Exception as e:
             logger.error(f"Error fetching tools from MCP server: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise
 
     def _normalize_korrel8r_query(self, q: str) -> str:
