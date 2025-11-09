@@ -9,10 +9,10 @@ import os
 import re
 import logging
 import importlib.util
+import sys
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Callable
 
-from mcp_server.observability_mcp import ObservabilityMCPServer
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -21,16 +21,58 @@ logger = get_python_logger()
 class BaseChatBot(ABC):
     """Base class for all chat bot implementations with common functionality."""
 
-    def __init__(self, model_name: str, api_key: Optional[str] = None):
-        """Initialize base chat bot."""
+    def __init__(self, model_name: str, api_key: Optional[str] = None, mcp_client_helper=None):
+        """Initialize base chat bot.
+
+        Args:
+            model_name: Name of the model to use
+            api_key: API key for the model provider (optional, will be fetched if not provided)
+            mcp_client_helper: MCPClientHelper instance (optional, will be created if not provided)
+        """
         self.model_name = model_name
         # Let each subclass decide how to get its API key
         self.api_key = api_key if api_key is not None else self._get_api_key()
 
-        # Initialize MCP server (our tools)
-        self.mcp_server = ObservabilityMCPServer()
+        # Initialize MCP client helper for tool discovery and execution
+        if mcp_client_helper is None:
+            self.mcp_client = self._create_mcp_client()
+        else:
+            self.mcp_client = mcp_client_helper
 
         logger.info(f"{self.__class__.__name__} initialized with model: {self.model_name}")
+
+    def _create_mcp_client(self):
+        """Create MCP client helper by dynamically importing from UI module.
+
+        Returns:
+            MCPClientHelper instance
+        """
+        try:
+            # Dynamically import mcp_client_helper from UI module
+            # Get path to UI module (assuming chatbots is at src/chatbots and UI is at src/ui)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            ui_path = os.path.join(os.path.dirname(current_dir), 'ui')
+
+            if ui_path not in sys.path:
+                sys.path.insert(0, ui_path)
+
+            try:
+                from mcp_client_helper import MCPClientHelper
+            except ImportError:
+                # Fallback: Load mcp_client_helper directly from file
+                mcp_helper_path = os.path.join(ui_path, 'mcp_client_helper.py')
+                spec = importlib.util.spec_from_file_location("mcp_client_helper", mcp_helper_path)
+                mcp_helper = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mcp_helper)
+                MCPClientHelper = mcp_helper.MCPClientHelper
+
+            logger.info("✅ Successfully imported MCPClientHelper from UI module")
+            return MCPClientHelper()
+        except Exception as e:
+            logger.error(f"Failed to create MCP client: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
 
     @abstractmethod
     def _get_api_key(self) -> Optional[str]:
@@ -59,38 +101,24 @@ class BaseChatBot(ABC):
         return self.model_name
 
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
-        """Get available MCP tools dynamically from the MCP server.
+        """Get available MCP tools dynamically from the MCP server via HTTP.
 
         Returns:
             List of tool definitions with name, description, and input_schema
         """
         try:
-            # Access tools directly from the MCP server's tool manager
-            if hasattr(self.mcp_server, 'mcp') and hasattr(self.mcp_server.mcp, '_tool_manager'):
-                tool_manager = self.mcp_server.mcp._tool_manager
-                tools = []
+            # Fetch tools via HTTP using MCP client helper
+            tools = self.mcp_client.get_available_tools()
 
-                for tool_name, tool_obj in tool_manager._tools.items():
-                    # Extract metadata from tool object
-                    fn = getattr(tool_obj, 'fn', None)
-                    description = getattr(tool_obj, 'description', '')
-                    input_schema = getattr(tool_obj, 'parameters', {})
-
-                    tool_def = {
-                        'name': tool_name,
-                        'description': description,
-                        'input_schema': input_schema
-                    }
-                    tools.append(tool_def)
-
+            if tools:
                 tool_names = [tool['name'] for tool in tools]
-                logger.info(f"🧰 Fetched {len(tools)} tools from MCP server: {', '.join(tool_names)}")
-                return tools
+                logger.info(f"🧰 Fetched {len(tools)} tools via HTTP: {', '.join(tool_names)}")
             else:
-                logger.error("MCP server tool manager not accessible")
-                return []
+                logger.warning("No tools returned from MCP server via HTTP")
+
+            return tools
         except Exception as e:
-            logger.error(f"Error fetching tools from MCP server: {e}")
+            logger.error(f"Error fetching tools from MCP server via HTTP: {e}")
             import traceback
             logger.error(traceback.format_exc())
             raise
@@ -163,26 +191,9 @@ class BaseChatBot(ABC):
                 pass
 
         try:
-            # Import MCP client helper to call our tools
-            import sys
-            ui_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'ui')
-            if ui_path not in sys.path:
-                sys.path.insert(0, ui_path)
-
-            try:
-                from mcp_client_helper import MCPClientHelper
-            except ImportError:
-                # Load mcp_client_helper directly
-                mcp_helper_path = os.path.join(ui_path, 'mcp_client_helper.py')
-                spec = importlib.util.spec_from_file_location("mcp_client_helper", mcp_helper_path)
-                mcp_helper = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mcp_helper)
-                MCPClientHelper = mcp_helper.MCPClientHelper
-
-            mcp_client = MCPClientHelper()
-
-            # Call the tool via MCP (after optional normalization)
-            result = mcp_client.call_tool_sync(tool_name, arguments)
+            # Call the tool via MCP client (after optional normalization)
+            # Use the mcp_client that was initialized in __init__
+            result = self.mcp_client.call_tool_sync(tool_name, arguments)
 
             if result and len(result) > 0:
                 result_text = result[0]['text']

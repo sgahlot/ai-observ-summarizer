@@ -3,7 +3,7 @@ WORKDIR /app
 
 # Copy required dependencies that UI imports (build context is src/)
 COPY core/ /app/core/
-COPY mcp_server/ /app/mcp_server/
+COPY chatbots/ /app/chatbots/
 COPY common/ /app/common/
 
 # Copy UI specific files

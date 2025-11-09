@@ -186,7 +186,7 @@ start_port_forwards() {
     create_port_forward "$TEMPO_SERVICE" "$TEMPO_PORT" "8080" "$OBSERVABILITY_NAMESPACE" "Tempo" "🔍"
 
     # Find Korrel8r service (optional - may not be deployed)
-    KORREL8R_SERVICE=$(oc get services -n "$KORREL8R_NAMESPACE" -o name -l 'app.kubernetes.io/instance=korrel8r' 2>/dev/null | head -1)
+    KORREL8R_SERVICE=$(oc get services -n "$KORREL8R_NAMESPACE" -o name -l 'app.kubernetes.io/name=korrel8r' 2>/dev/null | head -1)
     create_port_forward "$KORREL8R_SERVICE" "$KORREL8R_PORT" "9443" "$KORREL8R_NAMESPACE" "Korrel8r" "🔗" "true"
 
     sleep 3  # Give port-forwards time to establish

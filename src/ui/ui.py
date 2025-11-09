@@ -67,19 +67,16 @@ except Exception:
 # Multi-model chatbot support - Direct import with robust fallbacks
 try:
     # Try direct import first (works in container with proper package structure)
-    from mcp_server.chatbots import create_chatbot
+    from chatbots import create_chatbot
 except ImportError:
-    # Fallback: Add both parent paths to ensure relative imports work
+    # Fallback: Add parent path to ensure imports work
     src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    mcp_server_path = os.path.join(src_path, 'mcp_server')
 
     if src_path not in sys.path:
         sys.path.insert(0, src_path)
-    if mcp_server_path not in sys.path:
-        sys.path.insert(0, mcp_server_path)
 
     try:
-        from mcp_server.chatbots import create_chatbot
+        from chatbots import create_chatbot
     except ImportError:
         # If package imports fail, create dummy factory function
         def create_chatbot(model_name: str, api_key=None):

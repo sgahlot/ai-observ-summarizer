@@ -130,6 +130,76 @@ class MCPClientHelper:
                 return content_list
             return []
 
+    async def _get_available_tools_async(self) -> List[Dict[str, Any]]:
+        """Async method to fetch available tools from MCP server.
+
+        Returns:
+            List of tool definitions with name, description, and input_schema
+        """
+        try:
+            # Ensure site-packages is in path
+            site_paths: List[str] = []
+            try:
+                site_paths.extend(site.getsitepackages())  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                user_site = site.getusersitepackages()
+                if isinstance(user_site, str):
+                    site_paths.append(user_site)
+            except Exception:
+                pass
+            for p in reversed([p for p in site_paths if p and p not in sys.path]):
+                sys.path.insert(0, p)
+        except Exception:
+            pass
+
+        # Import fastmcp lazily
+        import importlib
+        fastmcp_module = importlib.import_module("fastmcp")
+        Client = fastmcp_module.Client
+
+        client = Client(self.config)
+        async with client:
+            tools = await client.list_tools()
+            tool_list = []
+            for tool in tools:
+                tool_def = {
+                    'name': tool.name,
+                    'description': tool.description,
+                    'input_schema': tool.inputSchema
+                }
+                tool_list.append(tool_def)
+            logger.info(f"🧰 Fetched {len(tool_list)} tools from MCP server via HTTP")
+            return tool_list
+
+    def get_available_tools(self) -> List[Dict[str, Any]]:
+        """Get available tools from MCP server (sync wrapper).
+
+        Returns:
+            List of tool definitions with name, description, and input_schema
+        """
+        try:
+            return asyncio.run(self._get_available_tools_async())
+        except RuntimeError:
+            # Handle "asyncio.run() cannot be called from a running event loop"
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    return loop.run_until_complete(self._get_available_tools_async())
+                finally:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
+            except Exception as inner_e:
+                logger.error(f"Error getting available tools with new event loop: {inner_e}")
+                return []
+        except Exception as e:
+            logger.error(f"Error getting available tools: {e}")
+            return []
+
     def call_tool_sync(self, tool_name: str, parameters: Dict[str, Any] = None) -> Any:
         """Sync wrapper for Streamlit - runs the async fastmcp call."""
         try:
