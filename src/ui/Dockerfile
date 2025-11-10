@@ -9,6 +9,7 @@ COPY common/ /app/common/
 # Copy UI specific files
 COPY ui/ui.py .
 COPY ui/mcp_client_helper.py .
+COPY ui/mcp_client_adapter.py .
 COPY ui/error_handler.py .
 COPY ui/requirements.txt .
 

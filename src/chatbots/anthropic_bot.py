@@ -24,8 +24,8 @@ class AnthropicChatBot(BaseChatBot):
         """Claude supports 200K token context - 15K chars is reasonable."""
         return 15000
 
-    def __init__(self, model_name: str, api_key: Optional[str] = None):
-        super().__init__(model_name, api_key)
+    def __init__(self, model_name: str, api_key: Optional[str], tool_client):
+        super().__init__(model_name, api_key, tool_client)
 
         # Import Anthropic SDK
         try:

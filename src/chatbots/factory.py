@@ -13,29 +13,44 @@ from .openai_bot import OpenAIChatBot
 from .google_bot import GoogleChatBot
 from .llama_bot import LlamaChatBot
 from .deterministic_bot import DeterministicChatBot
+from .tool_client_interface import ToolClientInterface
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
 
 
-def create_chatbot(model_name: str, api_key: Optional[str] = None) -> BaseChatBot:
+def create_chatbot(
+    model_name: str,
+    api_key: Optional[str] = None,
+    tool_client: ToolClientInterface = None
+) -> BaseChatBot:
     """
     Factory function to create the appropriate chatbot based on model capabilities.
 
     Args:
         model_name: Name of the model to use
         api_key: Optional API key for external models
+        tool_client: ToolClientInterface implementation for tool operations (REQUIRED)
 
     Returns:
         Instance of the appropriate chatbot class
 
+    Raises:
+        TypeError: If tool_client is None
+
     Examples:
-        >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...")
+        >>> from mcp_client_adapter import MCPClientAdapter
+        >>> tool_client = MCPClientAdapter()
+        >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...", tool_client=tool_client)
         >>> response = chatbot.chat("What's the CPU usage?")
 
-        >>> chatbot = create_chatbot("meta-llama/Llama-3.1-8B-Instruct")
+        >>> chatbot = create_chatbot("meta-llama/Llama-3.1-8B-Instruct", tool_client=tool_client)
         >>> response = chatbot.chat("Check memory usage")
     """
+    if tool_client is None:
+        raise TypeError(
+            "tool_client is required. Please pass an implementation of ToolClientInterface."
+        )
     # Detect provider from model name pattern using dict mapping
     PROVIDER_PATTERNS = {
         "anthropic": [("anthropic/", False), ("claude", False)],
@@ -60,16 +75,16 @@ def create_chatbot(model_name: str, api_key: Optional[str] = None) -> BaseChatBo
     if is_external:
         if provider == "anthropic":
             logger.info(f"Creating AnthropicChatBot for {model_name}")
-            return AnthropicChatBot(model_name, api_key)
+            return AnthropicChatBot(model_name, api_key, tool_client)
         elif provider == "openai":
             logger.info(f"Creating OpenAIChatBot for {model_name}")
-            return OpenAIChatBot(model_name, api_key)
+            return OpenAIChatBot(model_name, api_key, tool_client)
         elif provider == "google":
             logger.info(f"Creating GoogleChatBot for {model_name}")
-            return GoogleChatBot(model_name, api_key)
+            return GoogleChatBot(model_name, api_key, tool_client)
         else:
             logger.warning(f"Unknown external provider {provider}, using OpenAI as fallback")
-            return OpenAIChatBot(model_name, api_key)
+            return OpenAIChatBot(model_name, api_key, tool_client)
     else:
         # Local models - detect Llama version and create appropriate bot
         LLAMA_MODEL_PATTERNS = {
@@ -84,8 +99,8 @@ def create_chatbot(model_name: str, api_key: Optional[str] = None) -> BaseChatBo
             if model_pattern in model_lower:
                 if sizes is None or any(size in model_lower for size in sizes):
                     logger.info(f"Creating {bot_class.__name__} for {model_name} ({model_capability})")
-                    return bot_class(model_name, api_key)
+                    return bot_class(model_name, api_key, tool_client)
 
         # Unknown local models - use deterministic parsing for safety
         logger.info(f"Creating DeterministicChatBot for {model_name} (unknown capability - using deterministic parsing)")
-        return DeterministicChatBot(model_name, api_key)
+        return DeterministicChatBot(model_name, api_key, tool_client)

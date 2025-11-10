@@ -8,12 +8,11 @@ All provider-specific implementations inherit from BaseChatBot.
 import os
 import re
 import logging
-import importlib.util
-import sys
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Callable
 
 from common.pylogger import get_python_logger
+from .tool_client_interface import ToolClientInterface
 
 logger = get_python_logger()
 
@@ -21,58 +20,35 @@ logger = get_python_logger()
 class BaseChatBot(ABC):
     """Base class for all chat bot implementations with common functionality."""
 
-    def __init__(self, model_name: str, api_key: Optional[str] = None, mcp_client_helper=None):
+    def __init__(self, model_name: str, api_key: Optional[str], tool_client: ToolClientInterface):
         """Initialize base chat bot.
 
         Args:
             model_name: Name of the model to use
-            api_key: API key for the model provider (optional, will be fetched if not provided)
-            mcp_client_helper: MCPClientHelper instance (optional, will be created if not provided)
+            api_key: API key for the model provider (None if not needed)
+            tool_client: Implementation of ToolClientInterface for tool operations (REQUIRED)
+
+        Raises:
+            TypeError: If tool_client is None or doesn't implement ToolClientInterface
         """
+        if tool_client is None:
+            raise TypeError(
+                "tool_client is required. Please pass an implementation of ToolClientInterface."
+            )
+
+        if not isinstance(tool_client, ToolClientInterface):
+            raise TypeError(
+                f"tool_client must implement ToolClientInterface, got {type(tool_client)}"
+            )
+
         self.model_name = model_name
         # Let each subclass decide how to get its API key
         self.api_key = api_key if api_key is not None else self._get_api_key()
 
-        # Initialize MCP client helper for tool discovery and execution
-        if mcp_client_helper is None:
-            self.mcp_client = self._create_mcp_client()
-        else:
-            self.mcp_client = mcp_client_helper
+        # Store tool client interface (dependency injection)
+        self.tool_client = tool_client
 
         logger.info(f"{self.__class__.__name__} initialized with model: {self.model_name}")
-
-    def _create_mcp_client(self):
-        """Create MCP client helper by dynamically importing from UI module.
-
-        Returns:
-            MCPClientHelper instance
-        """
-        try:
-            # Dynamically import mcp_client_helper from UI module
-            # Get path to UI module (assuming chatbots is at src/chatbots and UI is at src/ui)
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            ui_path = os.path.join(os.path.dirname(current_dir), 'ui')
-
-            if ui_path not in sys.path:
-                sys.path.insert(0, ui_path)
-
-            try:
-                from mcp_client_helper import MCPClientHelper
-            except ImportError:
-                # Fallback: Load mcp_client_helper directly from file
-                mcp_helper_path = os.path.join(ui_path, 'mcp_client_helper.py')
-                spec = importlib.util.spec_from_file_location("mcp_client_helper", mcp_helper_path)
-                mcp_helper = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mcp_helper)
-                MCPClientHelper = mcp_helper.MCPClientHelper
-
-            logger.info("✅ Successfully imported MCPClientHelper from UI module")
-            return MCPClientHelper()
-        except Exception as e:
-            logger.error(f"Failed to create MCP client: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            raise
 
     @abstractmethod
     def _get_api_key(self) -> Optional[str]:
@@ -101,24 +77,24 @@ class BaseChatBot(ABC):
         return self.model_name
 
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
-        """Get available MCP tools dynamically from the MCP server via HTTP.
+        """Get available tools via tool client interface.
 
         Returns:
             List of tool definitions with name, description, and input_schema
         """
         try:
-            # Fetch tools via HTTP using MCP client helper
-            tools = self.mcp_client.get_available_tools()
+            # Fetch tools via tool client interface (dependency injection)
+            tools = self.tool_client.get_available_tools()
 
             if tools:
                 tool_names = [tool['name'] for tool in tools]
-                logger.info(f"🧰 Fetched {len(tools)} tools via HTTP: {', '.join(tool_names)}")
+                logger.info(f"🧰 Fetched {len(tools)} tools via interface: {', '.join(tool_names)}")
             else:
-                logger.warning("No tools returned from MCP server via HTTP")
+                logger.warning("No tools returned from tool client")
 
             return tools
         except Exception as e:
-            logger.error(f"Error fetching tools from MCP server via HTTP: {e}")
+            logger.error(f"Error fetching tools via interface: {e}")
             import traceback
             logger.error(traceback.format_exc())
             raise
@@ -173,10 +149,10 @@ class BaseChatBot(ABC):
             return q
 
     def _route_tool_call_to_mcp(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Route tool call to our MCP server with optional korrel8r query normalization."""
+        """Route tool call via tool client interface with optional korrel8r query normalization."""
         logger.info(f"⚙️ Executing tool '{tool_name}' with args: {arguments}")
 
-        # Normalize Korrel8r query inputs when needed before calling MCP
+        # Normalize Korrel8r query inputs when needed before calling tool
         if tool_name == "korrel8r_get_correlated":
             try:
                 q = arguments.get("query") if isinstance(arguments, dict) else None
@@ -191,9 +167,8 @@ class BaseChatBot(ABC):
                 pass
 
         try:
-            # Call the tool via MCP client (after optional normalization)
-            # Use the mcp_client that was initialized in __init__
-            result = self.mcp_client.call_tool_sync(tool_name, arguments)
+            # Call the tool via tool client interface (dependency injection)
+            result = self.tool_client.call_tool(tool_name, arguments)
 
             if result and len(result) > 0:
                 result_text = result[0]['text']
