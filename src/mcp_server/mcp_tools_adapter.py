@@ -1,8 +1,8 @@
 """
 MCP Server Adapter for Chatbots
 
-This module provides an adapter that implements MCPToolsInterface for use in the MCP server process.
-It wraps the ObservabilityMCPServer instance to provide tool calling functionality to chatbots.
+This module provides an adapter that implements ToolExecutor for use in the MCP server process.
+It wraps the ObservabilityMCPServer instance to provide tool execution functionality to chatbots.
 """
 
 import asyncio
@@ -10,19 +10,20 @@ from typing import Dict, Any, List
 
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chatbots.mcp_tools_interface import MCPToolsInterface, MCPTool
+from chatbots.tool_executor import ToolExecutor, MCPTool
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
 
 
-class MCPServerAdapter(MCPToolsInterface):
-    """Adapter for calling MCP tools directly in the MCP server process.
+class MCPServerAdapter(ToolExecutor):
+    """Adapter for executing MCP tools directly in the MCP server process.
 
     This adapter wraps an ObservabilityMCPServer instance and provides
-    the MCPToolsInterface for chatbots to call tools.
+    the ToolExecutor interface for chatbots to execute tools.
     """
 
     def __init__(self, mcp_server):
@@ -106,9 +107,11 @@ class MCPServerAdapter(MCPToolsInterface):
                 )
                 mcp_tools.append(mcp_tool)
 
-            logger.info(f"✅ MCPServerAdapter found {len(mcp_tools)} tools")
+            logger.info(f"✅ MCPServerAdapter found {len(mcp_tools)} MCP tools")
             return mcp_tools
 
         except Exception as e:
-            logger.error(f"❌ Error listing tools: {e}")
+            logger.error(f"❌ Error listing MCP tools: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []

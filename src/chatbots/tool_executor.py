@@ -1,7 +1,7 @@
 """
-MCP Tools Interface - Abstract interface for chatbots to call tools.
+Tool Executor Interface - Abstract interface for chatbots to execute tools.
 
-This interface allows chatbots to call MCP tools without depending on
+This interface allows chatbots to execute tools without depending on
 whether they're running in the MCP server process or in a client process.
 
 Implementations:
@@ -14,7 +14,7 @@ from typing import Dict, Any, List, Optional
 
 
 class MCPTool:
-    """Represents an MCP tool with metadata."""
+    """Represents a tool with metadata."""
 
     def __init__(self, name: str, description: str, input_schema: Dict[str, Any]):
         self.name = name
@@ -22,16 +22,16 @@ class MCPTool:
         self.input_schema = input_schema
 
 
-class MCPToolsInterface(ABC):
-    """Abstract interface for calling MCP tools.
+class ToolExecutor(ABC):
+    """Abstract interface for executing tools.
 
-    This allows chatbots to call tools without knowing whether they're
+    This allows chatbots to execute tools without knowing whether they're
     running in the MCP server process or as a client.
     """
 
     @abstractmethod
     def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Call an MCP tool and return the result as a string.
+        """Execute a tool and return the result as a string.
 
         Args:
             tool_name: Name of the tool to call
@@ -48,7 +48,7 @@ class MCPToolsInterface(ABC):
 
     @abstractmethod
     def list_tools(self) -> List[MCPTool]:
-        """List all available MCP tools.
+        """List all available tools.
 
         Returns:
             List of MCPTool objects

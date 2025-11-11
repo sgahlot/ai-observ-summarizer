@@ -32,6 +32,9 @@ def __getattr__(name):
     if name == 'BaseChatBot':
         from .base import BaseChatBot
         return BaseChatBot
+    elif name == 'ToolExecutor':
+        from .tool_executor import ToolExecutor
+        return ToolExecutor
     elif name == 'AnthropicChatBot':
         from .anthropic_bot import AnthropicChatBot
         return AnthropicChatBot
@@ -53,8 +56,9 @@ def __getattr__(name):
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 __all__ = [
-    # Base class
+    # Base class and interface
     'BaseChatBot',
+    'ToolExecutor',
 
     # Provider-specific implementations
     'AnthropicChatBot',

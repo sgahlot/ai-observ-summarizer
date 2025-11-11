@@ -10,7 +10,7 @@ import re
 from typing import Optional, List, Dict, Any, Callable
 
 from .base import BaseChatBot
-from chatbots.mcp_tools_interface import MCPToolsInterface
+from chatbots.tool_executor import ToolExecutor
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -23,8 +23,8 @@ class DeterministicChatBot(BaseChatBot):
         self,
         model_name: str,
         api_key: Optional[str] = None,
-        mcp_tools: MCPToolsInterface = None):
-        super().__init__(model_name, api_key, mcp_tools)
+        tool_executor: ToolExecutor = None):
+        super().__init__(model_name, api_key, tool_executor)
 
     def _get_api_key(self) -> Optional[str]:
         """Local models don't require API keys."""

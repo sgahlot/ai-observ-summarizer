@@ -8,7 +8,7 @@ import json
 from typing import Optional, List, Dict, Any, Callable
 
 from .base import BaseChatBot
-from chatbots.mcp_tools_interface import MCPToolsInterface
+from chatbots.tool_executor import ToolExecutor
 from core.config import LLAMA_STACK_URL, LLM_API_TOKEN
 from common.pylogger import get_python_logger
 
@@ -37,9 +37,9 @@ class LlamaChatBot(BaseChatBot):
         self,
         model_name: str,
         api_key: Optional[str] = None,
-        mcp_tools: MCPToolsInterface = None
+        tool_executor: ToolExecutor = None
     ):
-        super().__init__(model_name, api_key, mcp_tools)
+        super().__init__(model_name, api_key, tool_executor)
 
         # Import OpenAI SDK (LlamaStack is OpenAI-compatible)
         try:

@@ -8,7 +8,7 @@ based on model capabilities and provider.
 from typing import Optional
 
 from .base import BaseChatBot
-from .mcp_tools_interface import MCPToolsInterface
+from .tool_executor import ToolExecutor
 from .anthropic_bot import AnthropicChatBot
 from .openai_bot import OpenAIChatBot
 from .google_bot import GoogleChatBot
@@ -22,7 +22,7 @@ logger = get_python_logger()
 def create_chatbot(
     model_name: str,
     api_key: Optional[str] = None,
-    mcp_tools: MCPToolsInterface = None
+    tool_executor: ToolExecutor = None
 ) -> BaseChatBot:
     """
     Factory function to create the appropriate chatbot based on model capabilities.
@@ -30,23 +30,23 @@ def create_chatbot(
     Args:
         model_name: Name of the model to use
         api_key: Optional API key for external models
-        mcp_tools: MCP tools interface for calling observability tools (required)
+        tool_executor: Tool executor for calling observability tools (required)
 
     Returns:
         Instance of the appropriate chatbot class
 
     Examples:
         >>> from mcp_server.mcp_tools_adapter import MCPServerAdapter
-        >>> mcp_tools = MCPServerAdapter(mcp_server)
-        >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...", mcp_tools=mcp_tools)
+        >>> tool_executor = MCPServerAdapter(mcp_server)
+        >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...", tool_executor=tool_executor)
         >>> response = chatbot.chat("What's the CPU usage?")
 
-        >>> chatbot = create_chatbot("meta-llama/Llama-3.1-8B-Instruct", mcp_tools=mcp_tools)
+        >>> chatbot = create_chatbot("meta-llama/Llama-3.1-8B-Instruct", tool_executor=tool_executor)
         >>> response = chatbot.chat("Check memory usage")
     """
-    if mcp_tools is None:
+    if tool_executor is None:
         raise ValueError(
-            "mcp_tools is required. Pass an MCPToolsInterface implementation "
+            "tool_executor is required. Pass a ToolExecutor implementation "
             "(MCPServerAdapter from MCP server or MCPClientAdapter from UI)"
         )
     
@@ -74,16 +74,16 @@ def create_chatbot(
     if is_external:
         if provider == "anthropic":
             logger.info(f"Creating AnthropicChatBot for {model_name}")
-            return AnthropicChatBot(model_name, api_key, mcp_tools)
+            return AnthropicChatBot(model_name, api_key, tool_executor)
         elif provider == "openai":
             logger.info(f"Creating OpenAIChatBot for {model_name}")
-            return OpenAIChatBot(model_name, api_key, mcp_tools)
+            return OpenAIChatBot(model_name, api_key, tool_executor)
         elif provider == "google":
             logger.info(f"Creating GoogleChatBot for {model_name}")
-            return GoogleChatBot(model_name, api_key, mcp_tools)
+            return GoogleChatBot(model_name, api_key, tool_executor)
         else:
             logger.warning(f"Unknown external provider {provider}, using OpenAI as fallback")
-            return OpenAIChatBot(model_name, api_key, mcp_tools)
+            return OpenAIChatBot(model_name, api_key, tool_executor)
     else:
         # Local models - detect Llama version and create appropriate bot
         LLAMA_MODEL_PATTERNS = {
@@ -99,8 +99,8 @@ def create_chatbot(
             if model in model_lower:
                 if sizes is None or any(size in model_lower for size in sizes):
                     logger.info(f"Creating {bot_class.__name__} for {model_name} ({model_capability})")
-                    return bot_class(model_name, api_key, mcp_tools)
+                    return bot_class(model_name, api_key, tool_executor)
 
         # Unknown local models - use deterministic parsing for safety
         logger.info(f"Creating DeterministicChatBot for {model_name} (unknown capability - using deterministic parsing)")
-        return DeterministicChatBot(model_name, api_key, mcp_tools)
+        return DeterministicChatBot(model_name, api_key, tool_executor)

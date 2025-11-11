@@ -36,22 +36,6 @@ except ImportError as e:
 server = ObservabilityMCPServer()
 
 
-# === CHAT ENDPOINT MODELS ===
-
-class ChatRequest(BaseModel):
-    """Request model for chat endpoint"""
-    model_name: str
-    api_key: Optional[str] = None
-    message: str
-    namespace: Optional[str] = None
-
-
-class ChatResponse(BaseModel):
-    """Response model for chat endpoint"""
-    response: str
-    model: str
-
-
 # Select transport protocol
 if settings.MCP_TRANSPORT_PROTOCOL == "sse":
     from fastmcp.server.http import create_sse_app  # type: ignore
@@ -83,8 +67,7 @@ async def health_check():
             "service": "observability-mcp-server",
             "transport_protocol": settings.MCP_TRANSPORT_PROTOCOL,
             "mcp_endpoint": "/mcp",
-            "report_endpoints": ["POST /generate_report", "GET /download_report/{report_id}"],
-            "chat_endpoint": "POST /v1/chat"
+            "report_endpoints": ["POST /generate_report", "GET /download_report/{report_id}"]
         },
     )
 
@@ -152,53 +135,6 @@ def generate_report(request: ReportRequest):
     except Exception as e:
         # Handle any other exceptions
         raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
-
-
-# === CHAT ENDPOINT ===
-
-@app.post("/v1/chat", response_model=ChatResponse)
-async def chat_with_llm(request: ChatRequest):
-    """
-    Chat endpoint that handles chatbot initialization and execution.
-
-    This endpoint:
-    1. Creates appropriate chatbot based on model_name
-    2. Executes the chat query (chatbot accesses MCP tools directly)
-    3. Returns the response
-
-    Note: Chatbots access MCP server directly via self.mcp_server (no tool_executor needed).
-    """
-    try:
-        from chatbots import create_chatbot
-
-        logger.info(f"Chat request received for model: {request.model_name}")
-
-        # Create chatbot (no tool_executor needed - uses self.mcp_server directly)
-        chatbot = create_chatbot(
-            model_name=request.model_name,
-            api_key=request.api_key
-        )
-
-        logger.info(f"Initialized {request.model_name} chatbot for chat request")
-
-        # Execute chat (LLM calls happen here in MCP Server)
-        logger.info(f"Calling chatbot.chat() with message: {request.message[:100]}")
-
-        response = chatbot.chat(
-            user_question=request.message,
-            namespace=request.namespace
-        )
-
-        logger.info(f"Chat completed, response length: {len(response)}")
-
-        return ChatResponse(
-            response=response,
-            model=request.model_name
-        )
-
-    except Exception as e:
-        logger.error(f"Error in chat endpoint: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # === CRITICAL: MCP app must be mounted LAST ===

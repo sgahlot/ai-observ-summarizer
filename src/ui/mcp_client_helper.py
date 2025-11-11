@@ -1299,15 +1299,15 @@ def chat_with_ai_direct(
         logger.info(f"💬 Creating chatbot for model: {model_name}")
 
         # Create MCP client adapter using our existing MCP client session
-        # The adapter wraps the MCP session to implement MCPToolsInterface
+        # The adapter wraps the MCP session to implement ToolExecutor
         mcp_session = mcp_client  # Use existing MCPClientHelper instance
-        mcp_tools = MCPClientAdapter(mcp_session)
+        tool_executor = MCPClientAdapter(mcp_session)
 
-        # Create chatbot with MCP tools adapter
+        # Create chatbot with tool executor
         chatbot = create_chatbot(
             model_name=model_name,
             api_key=api_key,
-            mcp_tools=mcp_tools
+            tool_executor=tool_executor
         )
 
         logger.info(f"✅ Created {chatbot.__class__.__name__}")

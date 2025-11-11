@@ -8,7 +8,7 @@ import os
 from typing import Optional, Callable
 
 from .base import BaseChatBot
-from chatbots.mcp_tools_interface import MCPToolsInterface
+from chatbots.tool_executor import ToolExecutor
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -29,8 +29,8 @@ class AnthropicChatBot(BaseChatBot):
         self,
         model_name: str,
         api_key: Optional[str] = None,
-        mcp_tools: MCPToolsInterface = None):
-        super().__init__(model_name, api_key, mcp_tools)
+        tool_executor: ToolExecutor = None):
+        super().__init__(model_name, api_key, tool_executor)
 
         # Import Anthropic SDK
         try:

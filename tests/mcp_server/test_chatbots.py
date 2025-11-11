@@ -15,10 +15,10 @@ from unittest.mock import Mock, patch, MagicMock
 
 @pytest.fixture
 def mock_mcp_tools():
-    """Mock MCP tools interface for testing."""
-    from chatbots.mcp_tools_interface import MCPToolsInterface, MCPTool
+    """Mock tool executor for testing."""
+    from chatbots.tool_executor import ToolExecutor, MCPTool
 
-    class MockMCPTools(MCPToolsInterface):
+    class MockToolExecutor(ToolExecutor):
         def __init__(self):
             self.tools = [
                 MCPTool("execute_promql", "Execute PromQL query", {
@@ -47,7 +47,7 @@ def mock_mcp_tools():
                     return tool
             return None
 
-    return MockMCPTools()
+    return MockToolExecutor()
 
 
 # Test model name constants - Provider prefixes
@@ -107,7 +107,7 @@ def test_factory_creates_llama_bot(mock_mcp_tools):
     """Test that factory creates LlamaChatBot for Llama 3.1 models."""
     from chatbots import create_chatbot, LlamaChatBot
 
-    bot = create_chatbot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+    bot = create_chatbot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
     assert isinstance(bot, LlamaChatBot)
     assert bot.model_name == LLAMA_3_1_8B
 
@@ -116,7 +116,7 @@ def test_factory_creates_deterministic_bot(mock_mcp_tools):
     """Test that factory creates DeterministicChatBot for Llama 3.2 models."""
     from chatbots import create_chatbot, DeterministicChatBot
 
-    bot = create_chatbot(LLAMA_3_2_3B, mcp_tools=mock_mcp_tools)
+    bot = create_chatbot(LLAMA_3_2_3B, tool_executor=mock_mcp_tools)
     assert isinstance(bot, DeterministicChatBot)
     assert bot.model_name == LLAMA_3_2_3B
 
@@ -126,7 +126,7 @@ def test_factory_creates_anthropic_bot(mock_mcp_tools):
     from chatbots import create_chatbot, AnthropicChatBot
 
     # Factory determines bot type based on model name patterns
-    bot = create_chatbot(CLAUDE_HAIKU_WITH_PROVIDER, api_key="test-key", mcp_tools=mock_mcp_tools)
+    bot = create_chatbot(CLAUDE_HAIKU_WITH_PROVIDER, api_key="test-key", tool_executor=mock_mcp_tools)
     assert isinstance(bot, AnthropicChatBot)
 
 
@@ -135,7 +135,7 @@ def test_factory_creates_openai_bot(mock_mcp_tools):
     from chatbots import create_chatbot, OpenAIChatBot
 
     # Factory determines bot type based on model name patterns
-    bot = create_chatbot(GPT_4O_MINI_WITH_PROVIDER, api_key="test-key", mcp_tools=mock_mcp_tools)
+    bot = create_chatbot(GPT_4O_MINI_WITH_PROVIDER, api_key="test-key", tool_executor=mock_mcp_tools)
     assert isinstance(bot, OpenAIChatBot)
 
 
@@ -144,7 +144,7 @@ def test_factory_creates_google_bot(mock_mcp_tools):
     from chatbots import create_chatbot, GoogleChatBot
 
     # Factory determines bot type based on model name patterns
-    bot = create_chatbot(GEMINI_FLASH_EXP_WITH_PROVIDER, api_key="test-key", mcp_tools=mock_mcp_tools)
+    bot = create_chatbot(GEMINI_FLASH_EXP_WITH_PROVIDER, api_key="test-key", tool_executor=mock_mcp_tools)
     assert isinstance(bot, GoogleChatBot)
 
 
@@ -156,7 +156,7 @@ class TestAPIKeyRetrieval:
         from chatbots import AnthropicChatBot
 
         with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'test-anthropic-key'}):
-            bot = AnthropicChatBot(CLAUDE_HAIKU, mcp_tools=mock_mcp_tools)
+            bot = AnthropicChatBot(CLAUDE_HAIKU, tool_executor=mock_mcp_tools)
             assert bot._get_api_key() == 'test-anthropic-key'
             assert bot.api_key == 'test-anthropic-key'
 
@@ -165,7 +165,7 @@ class TestAPIKeyRetrieval:
         from chatbots import OpenAIChatBot
 
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-openai-key'}):
-            bot = OpenAIChatBot(GPT_4O_MINI, mcp_tools=mock_mcp_tools)
+            bot = OpenAIChatBot(GPT_4O_MINI, tool_executor=mock_mcp_tools)
             assert bot._get_api_key() == 'test-openai-key'
             assert bot.api_key == 'test-openai-key'
 
@@ -174,7 +174,7 @@ class TestAPIKeyRetrieval:
         from chatbots import GoogleChatBot
 
         with patch.dict(os.environ, {'GOOGLE_API_KEY': 'test-google-key'}):
-            bot = GoogleChatBot(GEMINI_FLASH, mcp_tools=mock_mcp_tools)
+            bot = GoogleChatBot(GEMINI_FLASH, tool_executor=mock_mcp_tools)
             assert bot._get_api_key() == 'test-google-key'
             assert bot.api_key == 'test-google-key'
 
@@ -182,7 +182,7 @@ class TestAPIKeyRetrieval:
         """Test LlamaChatBot returns None for API key (local model)."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         assert bot._get_api_key() is None
         assert bot.api_key is None
 
@@ -190,7 +190,7 @@ class TestAPIKeyRetrieval:
         """Test DeterministicChatBot returns None for API key (local model)."""
         from chatbots import DeterministicChatBot
 
-        bot = DeterministicChatBot(LLAMA_3_2_3B, mcp_tools=mock_mcp_tools)
+        bot = DeterministicChatBot(LLAMA_3_2_3B, tool_executor=mock_mcp_tools)
         assert bot._get_api_key() is None
         assert bot.api_key is None
 
@@ -199,7 +199,7 @@ class TestAPIKeyRetrieval:
         from chatbots import OpenAIChatBot
 
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'env-key'}):
-            bot = OpenAIChatBot(GPT_4O_MINI, api_key="explicit-key", mcp_tools=mock_mcp_tools)
+            bot = OpenAIChatBot(GPT_4O_MINI, api_key="explicit-key", tool_executor=mock_mcp_tools)
             assert bot.api_key == "explicit-key"
 
     def test_openai_bot_can_be_created_without_api_key(self, mock_mcp_tools):
@@ -208,7 +208,7 @@ class TestAPIKeyRetrieval:
 
         # Clear any environment variables
         with patch.dict(os.environ, {}, clear=True):
-            bot = OpenAIChatBot(GPT_4O_MINI, mcp_tools=mock_mcp_tools)
+            bot = OpenAIChatBot(GPT_4O_MINI, tool_executor=mock_mcp_tools)
             assert bot.api_key is None
             assert bot.client is None  # Client should not be created without API key
 
@@ -217,7 +217,7 @@ class TestAPIKeyRetrieval:
         from chatbots import OpenAIChatBot
 
         with patch('openai.OpenAI') as mock_openai_class:
-            bot = OpenAIChatBot(GPT_4O_MINI, api_key="test-key", mcp_tools=mock_mcp_tools)
+            bot = OpenAIChatBot(GPT_4O_MINI, api_key="test-key", tool_executor=mock_mcp_tools)
             assert bot.api_key == "test-key"
             # Verify OpenAI client was instantiated with the API key
             mock_openai_class.assert_called_once_with(api_key="test-key")
@@ -228,7 +228,7 @@ class TestAPIKeyRetrieval:
 
         with patch('openai.OpenAI') as mock_openai_class:
             with patch.dict(os.environ, {}, clear=True):
-                bot = OpenAIChatBot(GPT_4O_MINI, mcp_tools=mock_mcp_tools)
+                bot = OpenAIChatBot(GPT_4O_MINI, tool_executor=mock_mcp_tools)
                 assert bot.api_key is None
                 assert bot.client is None
                 # Verify OpenAI client was NOT instantiated
@@ -242,42 +242,42 @@ class TestToolResultTruncation:
         """Test AnthropicChatBot has correct max length (15K)."""
         from chatbots import AnthropicChatBot
 
-        bot = AnthropicChatBot(CLAUDE_HAIKU, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = AnthropicChatBot(CLAUDE_HAIKU, api_key="test", tool_executor=mock_mcp_tools)
         assert bot._get_max_tool_result_length() == 15000
 
     def test_openai_bot_max_length(self, mock_mcp_tools):
         """Test OpenAIChatBot has correct max length (10K)."""
         from chatbots import OpenAIChatBot
 
-        bot = OpenAIChatBot(GPT_4O_MINI, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = OpenAIChatBot(GPT_4O_MINI, api_key="test", tool_executor=mock_mcp_tools)
         assert bot._get_max_tool_result_length() == 10000
 
     def test_google_bot_max_length(self, mock_mcp_tools):
         """Test GoogleChatBot has correct max length (10K)."""
         from chatbots import GoogleChatBot
 
-        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools)
         assert bot._get_max_tool_result_length() == 10000
 
     def test_llama_bot_max_length(self, mock_mcp_tools):
         """Test LlamaChatBot has correct max length (8K)."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         assert bot._get_max_tool_result_length() == 8000
 
     def test_deterministic_bot_uses_base_max_length(self, mock_mcp_tools):
         """Test DeterministicChatBot uses base class default (5K)."""
         from chatbots import DeterministicChatBot
 
-        bot = DeterministicChatBot(LLAMA_3_2_3B, mcp_tools=mock_mcp_tools)
+        bot = DeterministicChatBot(LLAMA_3_2_3B, tool_executor=mock_mcp_tools)
         assert bot._get_max_tool_result_length() == 5000
 
     def test_get_tool_result_truncates_large_results(self, mock_mcp_tools):
         """Test that _get_tool_result properly truncates results exceeding max length."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Mock _route_tool_call_to_mcp to return a large result
         large_result = "x" * 10000  # 10K chars, exceeds Llama's 8K limit
@@ -293,7 +293,7 @@ class TestToolResultTruncation:
         """Test that _get_tool_result doesn't truncate results within max length."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Mock _route_tool_call_to_mcp to return a small result
         small_result = "Small result"
@@ -308,7 +308,7 @@ class TestToolResultTruncation:
         """Test that _get_tool_result calls _route_tool_call_to_mcp with correct arguments."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         with patch.object(bot, '_route_tool_call_to_mcp', return_value="result") as mock_route:
             tool_name = "execute_promql"
@@ -327,7 +327,7 @@ class TestModelSpecificInstructions:
         """Test AnthropicChatBot has Claude-specific instructions."""
         from chatbots import AnthropicChatBot
 
-        bot = AnthropicChatBot(CLAUDE_HAIKU, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = AnthropicChatBot(CLAUDE_HAIKU, api_key="test", tool_executor=mock_mcp_tools)
         instructions = bot._get_model_specific_instructions()
 
         assert "CLAUDE-SPECIFIC" in instructions
@@ -337,7 +337,7 @@ class TestModelSpecificInstructions:
         """Test OpenAIChatBot has GPT-specific instructions."""
         from chatbots import OpenAIChatBot
 
-        bot = OpenAIChatBot(GPT_4O_MINI, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = OpenAIChatBot(GPT_4O_MINI, api_key="test", tool_executor=mock_mcp_tools)
         instructions = bot._get_model_specific_instructions()
 
         assert "GPT-SPECIFIC" in instructions
@@ -347,7 +347,7 @@ class TestModelSpecificInstructions:
         """Test GoogleChatBot has Gemini-specific instructions."""
         from chatbots import GoogleChatBot
 
-        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools)
         instructions = bot._get_model_specific_instructions()
 
         assert "GEMINI-SPECIFIC" in instructions
@@ -357,7 +357,7 @@ class TestModelSpecificInstructions:
         """Test LlamaChatBot has Llama-specific instructions."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         instructions = bot._get_model_specific_instructions()
 
         assert "LLAMA-SPECIFIC" in instructions
@@ -373,7 +373,7 @@ class TestModelNameExtraction:
         """Test Anthropic bot extracts model name from provider/model format."""
         from chatbots import AnthropicChatBot
 
-        bot = AnthropicChatBot(CLAUDE_SONNET_WITH_PROVIDER, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = AnthropicChatBot(CLAUDE_SONNET_WITH_PROVIDER, api_key="test", tool_executor=mock_mcp_tools)
         extracted = bot._extract_model_name()
 
         assert extracted == CLAUDE_SONNET
@@ -382,7 +382,7 @@ class TestModelNameExtraction:
         """Test Anthropic bot keeps model name when no provider prefix."""
         from chatbots import AnthropicChatBot
 
-        bot = AnthropicChatBot(CLAUDE_HAIKU_DATED, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = AnthropicChatBot(CLAUDE_HAIKU_DATED, api_key="test", tool_executor=mock_mcp_tools)
         extracted = bot._extract_model_name()
 
         assert extracted == CLAUDE_HAIKU_DATED
@@ -391,7 +391,7 @@ class TestModelNameExtraction:
         """Test OpenAI bot extracts model name from provider/model format."""
         from chatbots import OpenAIChatBot
 
-        bot = OpenAIChatBot(GPT_4O_MINI_WITH_PROVIDER, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = OpenAIChatBot(GPT_4O_MINI_WITH_PROVIDER, api_key="test", tool_executor=mock_mcp_tools)
         extracted = bot._extract_model_name()
 
         assert extracted == GPT_4O_MINI
@@ -400,7 +400,7 @@ class TestModelNameExtraction:
         """Test OpenAI bot keeps model name when no provider prefix."""
         from chatbots import OpenAIChatBot
 
-        bot = OpenAIChatBot(GPT_4O, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = OpenAIChatBot(GPT_4O, api_key="test", tool_executor=mock_mcp_tools)
         extracted = bot._extract_model_name()
 
         assert extracted == GPT_4O
@@ -409,7 +409,7 @@ class TestModelNameExtraction:
         """Test Google bot extracts model name from provider/model format."""
         from chatbots import GoogleChatBot
 
-        bot = GoogleChatBot(GEMINI_FLASH_EXP_WITH_PROVIDER, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = GoogleChatBot(GEMINI_FLASH_EXP_WITH_PROVIDER, api_key="test", tool_executor=mock_mcp_tools)
         extracted = bot._extract_model_name()
 
         assert extracted == GEMINI_FLASH_EXP
@@ -418,7 +418,7 @@ class TestModelNameExtraction:
         """Test Google bot keeps model name when no provider prefix."""
         from chatbots import GoogleChatBot
 
-        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools)
         extracted = bot._extract_model_name()
 
         assert extracted == GEMINI_FLASH
@@ -428,7 +428,7 @@ class TestModelNameExtraction:
         from chatbots import LlamaChatBot
 
         # Llama uses the full model name including provider as it may be needed for local model paths
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         extracted = bot._extract_model_name()
 
         # For local models like Llama, the full path is preserved
@@ -439,7 +439,7 @@ class TestModelNameExtraction:
         from chatbots import AnthropicChatBot
 
         # API-based models strip the provider prefix
-        bot = AnthropicChatBot(CLAUDE_SONNET_WITH_PROVIDER, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = AnthropicChatBot(CLAUDE_SONNET_WITH_PROVIDER, api_key="test", tool_executor=mock_mcp_tools)
         extracted = bot._extract_model_name()
 
         assert extracted == CLAUDE_SONNET
@@ -449,7 +449,7 @@ class TestModelNameExtraction:
         from chatbots import AnthropicChatBot
 
         original_name = CLAUDE_SONNET_WITH_PROVIDER
-        bot = AnthropicChatBot(original_name, api_key="test", mcp_tools=mock_mcp_tools)
+        bot = AnthropicChatBot(original_name, api_key="test", tool_executor=mock_mcp_tools)
 
         # Original should be preserved
         assert bot.model_name == original_name
@@ -475,7 +475,7 @@ class TestBaseChatBot:
         """Test that _get_mcp_tools returns a list of tool definitions."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         tools = bot._get_mcp_tools()
 
         assert isinstance(tools, list)
@@ -491,7 +491,7 @@ class TestBaseChatBot:
         """Test that system prompt includes model-specific instructions."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         prompt = bot._create_system_prompt(namespace="test-namespace")
 
         # Should include both base prompt and model-specific instructions
@@ -506,7 +506,7 @@ class TestKorrel8rNormalization:
         """Test that alert queries without class get 'alert:alert:' prefix."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Missing class - should be normalized
         query = 'alert:{"alertname":"PodDisruptionBudgetAtLimit"}'
@@ -518,7 +518,7 @@ class TestKorrel8rNormalization:
         """Test that correctly formatted alert queries are not changed."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Already correct - should not change
         query = 'alert:alert:{"alertname":"HighCPU"}'
@@ -530,7 +530,7 @@ class TestKorrel8rNormalization:
         """Test that escaped quotes are unescaped."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Escaped quotes should be unescaped
         query = 'alert:{\"alertname\":\"Test\"}'
@@ -543,7 +543,7 @@ class TestKorrel8rNormalization:
         """Test that k8s:Alert: is corrected to alert:alert:."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Misclassified as k8s - should be corrected
         query = 'k8s:Alert:{"alertname":"PodDown"}'
@@ -555,7 +555,7 @@ class TestKorrel8rNormalization:
         """Test that unquoted keys in alert selectors are quoted (JSON format)."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Unquoted key - should be quoted for alert domain
         query = 'alert:alert:{alertname="HighLatency"}'
@@ -567,7 +567,7 @@ class TestKorrel8rNormalization:
         """Test normalization with multiple unquoted keys."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Multiple unquoted keys
         query = 'alert:alert:{alertname="Test",severity="critical"}'
@@ -579,7 +579,7 @@ class TestKorrel8rNormalization:
         """Test normalization of k8s Pod queries (non-alert domain)."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # k8s domain uses := operator format
         query = 'k8s:Pod:{namespace="llm-serving"}'
@@ -592,7 +592,7 @@ class TestKorrel8rNormalization:
         """Test normalization of loki log queries."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Loki domain
         query = 'loki:log:{kubernetes.namespace_name="test"}'
@@ -605,7 +605,7 @@ class TestKorrel8rNormalization:
         """Test normalization of trace span queries."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Trace domain - dots in key names need special handling
         query = 'trace:span:{k8s_namespace_name="llm-serving"}'
@@ -618,7 +618,7 @@ class TestKorrel8rNormalization:
         """Test that empty queries are handled gracefully."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Empty query
         normalized = bot._normalize_korrel8r_query("")
@@ -628,7 +628,7 @@ class TestKorrel8rNormalization:
         """Test that None queries are handled gracefully."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # None query - implementation converts to empty string
         normalized = bot._normalize_korrel8r_query(None)
@@ -638,7 +638,7 @@ class TestKorrel8rNormalization:
         """Test that malformed queries don't crash the normalization."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Malformed query - should return original on error
         query = 'totally:invalid{{'
@@ -660,16 +660,16 @@ class TestKorrel8rNormalization:
         expected = 'alert:alert:{"alertname":"Test"}'
 
         # Test each bot type
-        llama_bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        llama_bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         assert llama_bot._normalize_korrel8r_query(query) == expected
 
-        anthropic_bot = AnthropicChatBot(CLAUDE_HAIKU, api_key="test", mcp_tools=mock_mcp_tools)
+        anthropic_bot = AnthropicChatBot(CLAUDE_HAIKU, api_key="test", tool_executor=mock_mcp_tools)
         assert anthropic_bot._normalize_korrel8r_query(query) == expected
 
-        openai_bot = OpenAIChatBot(GPT_4O_MINI, api_key="test", mcp_tools=mock_mcp_tools)
+        openai_bot = OpenAIChatBot(GPT_4O_MINI, api_key="test", tool_executor=mock_mcp_tools)
         assert openai_bot._normalize_korrel8r_query(query) == expected
 
-        google_bot = GoogleChatBot(GEMINI_FLASH, api_key="test", mcp_tools=mock_mcp_tools)
+        google_bot = GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools)
         assert google_bot._normalize_korrel8r_query(query) == expected
 
 
@@ -680,7 +680,7 @@ class TestKorrel8rToolIntegration:
         """Test that normalization is invoked for korrel8r queries."""
         from chatbots import LlamaChatBot
 
-        bot = LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools)
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
         # Test that normalize method works correctly
         query = 'alert:{"alertname":"Test"}'
@@ -701,11 +701,11 @@ class TestKorrel8rToolIntegration:
         )
 
         bots = [
-            LlamaChatBot(LLAMA_3_1_8B, mcp_tools=mock_mcp_tools),
-            AnthropicChatBot(CLAUDE_HAIKU, api_key="test", mcp_tools=mock_mcp_tools),
-            OpenAIChatBot(GPT_4O_MINI, api_key="test", mcp_tools=mock_mcp_tools),
-            GoogleChatBot(GEMINI_FLASH, api_key="test", mcp_tools=mock_mcp_tools),
-            DeterministicChatBot(LLAMA_3_2_3B, mcp_tools=mock_mcp_tools)
+            LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools),
+            AnthropicChatBot(CLAUDE_HAIKU, api_key="test", tool_executor=mock_mcp_tools),
+            OpenAIChatBot(GPT_4O_MINI, api_key="test", tool_executor=mock_mcp_tools),
+            GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools),
+            DeterministicChatBot(LLAMA_3_2_3B, tool_executor=mock_mcp_tools)
         ]
 
         query = 'alert:{"alertname":"Test"}'

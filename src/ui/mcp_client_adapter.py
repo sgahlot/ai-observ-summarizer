@@ -1,8 +1,8 @@
 """
 MCP Client Adapter for Chatbots in UI
 
-This module provides an adapter that implements MCPToolsInterface for use in the UI process.
-It wraps an MCP client connection to call tools via the MCP protocol.
+This module provides an adapter that implements ToolExecutor for use in the UI process.
+It wraps an MCP client connection to execute tools via the MCP protocol.
 """
 
 from typing import Dict, Any, List, Optional
@@ -12,17 +12,17 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chatbots.mcp_tools_interface import MCPToolsInterface, MCPTool
+from chatbots.tool_executor import ToolExecutor, MCPTool
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
 
 
-class MCPClientAdapter(MCPToolsInterface):
-    """Adapter for calling MCP tools via MCP client in the UI process.
+class MCPClientAdapter(ToolExecutor):
+    """Adapter for executing tools via MCP client in the UI process.
 
-    This adapter wraps an MCP client session and provides the MCPToolsInterface
-    for chatbots to call tools via the MCP protocol.
+    This adapter wraps an MCP client session and provides the ToolExecutor
+    interface for chatbots to execute tools via the MCP protocol.
     """
 
     def __init__(self, mcp_client_helper):
@@ -84,7 +84,7 @@ class MCPClientAdapter(MCPToolsInterface):
             if self._tools_cache is not None:
                 return self._tools_cache
 
-            logger.info("📋 MCPClientAdapter listing available tools")
+            logger.info("📋 MCPClientAdapter listing available MCP tools")
 
             # List tools via MCP client helper
             tools_response = self.mcp_client.list_tools_sync()
@@ -128,11 +128,11 @@ class MCPClientAdapter(MCPToolsInterface):
             # Cache the tools
             self._tools_cache = mcp_tools
 
-            logger.info(f"✅ MCPClientAdapter found {len(mcp_tools)} tools")
+            logger.info(f"✅ MCPClientAdapter found {len(mcp_tools)} MCP tools")
             return mcp_tools
 
         except Exception as e:
-            logger.error(f"❌ Error listing tools via MCP client: {e}")
+            logger.error(f"❌ Error listing MCP tools via MCP client: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return []
