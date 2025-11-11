@@ -1294,7 +1294,7 @@ def chat_with_ai_direct(
     try:
         # Import chatbots package and adapter
         from chatbots import create_chatbot
-        from ui.mcp_client_adapter import MCPClientAdapter
+        from mcp_client_adapter import MCPClientAdapter
 
         logger.info(f"💬 Creating chatbot for model: {model_name}")
 

@@ -1397,7 +1397,8 @@ elif page == "Chat with Prometheus":
                 # Progress callback for live status updates via MCP chat tool
                 def update_progress(status_msg):
                     """Display progress updates in the message placeholder."""
-                    message_placeholder.markdown(f"**{status_msg}**")
+                    # Use write instead of markdown to avoid duplicate ID issues
+                    message_placeholder.write(f"**{status_msg}**")
                 
                 # Check if this is a trace-related question
                 is_trace_question = detect_trace_question(user_question)

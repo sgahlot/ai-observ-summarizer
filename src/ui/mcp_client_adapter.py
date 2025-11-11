@@ -136,3 +136,29 @@ class MCPClientAdapter(ToolExecutor):
             import traceback
             logger.error(traceback.format_exc())
             return []
+
+    def get_tool(self, tool_name: str) -> Optional[MCPTool]:
+        """Get metadata for a specific MCP tool.
+
+        Args:
+            tool_name: Name of the tool
+
+        Returns:
+            MCPTool object if found, None otherwise
+        """
+        try:
+            # Get all tools (uses cache if available)
+            mcp_tools = self.list_tools()
+
+            # Find the specific tool
+            for mcp_tool in mcp_tools:
+                if mcp_tool.name == tool_name:
+                    logger.debug(f"Found tool: {tool_name}")
+                    return mcp_tool
+
+            logger.warning(f"Tool not found: {tool_name}")
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ Error getting tool {tool_name}: {e}")
+            return None
