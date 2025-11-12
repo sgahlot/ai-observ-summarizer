@@ -32,8 +32,8 @@ class LlamaChatBot(BaseChatBot):
         """
         return self.model_name
 
-    def __init__(self, model_name: str, api_key: Optional[str], tool_client):
-        super().__init__(model_name, api_key, tool_client)
+    def __init__(self, model_name: str, api_key: Optional[str], tool_executor):
+        super().__init__(model_name, api_key, tool_executor)
 
         # Import OpenAI SDK (LlamaStack is OpenAI-compatible)
         try:

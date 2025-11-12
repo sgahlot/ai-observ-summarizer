@@ -79,7 +79,7 @@ except ImportError:
         from chatbots import create_chatbot
     except ImportError:
         # If package imports fail, create dummy factory function
-        def create_chatbot(model_name: str, api_key=None, tool_client=None):
+        def create_chatbot(model_name: str, api_key=None, tool_executor=None):
             class DummyChatBot:
                 def __init__(self, *args, **kwargs):
                     self.error = "Chat bot package not available"
@@ -99,7 +99,7 @@ PROM_URL = os.getenv("PROM_URL", "http://localhost:9090")
 
 # --- Create MCP client and adapter (used by chatbots for tool operations) ---
 mcp_client = MCPClientHelper()
-tool_client_adapter = MCPClientAdapter(mcp_client)
+tool_executor_adapter = MCPClientAdapter(mcp_client)
 
 # --- Claude Chat Bot (removed cached version since we create chatbot dynamically with user API key) ---
 
@@ -1346,7 +1346,7 @@ elif page == "Chat with Prometheus":
             ai_chatbot = create_chatbot(
                 model_name=multi_model_name,
                 api_key=user_api_key,
-                tool_client=tool_client_adapter
+                tool_executor=tool_executor_adapter
             )
             logger.info(f"✅ Chatbot created: {ai_chatbot.__class__.__name__} for model {multi_model_name}")
         except Exception as e:

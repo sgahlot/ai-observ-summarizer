@@ -13,7 +13,7 @@ from .openai_bot import OpenAIChatBot
 from .google_bot import GoogleChatBot
 from .llama_bot import LlamaChatBot
 from .deterministic_bot import DeterministicChatBot
-from .tool_client_interface import ToolClientInterface
+from .tool_executor import ToolExecutor
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -22,7 +22,7 @@ logger = get_python_logger()
 def create_chatbot(
     model_name: str,
     api_key: Optional[str] = None,
-    tool_client: ToolClientInterface = None
+    tool_executor: ToolExecutor = None
 ) -> BaseChatBot:
     """
     Factory function to create the appropriate chatbot based on model capabilities.
@@ -30,26 +30,26 @@ def create_chatbot(
     Args:
         model_name: Name of the model to use
         api_key: Optional API key for external models
-        tool_client: ToolClientInterface implementation for tool operations (REQUIRED)
+        tool_executor: ToolExecutor implementation for tool operations (REQUIRED)
 
     Returns:
         Instance of the appropriate chatbot class
 
     Raises:
-        TypeError: If tool_client is None
+        TypeError: If tool_executor is None
 
     Examples:
         >>> from mcp_client_adapter import MCPClientAdapter
-        >>> tool_client = MCPClientAdapter()
-        >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...", tool_client=tool_client)
+        >>> tool_executor = MCPClientAdapter()
+        >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...", tool_executor=tool_executor)
         >>> response = chatbot.chat("What's the CPU usage?")
 
-        >>> chatbot = create_chatbot("meta-llama/Llama-3.1-8B-Instruct", tool_client=tool_client)
+        >>> chatbot = create_chatbot("meta-llama/Llama-3.1-8B-Instruct", tool_executor=tool_executor)
         >>> response = chatbot.chat("Check memory usage")
     """
-    if tool_client is None:
+    if tool_executor is None:
         raise TypeError(
-            "tool_client is required. Please pass an implementation of ToolClientInterface."
+            "tool_executor is required. Please pass an implementation of ToolExecutor."
         )
     # Detect provider from model name pattern using dict mapping
     PROVIDER_PATTERNS = {
@@ -75,16 +75,16 @@ def create_chatbot(
     if is_external:
         if provider == "anthropic":
             logger.info(f"Creating AnthropicChatBot for {model_name}")
-            return AnthropicChatBot(model_name, api_key, tool_client)
+            return AnthropicChatBot(model_name, api_key, tool_executor)
         elif provider == "openai":
             logger.info(f"Creating OpenAIChatBot for {model_name}")
-            return OpenAIChatBot(model_name, api_key, tool_client)
+            return OpenAIChatBot(model_name, api_key, tool_executor)
         elif provider == "google":
             logger.info(f"Creating GoogleChatBot for {model_name}")
-            return GoogleChatBot(model_name, api_key, tool_client)
+            return GoogleChatBot(model_name, api_key, tool_executor)
         else:
             logger.warning(f"Unknown external provider {provider}, using OpenAI as fallback")
-            return OpenAIChatBot(model_name, api_key, tool_client)
+            return OpenAIChatBot(model_name, api_key, tool_executor)
     else:
         # Local models - detect Llama version and create appropriate bot
         LLAMA_MODEL_PATTERNS = {
@@ -99,8 +99,8 @@ def create_chatbot(
             if model_pattern in model_lower:
                 if sizes is None or any(size in model_lower for size in sizes):
                     logger.info(f"Creating {bot_class.__name__} for {model_name} ({model_capability})")
-                    return bot_class(model_name, api_key, tool_client)
+                    return bot_class(model_name, api_key, tool_executor)
 
         # Unknown local models - use deterministic parsing for safety
         logger.info(f"Creating DeterministicChatBot for {model_name} (unknown capability - using deterministic parsing)")
-        return DeterministicChatBot(model_name, api_key, tool_client)
+        return DeterministicChatBot(model_name, api_key, tool_executor)

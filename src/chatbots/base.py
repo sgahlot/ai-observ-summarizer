@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Callable
 
 from common.pylogger import get_python_logger
-from .tool_client_interface import ToolClientInterface
+from .tool_executor import ToolExecutor
 
 logger = get_python_logger()
 
@@ -20,33 +20,36 @@ logger = get_python_logger()
 class BaseChatBot(ABC):
     """Base class for all chat bot implementations with common functionality."""
 
-    def __init__(self, model_name: str, api_key: Optional[str], tool_client: ToolClientInterface):
+    def __init__(self,
+                 model_name: str,
+                 api_key: Optional[str] = None,
+                 tool_executor: ToolExecutor = None):
         """Initialize base chat bot.
 
         Args:
             model_name: Name of the model to use
             api_key: API key for the model provider (None if not needed)
-            tool_client: Implementation of ToolClientInterface for tool operations (REQUIRED)
+            tool_executor: Implementation of ToolExecutor for tool operations (REQUIRED)
 
         Raises:
-            TypeError: If tool_client is None or doesn't implement ToolClientInterface
+            TypeError: If tool_executor is None or doesn't implement ToolExecutor
         """
-        if tool_client is None:
+        if tool_executor is None:
             raise TypeError(
-                "tool_client is required. Please pass an implementation of ToolClientInterface."
+                "tool_executor is required. Please pass an implementation of ToolExecutor."
             )
 
-        if not isinstance(tool_client, ToolClientInterface):
+        if not isinstance(tool_executor, ToolExecutor):
             raise TypeError(
-                f"tool_client must implement ToolClientInterface, got {type(tool_client)}"
+                f"tool_executor must implement ToolExecutor, got {type(tool_executor)}"
             )
 
         self.model_name = model_name
         # Let each subclass decide how to get its API key
         self.api_key = api_key if api_key is not None else self._get_api_key()
 
-        # Store tool client interface (dependency injection)
-        self.tool_client = tool_client
+        # Store tool executor (dependency injection)
+        self.tool_executor = tool_executor
 
         logger.info(f"{self.__class__.__name__} initialized with model: {self.model_name}")
 
@@ -77,24 +80,34 @@ class BaseChatBot(ABC):
         return self.model_name
 
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
-        """Get available tools via tool client interface.
+        """Get available tools via tool executor.
 
         Returns:
             List of tool definitions with name, description, and input_schema
         """
         try:
-            # Fetch tools via tool client interface (dependency injection)
-            tools = self.tool_client.get_available_tools()
+            # Fetch tools via tool executor (dependency injection)
+            tools_list = self.tool_executor.list_tools()
+
+            # Convert MCPTool objects to dict format
+            tools = []
+            for tool in tools_list:
+                tool_def = {
+                    'name': tool.name,
+                    'description': tool.description,
+                    'input_schema': tool.input_schema
+                }
+                tools.append(tool_def)
 
             if tools:
                 tool_names = [tool['name'] for tool in tools]
-                logger.info(f"🧰 Fetched {len(tools)} tools via interface: {', '.join(tool_names)}")
+                logger.info(f"🧰 Fetched {len(tools)} tools via executor: {', '.join(tool_names)}")
             else:
-                logger.warning("No tools returned from tool client")
+                logger.warning("No tools returned from tool executor")
 
             return tools
         except Exception as e:
-            logger.error(f"Error fetching tools via interface: {e}")
+            logger.error(f"Error fetching tools via executor: {e}")
             import traceback
             logger.error(traceback.format_exc())
             raise
@@ -149,7 +162,7 @@ class BaseChatBot(ABC):
             return q
 
     def _route_tool_call_to_mcp(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Route tool call via tool client interface with optional korrel8r query normalization."""
+        """Route tool call via tool executor with optional korrel8r query normalization."""
         logger.info(f"⚙️ Executing tool '{tool_name}' with args: {arguments}")
 
         # Normalize Korrel8r query inputs when needed before calling tool
@@ -167,16 +180,11 @@ class BaseChatBot(ABC):
                 pass
 
         try:
-            # Call the tool via tool client interface (dependency injection)
-            result = self.tool_client.call_tool(tool_name, arguments)
-
-            if result and len(result) > 0:
-                result_text = result[0]['text']
-                logger.info(f"✅ Tool {tool_name} returned result (length: {len(result_text)} chars)")
-                return result_text
-            else:
-                logger.info(f"✅ Tool {tool_name} returned no results")
-                return f"No results returned from {tool_name}"
+            # Call the tool via tool executor (dependency injection)
+            # The tool executor now returns str directly
+            result = self.tool_executor.call_tool(tool_name, arguments)
+            logger.info(f"✅ Tool {tool_name} returned result (length: {len(result)} chars)")
+            return result
 
         except Exception as e:
             logger.error(f"Error calling MCP tool {tool_name}: {e}")

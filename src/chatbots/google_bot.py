@@ -24,8 +24,8 @@ class GoogleChatBot(BaseChatBot):
         """Gemini supports 1M token context - 10K chars is reasonable."""
         return 10000
 
-    def __init__(self, model_name: str, api_key: Optional[str], tool_client):
-        super().__init__(model_name, api_key, tool_client)
+    def __init__(self, model_name: str, api_key: Optional[str], tool_executor):
+        super().__init__(model_name, api_key, tool_executor)
 
         # Import Google SDK and configure
         try:
