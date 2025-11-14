@@ -24,6 +24,11 @@ if _SRC_ROOT not in sys.path:
 
 from error_handler import parse_mcp_error, display_mcp_error
 from common.pylogger import get_python_logger, force_reconfigure_all_loggers
+from common.mcp_utils import (
+    extract_text_from_mcp_result,
+    is_double_encoded_mcp_response,
+    extract_from_double_encoded_response
+)
 
 # Initialize shared structured logging once per process
 get_python_logger(os.getenv("PYTHON_LOG_LEVEL", "INFO"))
@@ -316,54 +321,7 @@ def check_mcp_response_for_errors(result: Any) -> Dict[str, Any]:
     return {}
 
 
-def is_double_encoded_mcp_response(parsed_json: Any) -> bool:
-    """Check if the parsed JSON is a double-encoded MCP response.
-    
-    A double-encoded MCP response is a list containing a dict with a 'text' key
-    that contains another JSON string.
-    
-    Args:
-        parsed_json: The parsed JSON object to check
-        
-    Returns:
-        True if this appears to be a double-encoded MCP response
-    """
-    if not isinstance(parsed_json, list):
-        return False
-        
-    if len(parsed_json) == 0:
-        return False
-        
-    first_item = parsed_json[0]
-    return isinstance(first_item, dict) and "text" in first_item
-
-
-def extract_from_double_encoded_response(parsed_json: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Extract content from a double-encoded MCP response.
-    
-    Args:
-        parsed_json: The list containing the double-encoded response
-        
-    Returns:
-        The extracted and parsed inner JSON, or None if extraction fails
-    """
-    try:
-        inner_text = parsed_json[0]["text"]
-        logger.debug(f"Found double-encoded response, trying to parse inner text: {inner_text[:100]}...")
-        
-        inner_json = json.loads(inner_text)
-        if isinstance(inner_json, dict):
-            return inner_json
-        else:
-            logger.error(f"Inner JSON is not a dict: {type(inner_json)}")
-            return None
-            
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse inner JSON from double-encoded response: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting from double-encoded response: {e}")
-        return None
+# is_double_encoded_mcp_response and extract_from_double_encoded_response now imported from common.mcp_utils
 
 
 def get_namespaces_mcp() -> List[str]:

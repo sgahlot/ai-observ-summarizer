@@ -8,12 +8,12 @@ based on model capabilities and provider.
 from typing import Optional
 
 from .base import BaseChatBot
+from .tool_executor import ToolExecutor
 from .anthropic_bot import AnthropicChatBot
 from .openai_bot import OpenAIChatBot
 from .google_bot import GoogleChatBot
 from .llama_bot import LlamaChatBot
 from .deterministic_bot import DeterministicChatBot
-from .tool_executor import ToolExecutor
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -30,7 +30,7 @@ def create_chatbot(
     Args:
         model_name: Name of the model to use
         api_key: Optional API key for external models
-        tool_executor: ToolExecutor implementation for tool operations (REQUIRED)
+        tool_executor: Tool executor for calling observability tools (required)
 
     Returns:
         Instance of the appropriate chatbot class
@@ -51,6 +51,7 @@ def create_chatbot(
         raise TypeError(
             "tool_executor is required. Please pass an implementation of ToolExecutor."
         )
+
     # Detect provider from model name pattern using dict mapping
     PROVIDER_PATTERNS = {
         "anthropic": [("anthropic/", False), ("claude", False)],
@@ -88,15 +89,16 @@ def create_chatbot(
     else:
         # Local models - detect Llama version and create appropriate bot
         LLAMA_MODEL_PATTERNS = {
-            "llama.3.1": (LlamaChatBot, "tool calling capable", ["8b", "70b", "405b"]),
+            "llama.3.1": (LlamaChatBot, "tool calling capable", ["8b", "70b"]),
             "llama.3.3": (LlamaChatBot, "tool calling capable", ["70b"]),
             "llama.3.2": (DeterministicChatBot, "67% tool calling accuracy - using deterministic parsing", None),
         }
         # Local models - check if they support reliable tool calling
         model_lower = model_name.lower().replace("-", ".")  # Replace "-" with "."
 
-        for model_pattern, (bot_class, model_capability, sizes) in LLAMA_MODEL_PATTERNS.items():
-            if model_pattern in model_lower:
+        for model, patterns in LLAMA_MODEL_PATTERNS.items():
+            bot_class, model_capability, sizes = patterns
+            if model in model_lower:
                 if sizes is None or any(size in model_lower for size in sizes):
                     logger.info(f"Creating {bot_class.__name__} for {model_name} ({model_capability})")
                     return bot_class(model_name, api_key, tool_executor)

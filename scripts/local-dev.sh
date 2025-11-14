@@ -156,7 +156,7 @@ create_port_forward() {
             echo -e "${YELLOW}⚠️  $description resource NOT found in $namespace namespace (optional - skipping)${NC}"
             return 0
         else
-            echo -e "${YELLOW}⚠️  $description resource NOT found in $namespace namespace. Exiting...${NC}"
+            echo -e "${RED}❌️  $description resource NOT found in $namespace namespace. Exiting...${NC}"
             exit 1
         fi
     fi
@@ -178,15 +178,15 @@ start_port_forwards() {
 
     THANOS_POD=$(oc get pods -n "$PROMETHEUS_NAMESPACE" -o name -l "$THANOS_POD_LABEL" | head -1)
     create_port_forward "$THANOS_POD" "$THANOS_PORT" "9090" "$PROMETHEUS_NAMESPACE" "Thanos" "📊"
-    
+
     # Find LlamaStack pod
     LLAMASTACK_SERVICE=$(oc get services -n "$LLAMA_MODEL_NAMESPACE" -o name -l "$LLAMASTACK_SERVICE_LABEL")
     create_port_forward "$LLAMASTACK_SERVICE" "$LLAMASTACK_PORT" "8321" "$LLAMA_MODEL_NAMESPACE" "LlamaStack" "🦙"
-    
+
     # Find Llama Model service
     LLAMA_MODEL_SERVICE=$(oc get services -n "$LLAMA_MODEL_NAMESPACE" -o name -l "$LLAMA_MODEL_SERVICE_LABEL")
     create_port_forward "$LLAMA_MODEL_SERVICE" "$LLAMA_MODEL_PORT" "8080" "$LLAMA_MODEL_NAMESPACE" "Llama Model" "🤖"
-    
+
     # Find Tempo gateway service
     TEMPO_SERVICE=$(oc get services -n "$OBSERVABILITY_NAMESPACE" -o name -l "$TEMPO_SERVICE_LABEL")
     create_port_forward "$TEMPO_SERVICE" "$TEMPO_PORT" "8080" "$OBSERVABILITY_NAMESPACE" "Tempo" "🔍"

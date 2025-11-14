@@ -11,8 +11,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Callable
 
+from chatbots.tool_executor import ToolExecutor
 from common.pylogger import get_python_logger
-from .tool_executor import ToolExecutor
 
 logger = get_python_logger()
 
@@ -20,16 +20,18 @@ logger = get_python_logger()
 class BaseChatBot(ABC):
     """Base class for all chat bot implementations with common functionality."""
 
-    def __init__(self,
-                 model_name: str,
-                 api_key: Optional[str] = None,
-                 tool_executor: ToolExecutor = None):
+    def __init__(
+        self,
+        model_name: str,
+        api_key: Optional[str] = None,
+        tool_executor: ToolExecutor = None  # Type is non-optional, but runtime validates
+    ):
         """Initialize base chat bot.
 
         Args:
-            model_name: Name of the model to use
-            api_key: API key for the model provider (None if not needed)
-            tool_executor: Implementation of ToolExecutor for tool operations (REQUIRED)
+            model_name: Model identifier (e.g., "gpt-4", "claude-3-5-sonnet")
+            api_key: Optional API key for the model
+            tool_executor: Tool executor for calling observability tools (REQUIRED)
 
         Raises:
             TypeError: If tool_executor is None or doesn't implement ToolExecutor
@@ -89,7 +91,7 @@ class BaseChatBot(ABC):
             # Fetch tools via tool executor (dependency injection)
             tools_list = self.tool_executor.list_tools()
 
-            # Convert MCPTool objects to dict format
+            # Convert to expected format
             tools = []
             for tool in tools_list:
                 tool_def = {
@@ -162,8 +164,18 @@ class BaseChatBot(ABC):
             return q
 
     def _route_tool_call_to_mcp(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Route tool call via tool executor with optional korrel8r query normalization."""
-        logger.info(f"⚙️ Executing tool '{tool_name}' with args: {arguments}")
+        """Route tool call via tool executor.
+
+        Uses the injected ToolExecutor to execute tools.
+
+        Args:
+            tool_name: Name of the tool to call
+            arguments: Tool arguments
+
+        Returns:
+            Tool execution result as string
+        """
+        logger.info(f"🔧 Routing tool call: {tool_name} with arguments: {arguments}")
 
         # Normalize Korrel8r query inputs when needed before calling tool
         if tool_name == "korrel8r_get_correlated":
@@ -180,14 +192,16 @@ class BaseChatBot(ABC):
                 pass
 
         try:
-            # Call the tool via tool executor (dependency injection)
-            # The tool executor now returns str directly
+            logger.info(f"⚙️ Executing tool '{tool_name}' via tool executor")
+
+            # Execute tool via tool executor (handles both server and client scenarios)
             result = self.tool_executor.call_tool(tool_name, arguments)
-            logger.info(f"✅ Tool {tool_name} returned result (length: {len(result)} chars)")
+
+            logger.info(f"✅ Tool {tool_name} returned result (length: {len(result) if result else 0})")
             return result
 
         except Exception as e:
-            logger.error(f"Error calling MCP tool {tool_name}: {e}")
+            logger.error(f"❌ Error calling tool {tool_name}: {e}")
             return f"Error executing {tool_name}: {str(e)}"
 
     def _get_max_tool_result_length(self) -> int:
@@ -263,6 +277,8 @@ You have access to monitoring tools and should provide focused, targeted respons
 - Cluster: OpenShift with AI/ML workloads, GPUs, and comprehensive monitoring
 - Scope: {namespace if namespace else 'Cluster-wide analysis'}
 - Tools: Direct access to Prometheus/Thanos metrics via MCP tools
+
+**Available Tools:**
 
 **Core Observability Tools:**
 - search_metrics: Pattern-based metric search - use for broad exploration
@@ -384,14 +400,13 @@ Begin by finding the perfect metric for the user's question, then provide compre
         return prompt
 
     @abstractmethod
-    def chat(self, user_question: str, namespace: Optional[str] = None, scope: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
         """
         Chat with the model. Must be implemented by subclasses.
 
         Args:
             user_question: The user's question
             namespace: Optional namespace filter
-            scope: Optional scope filter
             progress_callback: Optional callback for progress updates
 
         Returns:
@@ -400,26 +415,23 @@ Begin by finding the perfect metric for the user's question, then provide compre
         pass
 
     def test_mcp_tools(self) -> bool:
-        """Test if MCP tools server is initialized and has tools available."""
+        """Test if tool executor is initialized and has tools available."""
         try:
-            # Check if MCP server is available
-            if self.mcp_server is None:
-                logger.error("MCP server is None - not initialized")
+            # Check if tool executor is available
+            if self.tool_executor is None:
+                logger.error("Tool executor is None - not initialized")
                 return False
 
-            # Test MCP server
-            if hasattr(self.mcp_server, 'mcp') and hasattr(self.mcp_server.mcp, '_tool_manager'):
-                tool_count = len(self.mcp_server.mcp._tool_manager._tools)
-                if tool_count > 0:
-                    logger.info(f"MCP server working with {tool_count} tools")
-                    return True
-                else:
-                    logger.error("MCP server has no registered tools")
-                    return False
+            # Test tool executor
+            tools = self.tool_executor.list_tools()
+            tool_count = len(tools)
+            if tool_count > 0:
+                logger.info(f"Tool executor working with {tool_count} tools")
+                return True
             else:
-                logger.error("MCP server not properly initialized")
+                logger.error("Tool executor has no registered tools")
                 return False
 
         except Exception as e:
-            logger.error(f"MCP tools test failed: {e}")
+            logger.error(f"Tool executor test failed: {e}")
             return False

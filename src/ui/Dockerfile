@@ -3,8 +3,8 @@ WORKDIR /app
 
 # Copy required dependencies that UI imports (build context is src/)
 COPY core/ /app/core/
-COPY chatbots/ /app/chatbots/
 COPY common/ /app/common/
+COPY chatbots/ /app/chatbots/
 
 # Copy UI specific files
 COPY ui/ui.py .

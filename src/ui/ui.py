@@ -21,9 +21,6 @@ from mcp_client_helper import (
     analyze_vllm_mcp,
     calculate_metrics_mcp,
     get_vllm_metrics_mcp,
-    extract_text_from_mcp_result,
-    is_double_encoded_mcp_response,
-    extract_from_double_encoded_response,
     analyze_openshift_mcp,
     chat_openshift_mcp,
     parse_analyze_response,
@@ -32,6 +29,12 @@ from mcp_client_helper import (
     get_deployment_info_mcp,
     chat_vllm_mcp,
     chat_tempo_mcp,
+)
+# Import MCP utilities from common module (breaks circular dependency)
+from common.mcp_utils import (
+    extract_text_from_mcp_result,
+    is_double_encoded_mcp_response,
+    extract_from_double_encoded_response,
 )
 # Add current directory to Python path for consistent imports
 import sys
@@ -1501,7 +1504,6 @@ elif page == "Chat with Prometheus":
                     response = ai_chatbot.chat(
                         user_question,
                         namespace=None,  # Cluster-wide analysis
-                        scope="cluster-wide",
                         progress_callback=update_progress
                     )
                     logger.info(f"📥 Received response from {ai_chatbot.model_name}: {len(response) if response else 0} chars")

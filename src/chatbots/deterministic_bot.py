@@ -10,6 +10,7 @@ import re
 from typing import Optional, Callable, List, Dict, Any
 
 from .base import BaseChatBot
+from chatbots.tool_executor import ToolExecutor
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -18,11 +19,18 @@ logger = get_python_logger()
 class DeterministicChatBot(BaseChatBot):
     """Deterministic parsing implementation for small models without reliable tool calling."""
 
+    def __init__(
+        self,
+        model_name: str,
+        api_key: Optional[str] = None,
+        tool_executor: ToolExecutor = None):
+        super().__init__(model_name, api_key, tool_executor)
+
     def _get_api_key(self) -> Optional[str]:
         """Local models don't require API keys."""
         return None
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, scope: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
         """Chat using deterministic parsing approach."""
         if progress_callback:
             progress_callback("🔍 Analyzing your question...")
