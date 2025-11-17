@@ -36,7 +36,7 @@ def create_chatbot(
         Instance of the appropriate chatbot class
 
     Raises:
-        TypeError: If tool_executor is None
+        ValueError: If tool_executor is None
 
     Examples:
         >>> from mcp_client_adapter import MCPClientAdapter
@@ -48,7 +48,7 @@ def create_chatbot(
         >>> response = chatbot.chat("Check memory usage")
     """
     if tool_executor is None:
-        raise TypeError(
+        raise ValueError(
             "tool_executor is required. Please pass an implementation of ToolExecutor."
         )
 

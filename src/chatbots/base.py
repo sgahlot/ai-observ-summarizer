@@ -32,10 +32,11 @@ class BaseChatBot(ABC):
             tool_executor: Tool executor for calling observability tools (REQUIRED)
 
         Raises:
+            ValueError: If tool_executor is None
             TypeError: If tool_executor is None or doesn't implement ToolExecutor
         """
         if tool_executor is None:
-            raise TypeError(
+            raise ValueError(
                 "tool_executor is required. Please pass an implementation of ToolExecutor."
             )
 
