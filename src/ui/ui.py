@@ -1426,7 +1426,7 @@ elif page == "Chat with Prometheus":
 
     # Custom chat input with better placeholder
     user_question = st.chat_input("Ask AI about your metrics and traces... (e.g., 'What's the GPU usage?' or 'Show me CPU trends' or 'Show me traces with errors')")
-    
+
     if user_question and ai_chatbot:
         # Add user message to history and display it
         st.session_state.claude_messages.append({"role": "user", "content": user_question})
@@ -1436,15 +1436,15 @@ elif page == "Chat with Prometheus":
         # Create assistant message placeholder for streaming-like effect
         with st.chat_message("assistant", avatar="🤖"):
             message_placeholder = st.empty()
-            
+
             # Show thinking state
             message_placeholder.markdown("🔍 **Analyzing your request...**")
-            
+
             try:
                 # Create progress callback to show tool usage like Claude Desktop
                 def update_progress(status_msg):
                     message_placeholder.markdown(f"**{status_msg}**")
-                
+
                 # Update status
                 message_placeholder.markdown("⚡ **Starting analysis...**")
                 
@@ -1509,7 +1509,7 @@ elif page == "Chat with Prometheus":
                     logger.info(f"📥 Received response from {ai_chatbot.model_name}: {len(response) if response else 0} chars")
                 else:
                     response = None  # Skip AI analysis for pure trace questions
-                
+
                 # Display final response with better formatting
                 if response:
                     # Format the response for better readability

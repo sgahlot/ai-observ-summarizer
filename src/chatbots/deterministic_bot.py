@@ -7,7 +7,7 @@ that don't have reliable tool calling capabilities (<75% accuracy).
 
 import json
 import re
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 
 from .base import BaseChatBot
 from chatbots.tool_executor import ToolExecutor

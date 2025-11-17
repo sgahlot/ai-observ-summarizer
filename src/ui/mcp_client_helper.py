@@ -270,37 +270,7 @@ class MCPClientHelper:
 mcp_client = MCPClientHelper()
 
 
-def extract_text_from_mcp_result(result: Any) -> Optional[str]:
-    """Helper function to extract text from MCP tool result.
-    
-    Args:
-        result: MCP tool result (typically a list with dict items)
-        
-    Returns:
-        Extracted text string, or None if extraction fails
-    """
-    try:
-        if result and isinstance(result, list) and len(result) > 0:
-            first_item = result[0]
-            if isinstance(first_item, dict) and "text" in first_item:
-                base_text = first_item["text"]
-                # If the base_text itself is a serialized MCP content list, unwrap it
-                try:
-                    if isinstance(base_text, str):
-                        parsed = json.loads(base_text)
-                        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) and "text" in parsed[0]:
-                            inner_text = parsed[0]["text"]
-                            return inner_text
-                except Exception:
-                    # Fallback to base_text
-                    pass
-                return base_text
-            else:
-                return str(first_item)
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting text from MCP result: {e}")
-        return None
+# extract_text_from_mcp_result now imported from common.mcp_utils
 
 
 def check_mcp_response_for_errors(result: Any) -> Dict[str, Any]:

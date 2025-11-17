@@ -5,9 +5,7 @@ This module provides the base class for all chat bot implementations.
 All provider-specific implementations inherit from BaseChatBot.
 """
 
-import os
 import re
-import logging
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Callable
 
@@ -177,7 +175,7 @@ class BaseChatBot(ABC):
         """
         logger.info(f"🔧 Routing tool call: {tool_name} with arguments: {arguments}")
 
-        # Normalize Korrel8r query inputs when needed before calling tool
+        # Normalize Korrel8r query inputs when needed before executing
         if tool_name == "korrel8r_get_correlated":
             try:
                 q = arguments.get("query") if isinstance(arguments, dict) else None
