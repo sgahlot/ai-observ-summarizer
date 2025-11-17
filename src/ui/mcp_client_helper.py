@@ -135,10 +135,14 @@ class MCPClientHelper:
                 return content_list
             return []
 
-    async def _list_tools_async(self) -> Any:
-        """Async list_tools via fastmcp.Client."""
+    async def _get_available_tools_async(self) -> List[Dict[str, Any]]:
+        """Async method to fetch available tools from MCP server.
+
+        Returns:
+            List of tool definitions with name, description, and input_schema
+        """
         try:
-            # Ensure site-packages is in sys.path
+            # Ensure site-packages is in path
             site_paths: List[str] = []
             try:
                 site_paths.extend(site.getsitepackages())  # type: ignore[attr-defined]
@@ -162,9 +166,44 @@ class MCPClientHelper:
 
         client = Client(self.config)
         async with client:
-            # List tools from MCP server
-            tools_result = await client.list_tools()
-            return tools_result
+            tools = await client.list_tools()
+            tool_list = []
+            for tool in tools:
+                tool_def = {
+                    'name': tool.name,
+                    'description': tool.description,
+                    'input_schema': tool.inputSchema
+                }
+                tool_list.append(tool_def)
+            logger.info(f"🧰 Fetched {len(tool_list)} tools from MCP server via HTTP")
+            return tool_list
+
+    def get_available_tools(self) -> List[Dict[str, Any]]:
+        """Get available tools from MCP server (sync wrapper).
+
+        Returns:
+            List of tool definitions with name, description, and input_schema
+        """
+        try:
+            return asyncio.run(self._get_available_tools_async())
+        except RuntimeError:
+            # Handle "asyncio.run() cannot be called from a running event loop"
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    return loop.run_until_complete(self._get_available_tools_async())
+                finally:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
+            except Exception as inner_e:
+                logger.error(f"Error getting available tools with new event loop: {inner_e}")
+                return []
+        except Exception as e:
+            logger.error(f"Error getting available tools: {e}")
+            return []
 
     def call_tool_sync(self, tool_name: str, parameters: Dict[str, Any] = None) -> Any:
         """Sync wrapper for Streamlit - runs the async fastmcp call."""
@@ -188,28 +227,6 @@ class MCPClientHelper:
                 return None
         except Exception as e:
             logger.error(f"Error calling MCP tool '{tool_name}': {e}")
-            return None
-
-    def list_tools_sync(self) -> Any:
-        """Sync wrapper for list_tools."""
-        try:
-            return asyncio.run(self._list_tools_async())
-        except RuntimeError:
-            try:
-                loop = asyncio.new_event_loop()
-                try:
-                    asyncio.set_event_loop(loop)
-                    return loop.run_until_complete(self._list_tools_async())
-                finally:
-                    try:
-                        loop.close()
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.error(f"Error listing tools with new event loop: {e}")
-                return None
-        except Exception as e:
-            logger.error(f"Error listing tools: {e}")
             return None
 
     def parse_list_response(self, result: Any, item_prefix: str = "•") -> List[str]:
@@ -1166,168 +1183,3 @@ def chat_vllm_mcp(
             "error": str(e),
             "error_type": "mcp_structured",
         }
-
-
-def chat_with_ai_mcp(
-    model_name: str,
-    message: str,
-    api_key: Optional[str] = None,
-    namespace: Optional[str] = None,
-    scope: Optional[str] = None,
-    progress_callback: Optional[callable] = None
-) -> str:
-    """
-    Chat with AI using MCP chat tool.
-
-    Calls the MCP 'chat' tool and replays progress updates to the UI.
-
-    Args:
-        model_name: Model identifier (e.g., "anthropic/claude-3-5-sonnet-20241022")
-        message: User's question
-        api_key: Optional API key for external models
-        namespace: Optional namespace filter
-        scope: Optional scope
-        progress_callback: Optional callback for progress updates
-
-    Returns:
-        AI response string
-
-    Example:
-        >>> def update_status(msg):
-        ...     st.write(msg)
-        >>> response = chat_with_ai_mcp(
-        ...     model_name="anthropic/claude-3-5-sonnet-20241022",
-        ...     message="What's the CPU usage?",
-        ...     api_key="sk-ant-...",
-        ...     progress_callback=update_status
-        ... )
-    """
-    try:
-        if not mcp_client.check_server_health():
-            return "❌ MCP server is not available"
-
-        # Prepare parameters
-        params = {
-            "model_name": model_name,
-            "message": message,
-        }
-        if api_key:
-            params["api_key"] = api_key
-        if namespace:
-            params["namespace"] = namespace
-        if scope:
-            params["scope"] = scope
-
-        logger.info(f"💬 Calling MCP chat tool: {model_name}")
-
-        # Call MCP tool
-        result = mcp_client.call_tool_sync("chat", params)
-
-        # Extract and parse result
-        response_text = extract_text_from_mcp_result(result)
-        if not response_text:
-            return "❌ No response from chat tool"
-
-        # Parse JSON response
-        try:
-            parsed = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse chat response: {e}")
-            return response_text
-
-        # Check for errors
-        if "error" in parsed:
-            error_msg = parsed["error"]
-            logger.error(f"Chat tool error: {error_msg}")
-            return f"❌ {error_msg}"
-
-        # Replay progress updates to UI
-        if progress_callback and "progress_log" in parsed:
-            for entry in parsed["progress_log"]:
-                progress_callback(entry["message"])
-
-        # Log stats
-        iterations = parsed.get("iterations", 0)
-        progress_count = len(parsed.get("progress_log", []))
-        logger.info(f"✅ Chat completed: {iterations} iterations, {progress_count} progress updates")
-
-        return parsed["response"]
-
-    except Exception as e:
-        logger.error(f"Error calling MCP chat tool: {e}", exc_info=True)
-        return f"❌ Error: {str(e)}"
-
-
-def chat_with_ai_direct(
-    model_name: str,
-    message: str,
-    api_key: Optional[str] = None,
-    namespace: Optional[str] = None,
-    progress_callback: Optional[callable] = None
-) -> str:
-    """
-    Chat with AI by directly importing chatbots (real-time progress).
-
-    This function imports chatbots directly and uses the MCP client adapter
-    to call tools via MCP protocol, enabling real-time progress updates.
-
-    Args:
-        model_name: Model identifier (e.g., "anthropic/claude-3-5-sonnet-20241022")
-        message: User's question
-        api_key: Optional API key for external models
-        namespace: Optional namespace filter
-        progress_callback: Optional callback for REAL-TIME progress updates
-
-    Returns:
-        AI response string
-
-    Example:
-        >>> def update_status(msg):
-        ...     st.write(msg)
-        >>> response = chat_with_ai_direct(
-        ...     model_name="anthropic/claude-3-5-sonnet-20241022",
-        ...     message="What's the CPU usage?",
-        ...     api_key="sk-ant-...",
-        ...     progress_callback=update_status  # Updates shown in real-time!
-        ... )
-    """
-    try:
-        # Import chatbots package and adapter
-        from chatbots import create_chatbot
-        from mcp_client_adapter import MCPClientAdapter
-
-        logger.info(f"💬 Creating chatbot for model: {model_name}")
-
-        # Create MCP client adapter using our existing MCP client session
-        # The adapter wraps the MCP session to implement ToolExecutor
-        mcp_session = mcp_client  # Use existing MCPClientHelper instance
-        tool_executor = MCPClientAdapter(mcp_session)
-
-        # Create chatbot with tool executor
-        chatbot = create_chatbot(
-            model_name=model_name,
-            api_key=api_key,
-            tool_executor=tool_executor
-        )
-
-        logger.info(f"✅ Created {chatbot.__class__.__name__}")
-
-        # Call chat with REAL-TIME progress callback
-        if progress_callback:
-            progress_callback(f"🤖 Starting chat with {model_name}")
-
-        response = chatbot.chat(
-            user_question=message,
-            namespace=namespace,
-            progress_callback=progress_callback  # Real-time updates!
-        )
-
-        if progress_callback:
-            progress_callback("✅ Chat completed")
-
-        logger.info(f"✅ Chat completed successfully")
-        return response
-
-    except Exception as e:
-        logger.error(f"Error in direct chatbot call: {e}", exc_info=True)
-        return f"❌ Error: {str(e)}"

@@ -35,6 +35,9 @@ def create_chatbot(
     Returns:
         Instance of the appropriate chatbot class
 
+    Raises:
+        ValueError: If tool_executor is None
+
     Examples:
         >>> from mcp_server.mcp_tools_adapter import MCPServerAdapter
         >>> tool_executor = MCPServerAdapter(mcp_server)
@@ -49,14 +52,14 @@ def create_chatbot(
             "tool_executor is required. Pass a ToolExecutor implementation "
             "(MCPServerAdapter from MCP server or MCPClientAdapter from UI)"
         )
-    
+
     # Detect provider from model name pattern using dict mapping
     PROVIDER_PATTERNS = {
         "anthropic": [("anthropic/", False), ("claude", False)],
         "openai": [("openai/", False), ("gpt-", True), ("o1-", True)],
         "google": [("google/", False), ("gemini", False)]
     }
-    
+
     model_lower = model_name.lower()
     provider = None
     for prov, patterns in PROVIDER_PATTERNS.items():
@@ -67,7 +70,7 @@ def create_chatbot(
                 break
         if provider:
             break
-    
+
     is_external = provider is not None
 
     # Route to appropriate implementation based on provider and capabilities

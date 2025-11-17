@@ -1,17 +1,11 @@
 """FastAPI application setup for Observability MCP Server with report endpoints."""
 
-import logging
-from typing import Optional
-from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 
 from mcp_server.observability_mcp import ObservabilityMCPServer
 from mcp_server.settings import settings
-
-# Use stdlib logger - structlog is initialized in main.py
-logger = logging.getLogger(__name__)
 
 # Import report-related modules with error handling for clearer diagnostics
 try:
@@ -34,7 +28,6 @@ except ImportError as e:
     ) from e
 
 server = ObservabilityMCPServer()
-
 
 # Select transport protocol
 if settings.MCP_TRANSPORT_PROTOCOL == "sse":

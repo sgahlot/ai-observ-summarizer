@@ -87,7 +87,7 @@ class MCPClientAdapter(ToolExecutor):
             logger.info("📋 MCPClientAdapter listing available MCP tools")
 
             # List tools via MCP client helper
-            tools_response = self.mcp_client.list_tools_sync()
+            tools_response = self.mcp_client.get_available_tools()
 
             if not tools_response:
                 logger.warning("No tools response from MCP client")
@@ -121,7 +121,7 @@ class MCPClientAdapter(ToolExecutor):
                     mcp_tool = MCPTool(
                         name=tool_info.get('name', ''),
                         description=tool_info.get('description', ''),
-                        input_schema=tool_info.get('inputSchema', {})
+                        input_schema=tool_info.get('input_schema', {})
                     )
                     mcp_tools.append(mcp_tool)
 

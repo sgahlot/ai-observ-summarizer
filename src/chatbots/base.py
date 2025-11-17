@@ -5,10 +5,7 @@ This module provides the base class for all chat bot implementations.
 All provider-specific implementations inherit from BaseChatBot.
 """
 
-import os
 import re
-import importlib.util
-import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Callable
 
@@ -46,11 +43,16 @@ class BaseChatBot(ABC):
                 "(MCPServerAdapter from MCP server or MCPClientAdapter from UI)"
             )
 
+        if not isinstance(tool_executor, ToolExecutor):
+            raise TypeError(
+                f"tool_executor must implement ToolExecutor, got {type(tool_executor)}"
+            )
+
         self.model_name = model_name
         # Let each subclass decide how to get its API key
         self.api_key = api_key if api_key is not None else self._get_api_key()
 
-        # Store tool executor for calling observability tools
+        # Store tool executor (dependency injection)
         self.tool_executor = tool_executor
 
         logger.info(f"{self.__class__.__name__} initialized with model: {self.model_name}")
@@ -82,13 +84,13 @@ class BaseChatBot(ABC):
         return self.model_name
 
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
-        """Get available tools via the tool executor.
+        """Get available tools via tool executor.
 
         Returns:
             List of tool definitions with name, description, and input_schema
         """
         try:
-            # Get tools from tool executor
+            # Fetch tools via tool executor (dependency injection)
             tools_list = self.tool_executor.list_tools()
 
             # Convert to expected format
@@ -101,11 +103,17 @@ class BaseChatBot(ABC):
                 }
                 tools.append(tool_def)
 
-            tool_names = [tool['name'] for tool in tools]
-            logger.info(f"🧰 Fetched {len(tools)} tools via tool executor: {', '.join(tool_names)}")
+            if tools:
+                tool_names = [tool['name'] for tool in tools]
+                logger.info(f"🧰 Fetched {len(tools)} tools via executor: {', '.join(tool_names)}")
+            else:
+                logger.warning("No tools returned from tool executor")
+
             return tools
         except Exception as e:
-            logger.error(f"Error fetching tools from tool executor: {e}")
+            logger.error(f"Error fetching tools via executor: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise
 
     def _normalize_korrel8r_query(self, q: str) -> str:

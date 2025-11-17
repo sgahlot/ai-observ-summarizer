@@ -73,7 +73,7 @@ class AnthropicChatBot(BaseChatBot):
 
             logger.info(f"🎯 AnthropicChatBot.chat() - Using Anthropic API with model: {model_name} (original: {self.model_name})")
 
-            # Get tools dynamically (from tool executor if available, otherwise fallback)
+            # MCP tools are already in Anthropic format
             claude_tools = self._get_mcp_tools()
 
             # Initial message

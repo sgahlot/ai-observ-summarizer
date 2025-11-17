@@ -539,7 +539,7 @@ class TestKorrel8rNormalization:
         # Should unescape quotes AND add missing class
         assert normalized == 'alert:alert:{"alertname":"Test"}'
 
-    def test_normalize_k8s_alert_misclassification(self):
+    def test_normalize_k8s_alert_misclassification(self, mock_mcp_tools):
         """Test that k8s:Alert: is corrected to alert:alert:."""
         from chatbots import LlamaChatBot
 
@@ -575,7 +575,7 @@ class TestKorrel8rNormalization:
 
         assert normalized == 'alert:alert:{"alertname":"Test","severity":"critical"}'
 
-    def test_normalize_k8s_pod_query(self):
+    def test_normalize_k8s_pod_query(self, mock_mcp_tools):
         """Test normalization of k8s Pod queries (non-alert domain)."""
         from chatbots import LlamaChatBot
 
@@ -676,7 +676,7 @@ class TestKorrel8rNormalization:
 class TestKorrel8rToolIntegration:
     """Test Korrel8r tool integration in routing."""
 
-    def test_normalize_is_called_for_korrel8r_queries(self):
+    def test_normalize_is_called_for_korrel8r_queries(self, mock_mcp_tools):
         """Test that normalization is invoked for korrel8r queries."""
         from chatbots import LlamaChatBot
 

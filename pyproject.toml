@@ -28,7 +28,6 @@ dependencies = [
     "anthropic>=0.39.0",
     "openai>=2.6.0",
     "google-generativeai>=0.8.5",
-    "nest-asyncio>=1.5.0",
 ]
 
 [dependency-groups]
