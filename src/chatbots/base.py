@@ -36,6 +36,7 @@ class BaseChatBot(ABC):
 
         Raises:
             ValueError: If tool_executor is None
+            TypeError: If tool_executor is None or doesn't implement ToolExecutor
         """
         if tool_executor is None:
             raise ValueError(
