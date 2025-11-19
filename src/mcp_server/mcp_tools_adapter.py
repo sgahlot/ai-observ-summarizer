@@ -6,7 +6,7 @@ It wraps the ObservabilityMCPServer instance to provide tool execution functiona
 """
 
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import sys
 from pathlib import Path
@@ -51,11 +51,44 @@ class MCPServerAdapter(ToolExecutor):
         try:
             logger.info(f"🔧 MCPServerAdapter calling tool: {tool_name}")
 
-            # Get the tool (needs to be awaited)
-            tool = asyncio.run(self.mcp_server.mcp.get_tool(tool_name))
+            # Get the current event loop if we're already in one
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop, create a new one
+                loop = None
 
-            # Execute the tool (needs to be awaited)
-            result = asyncio.run(tool.run(arguments))
+            if loop is not None:
+                # We're already in an async context, use run_coroutine_threadsafe
+                # or directly call the tool function
+                import concurrent.futures
+                import threading
+
+                # Run in a new thread with its own event loop
+                result_future = concurrent.futures.Future()
+
+                def run_in_thread():
+                    try:
+                        # Create a new event loop for this thread
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            tool = new_loop.run_until_complete(self.mcp_server.mcp.get_tool(tool_name))
+                            result = new_loop.run_until_complete(tool.run(arguments))
+                            result_future.set_result(result)
+                        finally:
+                            new_loop.close()
+                    except Exception as e:
+                        result_future.set_exception(e)
+
+                thread = threading.Thread(target=run_in_thread)
+                thread.start()
+                thread.join()
+                result = result_future.result()
+            else:
+                # No running loop, use asyncio.run
+                tool = asyncio.run(self.mcp_server.mcp.get_tool(tool_name))
+                result = asyncio.run(tool.run(arguments))
 
             # Extract text from result
             if hasattr(result, 'content'):
@@ -115,3 +148,43 @@ class MCPServerAdapter(ToolExecutor):
             import traceback
             logger.error(traceback.format_exc())
             return []
+
+    def get_tool(self, tool_name: str) -> Optional[MCPTool]:
+        """Get metadata for a specific tool.
+
+        Args:
+            tool_name: Name of the tool
+
+        Returns:
+            MCPTool object if found, None otherwise
+        """
+        try:
+            logger.info(f"🔍 MCPServerAdapter getting tool: {tool_name}")
+
+            # Access the tool manager from FastMCP
+            tool_manager = self.mcp_server.mcp._tool_manager
+
+            # Get the tool info
+            tool_info = tool_manager._tools.get(tool_name)
+            if not tool_info:
+                logger.warning(f"⚠️ Tool not found: {tool_name}")
+                return None
+
+            # Extract schema from the tool function
+            schema = tool_info.get('schema', {})
+
+            # Create MCPTool object
+            mcp_tool = MCPTool(
+                name=tool_name,
+                description=schema.get('description', ''),
+                input_schema=schema.get('inputSchema', {})
+            )
+
+            logger.info(f"✅ MCPServerAdapter found tool: {tool_name}")
+            return mcp_tool
+
+        except Exception as e:
+            logger.error(f"❌ Error getting tool {tool_name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None

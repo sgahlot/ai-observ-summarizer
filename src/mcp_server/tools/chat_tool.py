@@ -83,13 +83,13 @@ def chat(
         from mcp_server.observability_mcp import _server_instance
 
         # Create MCP tools adapter for this server
-        mcp_tools = MCPServerAdapter(_server_instance)
+        tool_executor = MCPServerAdapter(_server_instance)
 
-        # Create chatbot with MCP tools adapter
+        # Create chatbot with tool executor
         chatbot = create_chatbot(
             model_name=model_name,
             api_key=api_key,
-            mcp_tools=mcp_tools
+            tool_executor=tool_executor
         )
 
         logger.info(f"✅ Created {chatbot.__class__.__name__}")
@@ -97,10 +97,10 @@ def chat(
         # Execute chat with progress callback
         capture_progress(f"🤖 Starting chat with {model_name}")
 
+        # Note: scope parameter is not yet supported by chatbots, only namespace
         response = chatbot.chat(
             user_question=message,
             namespace=namespace,
-            scope=scope,
             progress_callback=capture_progress
         )
 
