@@ -124,19 +124,48 @@ class MCPServerAdapter(ToolExecutor):
         try:
             logger.info("📋 MCPServerAdapter listing available tools")
 
-            # Access the tool manager from FastMCP
-            tool_manager = self.mcp_server.mcp._tool_manager
+            # Use FastMCP's public get_tools() method
+            # Need to handle async context
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
 
+            if loop is not None:
+                # We're in async context - run in separate thread
+                import concurrent.futures
+                import threading
+
+                result_future = concurrent.futures.Future()
+
+                def run_in_thread():
+                    try:
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            tools = new_loop.run_until_complete(self.mcp_server.mcp.get_tools())
+                            result_future.set_result(tools)
+                        finally:
+                            new_loop.close()
+                    except Exception as e:
+                        result_future.set_exception(e)
+
+                thread = threading.Thread(target=run_in_thread)
+                thread.start()
+                thread.join()
+                fastmcp_tools = result_future.result()
+            else:
+                # No running loop
+                fastmcp_tools = asyncio.run(self.mcp_server.mcp.get_tools())
+
+            # Convert FastMCP Tool dict to MCPTool objects
+            # get_tools() returns a dict: {tool_name: FunctionTool}
             mcp_tools = []
-            for tool_name, tool_info in tool_manager._tools.items():
-                # Extract schema from the tool function
-                schema = tool_info.get('schema', {})
-
-                # Create MCPTool object
+            for tool_name, tool in fastmcp_tools.items():
                 mcp_tool = MCPTool(
-                    name=tool_name,
-                    description=schema.get('description', ''),
-                    input_schema=schema.get('inputSchema', {})
+                    name=tool.name,
+                    description=tool.description or "",
+                    input_schema=tool.parameters if hasattr(tool, 'parameters') else {}
                 )
                 mcp_tools.append(mcp_tool)
 
@@ -161,23 +190,49 @@ class MCPServerAdapter(ToolExecutor):
         try:
             logger.info(f"🔍 MCPServerAdapter getting tool: {tool_name}")
 
-            # Access the tool manager from FastMCP
-            tool_manager = self.mcp_server.mcp._tool_manager
+            # Use FastMCP's public get_tool() method
+            # Need to handle async context
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
 
-            # Get the tool info
-            tool_info = tool_manager._tools.get(tool_name)
-            if not tool_info:
+            if loop is not None:
+                # We're in async context - run in separate thread
+                import concurrent.futures
+                import threading
+
+                result_future = concurrent.futures.Future()
+
+                def run_in_thread():
+                    try:
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            tool = new_loop.run_until_complete(self.mcp_server.mcp.get_tool(tool_name))
+                            result_future.set_result(tool)
+                        finally:
+                            new_loop.close()
+                    except Exception as e:
+                        result_future.set_exception(e)
+
+                thread = threading.Thread(target=run_in_thread)
+                thread.start()
+                thread.join()
+                fastmcp_tool = result_future.result()
+            else:
+                # No running loop
+                fastmcp_tool = asyncio.run(self.mcp_server.mcp.get_tool(tool_name))
+
+            if not fastmcp_tool:
                 logger.warning(f"⚠️ Tool not found: {tool_name}")
                 return None
 
-            # Extract schema from the tool function
-            schema = tool_info.get('schema', {})
-
-            # Create MCPTool object
+            # Convert FastMCP FunctionTool object to MCPTool object
             mcp_tool = MCPTool(
-                name=tool_name,
-                description=schema.get('description', ''),
-                input_schema=schema.get('inputSchema', {})
+                name=fastmcp_tool.name,
+                description=fastmcp_tool.description or "",
+                input_schema=fastmcp_tool.parameters if hasattr(fastmcp_tool, 'parameters') else {}
             )
 
             logger.info(f"✅ MCPServerAdapter found tool: {tool_name}")
