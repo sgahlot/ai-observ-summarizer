@@ -9,32 +9,26 @@ Usage:
     # Show help and all available options
     python scripts/chatbot_mcp_cli_example.py --help
 
-    # Test with local Llama model (default)
-    uv run scripts/chatbot_mcp_cli_example.py --test llama
+    # Invoke chat with local Llama model (default)
+    uv run scripts/chatbot_mcp_cli_example.py --model llama
+
+    # Invoke chat with Anthropic Claude (will prompt for API key securely)
+    python scripts/chatbot_mcp_cli_example.py --model anthropic
+
+    # Invoke chat with OpenAI GPT (will prompt for API key securely)
+    python scripts/chatbot_mcp_cli_example.py --model openai
+
+    # Invoke chat with Google Gemini (will prompt for API key securely)
+    python scripts/chatbot_mcp_cli_example.py --model gemini
+
+    # Use with namespace scoping
+    python scripts/chatbot_mcp_cli_example.py --model llama --namespace llm-serving
 
     # List all available MCP tools
-    python scripts/chatbot_mcp_cli_example.py --test list
-
-    # Test with Anthropic Claude (will prompt for API key securely)
-    python scripts/chatbot_mcp_cli_example.py --test anthropic
-
-    # Test with OpenAI GPT (will prompt for API key securely)
-    python scripts/chatbot_mcp_cli_example.py --test openai
-
-    # Test with Google Gemini (will prompt for API key securely)
-    python scripts/chatbot_mcp_cli_example.py --test gemini
-
-    # Test with namespace scoping
-    python scripts/chatbot_mcp_cli_example.py --test scope --namespace llm-serving
-
-    # Test error handling
-    python scripts/chatbot_mcp_cli_example.py --test errors
-
-    # Run all tests (will prompt for API keys for external models)
-    python scripts/chatbot_mcp_cli_example.py --test all
+    python scripts/chatbot_mcp_cli_example.py --list-tools
 
     # Custom MCP server URL (e.g., OpenShift deployment)
-    python scripts/chatbot_mcp_cli_example.py --mcp-url https://your-mcp-server.apps.example.com
+    python scripts/chatbot_mcp_cli_example.py --model llama --mcp-url https://your-mcp-server.apps.example.com
 """
 
 import argparse
@@ -339,19 +333,17 @@ def test_list_tools(mcp_url: str) -> bool:
 def test_chat_with_model(
     mcp_url: str,
     model_key: str,
-    namespace: Optional[str] = None,
-    test_number: Optional[int] = None
+    namespace: Optional[str] = None
 ) -> bool:
-    """Test chat tool with a specific model.
+    """Invoke chat tool with a specific model.
     
     Args:
         mcp_url: Base URL of MCP server
         model_key: Key from MODEL_CONFIGS dictionary
         namespace: Optional Kubernetes namespace
-        test_number: Optional test number for display
         
     Returns:
-        True if test succeeded, False otherwise
+        True if chat succeeded, False otherwise
     """
     if model_key not in MODEL_CONFIGS:
         print(f"❌ Unknown model key: {model_key}")
@@ -359,10 +351,9 @@ def test_chat_with_model(
     
     config = MODEL_CONFIGS[model_key]
     display_name = config["display_name"]
-    test_label = f"Test {test_number}: " if test_number else ""
     
     print("\n" + "="*80)
-    print(f"{test_label}Chat with {display_name}")
+    print(f"Chat with {display_name}")
     print("="*80)
 
     # Get API key if required
@@ -371,7 +362,7 @@ def test_chat_with_model(
         try:
             api_key = get_api_key(config["api_key_provider"])
         except (KeyboardInterrupt, SystemExit):
-            print("\n⚠️  Skipping test due to cancelled API key input.")
+            print("\n⚠️  Cancelled by user.")
             return False
 
     # First, get available models (only for llama to show available options)
@@ -384,7 +375,7 @@ def test_chat_with_model(
     try:
         query = select_query()
     except (KeyboardInterrupt, SystemExit):
-        print("\n⚠️  Skipping test due to cancelled query selection.")
+        print("\n⚠️  Cancelled by user.")
         return False
 
     # Build arguments
@@ -409,107 +400,6 @@ def test_chat_with_model(
     return True
 
 
-def test_chat_with_llama(mcp_url: str, namespace: Optional[str] = None) -> bool:
-    """Test chat tool with local Llama model."""
-    return test_chat_with_model(mcp_url, "llama", namespace, test_number=1)
-
-
-def test_chat_with_anthropic(mcp_url: str, namespace: Optional[str] = None) -> bool:
-    """Test chat tool with Anthropic Claude model."""
-    return test_chat_with_model(mcp_url, "anthropic", namespace, test_number=2)
-
-
-def test_chat_with_openai(mcp_url: str, namespace: Optional[str] = None) -> bool:
-    """Test chat tool with OpenAI GPT model."""
-    return test_chat_with_model(mcp_url, "openai", namespace, test_number=3)
-
-
-def test_chat_with_gemini(mcp_url: str, namespace: Optional[str] = None) -> bool:
-    """Test chat tool with Gemini model."""
-    return test_chat_with_model(mcp_url, "gemini", namespace, test_number=4)
-
-
-def test_chat_with_scope(mcp_url: str, namespace: str) -> bool:
-    """Test chat tool with namespace and scope filters.
-    
-    Args:
-        mcp_url: Base URL of MCP server
-        namespace: Kubernetes namespace for scoped queries
-        
-    Returns:
-        True if test succeeded, False otherwise
-    """
-    print("\n" + "="*80)
-    print("Test 5: Chat with Namespace and Scope")
-    print("="*80)
-
-    # Interactive query selection
-    try:
-        query = select_query()
-    except (KeyboardInterrupt, SystemExit):
-        print("\n⚠️  Skipping test due to cancelled query selection.")
-        return False
-
-    args = {
-        "model_name": MODEL_CONFIGS["llama"]["model_name"],
-        "message": query,
-        "namespace": namespace,
-        "scope": "namespace_scoped"
-    }
-
-    result = call_mcp_tool(mcp_url, "chat", args)
-    
-    if "error" in result:
-        print_chat_result(result)
-        return False
-    
-    print_chat_result(result)
-    return True
-
-
-def test_chat_error_handling(mcp_url: str) -> bool:
-    """Test error handling with invalid inputs.
-    
-    Args:
-        mcp_url: Base URL of MCP server
-        
-    Returns:
-        True if all error tests completed (regardless of pass/fail)
-    """
-    print("\n" + "="*80)
-    print("Test 6: Error Handling")
-    print("="*80)
-
-    tests_completed = 0
-    total_tests = 3
-
-    # Test 1: Missing required parameter
-    print("\n--- Test 6.1: Missing model_name ---")
-    result = call_mcp_tool(mcp_url, "chat", {
-        "message": "Test message"
-    })
-    print(f"Result: {json.dumps(result, indent=2)}")
-    tests_completed += 1
-
-    # Test 2: Invalid model name
-    print("\n--- Test 6.2: Invalid model name ---")
-    result = call_mcp_tool(mcp_url, "chat", {
-        "model_name": "invalid/non-existent-model",
-        "message": "Test message"
-    })
-    print(f"Result: {json.dumps(result, indent=2)}")
-    tests_completed += 1
-
-    # Test 3: Empty message
-    print("\n--- Test 6.3: Empty message ---")
-    result = call_mcp_tool(mcp_url, "chat", {
-        "model_name": MODEL_CONFIGS["llama"]["model_name"],
-        "message": ""
-    })
-    print(f"Result: {json.dumps(result, indent=2)}")
-    tests_completed += 1
-
-    return tests_completed == total_tests
 
 
 def print_chat_result(result: Dict[str, Any]):
@@ -584,21 +474,21 @@ def main():
         help="Kubernetes namespace for scoped queries"
     )
     parser.add_argument(
-        "--skip-external",
-        action="store_true",
-        help="Skip tests requiring external API keys"
+        "--model",
+        choices=["llama", "anthropic", "openai", "gemini"],
+        default="llama",
+        help="Model to use for chat (default: llama)"
     )
     parser.add_argument(
-        "--test",
-        choices=["health", "list", "llama", "anthropic", "openai", "gemini", "scope", "errors", "all"],
-        default="all",
-        help="Specific test to run (default: all)"
+        "--list-tools",
+        action="store_true",
+        help="List all available MCP tools and exit"
     )
 
     args = parser.parse_args()
 
     print("\n" + "="*80)
-    print("MCP Chat Tool Test Suite")
+    print("MCP Chat Tool")
     print("="*80)
     print(f"MCP Server: {args.mcp_url}")
     if args.namespace:
@@ -618,98 +508,25 @@ def main():
         print("\n❌ Server health check failed. Exiting.")
         sys.exit(1)
 
-    # Only list tools if explicitly requested
-    if args.test == "list":
+    # List tools if requested
+    if args.list_tools:
         chat_tool_found = test_list_tools(args.mcp_url)
         if not chat_tool_found:
             print("\n⚠️  Chat tool not found in tools list.")
         sys.exit(0 if chat_tool_found else 1)
 
-    # Run selected tests
-    tests_run = 0
-    tests_passed = 0
-
-    if args.test in ["llama", "all"]:
-        try:
-            if test_chat_with_llama(args.mcp_url, args.namespace):
-                tests_passed += 1
-            tests_run += 1
-        except Exception as e:
-            print(f"❌ Llama test failed: {e}")
-            import traceback
-            traceback.print_exc()
-            tests_run += 1
-
-    if args.test in ["anthropic", "all"] and not args.skip_external:
-        try:
-            if test_chat_with_anthropic(args.mcp_url, args.namespace):
-                tests_passed += 1
-            tests_run += 1
-        except Exception as e:
-            print(f"❌ Anthropic test failed: {e}")
-            import traceback
-            traceback.print_exc()
-            tests_run += 1
-
-    if args.test in ["openai", "all"] and not args.skip_external:
-        try:
-            if test_chat_with_openai(args.mcp_url, args.namespace):
-                tests_passed += 1
-            tests_run += 1
-        except Exception as e:
-            print(f"❌ OpenAI test failed: {e}")
-            import traceback
-            traceback.print_exc()
-            tests_run += 1
-
-    if args.test in ["gemini", "all"] and not args.skip_external:
-        try:
-            if test_chat_with_gemini(args.mcp_url, args.namespace):
-                tests_passed += 1
-            tests_run += 1
-        except Exception as e:
-            print(f"❌ Gemini test failed: {e}")
-            import traceback
-            traceback.print_exc()
-            tests_run += 1
-
-    if args.test in ["scope", "all"] and args.namespace:
-        try:
-            if test_chat_with_scope(args.mcp_url, args.namespace):
-                tests_passed += 1
-            tests_run += 1
-        except Exception as e:
-            print(f"❌ Scope test failed: {e}")
-            import traceback
-            traceback.print_exc()
-            tests_run += 1
-    elif args.test == "scope" and not args.namespace:
-        print("\n⚠️  Scope test requires --namespace argument. Skipping.")
-
-    if args.test in ["errors", "all"]:
-        try:
-            if test_chat_error_handling(args.mcp_url):
-                tests_passed += 1
-            tests_run += 1
-        except Exception as e:
-            print(f"❌ Error handling test failed: {e}")
-            import traceback
-            traceback.print_exc()
-            tests_run += 1
-
-    # Print summary
-    print("\n" + "="*80)
-    print("Test Summary")
-    print("="*80)
-    print(f"Tests Run: {tests_run}")
-    print(f"Tests Passed: {tests_passed}")
-    print(f"Tests Failed: {tests_run - tests_passed}")
-
-    if tests_passed == tests_run and tests_run > 0:
-        print("\n✅ All tests passed!")
-        sys.exit(0)
-    else:
-        print("\n⚠️  Some tests failed or were skipped")
+    # Invoke chat with selected model
+    try:
+        model_key = args.model
+        success = test_chat_with_model(args.mcp_url, model_key, args.namespace)
+        sys.exit(0 if success else 1)
+    except KeyboardInterrupt:
+        print("\n\n❌ Cancelled by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
