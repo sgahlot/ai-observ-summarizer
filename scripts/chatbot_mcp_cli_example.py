@@ -44,6 +44,7 @@ import requests
 import asyncio
 import site
 import getpass
+import importlib
 from typing import Dict, Any, Optional, List
 
 
@@ -54,10 +55,36 @@ SAMPLE_QUERIES = [
     "Show me memory usage trends",
     "What's the GPU utilization?",
     "List all running pods",
-    "Show me recent traces",
     "What metrics are available?",
     "Analyze cluster performance",
 ]
+
+# Model configurations
+MODEL_CONFIGS = {
+    "llama": {
+        "model_name": "meta-llama/Llama-3.2-3B-Instruct",
+        "requires_api_key": False,
+        "display_name": "Local Llama Model",
+    },
+    "anthropic": {
+        "model_name": "anthropic/claude-3-5-haiku-20241022",
+        "requires_api_key": True,
+        "api_key_provider": "Anthropic",
+        "display_name": "Anthropic Claude",
+    },
+    "openai": {
+        "model_name": "openai/gpt-4o-mini",
+        "requires_api_key": True,
+        "api_key_provider": "OpenAI",
+        "display_name": "OpenAI GPT",
+    },
+    "gemini": {
+        "model_name": "google/gemini-2.5-flash",
+        "requires_api_key": True,
+        "api_key_provider": "Google Gemini",
+        "display_name": "Google Gemini",
+    },
+}
 
 
 def get_api_key(provider: str) -> str:
@@ -108,6 +135,45 @@ def select_query() -> str:
             sys.exit(1)
 
 
+def _extract_text_from_result(result: Any) -> str:
+    """Extract text content from FastMCP tool result.
+    
+    Args:
+        result: FastMCP tool result object
+        
+    Returns:
+        Extracted text as string
+    """
+    if hasattr(result, 'content') and result.content:
+        # Content is a list of content blocks
+        result_text = ""
+        for block in result.content:
+            if hasattr(block, 'text'):
+                result_text += block.text
+            elif isinstance(block, dict) and 'text' in block:
+                result_text += block['text']
+            else:
+                result_text += str(block)
+        return result_text
+    return str(result)
+
+
+def _parse_tool_result(result_text: str) -> Dict[str, Any]:
+    """Parse tool result text into a dictionary.
+    
+    Args:
+        result_text: Raw text result from tool
+        
+    Returns:
+        Parsed result as dictionary
+    """
+    # The chat tool returns JSON string
+    try:
+        return json.loads(result_text)
+    except json.JSONDecodeError:
+        return {"raw_text": result_text}
+
+
 def call_mcp_tool(
     mcp_url: str,
     tool_name: str,
@@ -139,29 +205,15 @@ def call_mcp_tool(
                 return result
         
         result = asyncio.run(_call_tool())
-        
-        # Extract text from result
-        if hasattr(result, 'content') and result.content:
-            # Content is a list of content blocks
-            result_text = ""
-            for block in result.content:
-                if hasattr(block, 'text'):
-                    result_text += block.text
-                elif isinstance(block, dict) and 'text' in block:
-                    result_text += block['text']
-                else:
-                    result_text += str(block)
-            
-            # The chat tool returns JSON string
-            try:
-                return json.loads(result_text)
-            except json.JSONDecodeError:
-                return {"raw_text": result_text}
-        else:
-            return {"raw_text": str(result)}
+        result_text = _extract_text_from_result(result)
+        return _parse_tool_result(result_text)
 
+    except ImportError as e:
+        error_msg = str(e)
+        print(f"❌ Import Error: {error_msg}")
+        return {"error": error_msg}
     except Exception as e:
-        print(f"Error calling tool: {e}")
+        print(f"❌ Error calling tool: {e}")
         import traceback
         traceback.print_exc()
         return {"error": str(e)}
@@ -190,9 +242,17 @@ def test_health_check(mcp_url: str) -> bool:
         return False
 
 
-def _get_fastmcp_client(mcp_url: str):
-    """Get FastMCP Client instance for the given URL."""
-    # Ensure site-packages is in path to find fastmcp
+def check_fastmcp_available() -> bool:
+    """Check if fastmcp is available and can be imported."""
+    try:
+        importlib.import_module("fastmcp")
+        return True
+    except ImportError:
+        return False
+
+
+def _ensure_site_packages_in_path() -> None:
+    """Ensure site-packages directories are in sys.path to find fastmcp."""
     try:
         site_paths: List[str] = []
         try:
@@ -210,8 +270,27 @@ def _get_fastmcp_client(mcp_url: str):
     except Exception:
         pass
 
-    # Import fastmcp lazily
-    import importlib
+
+def _get_fastmcp_client(mcp_url: str):
+    """Get FastMCP Client instance for the given URL.
+    
+    Args:
+        mcp_url: Base URL of MCP server
+        
+    Returns:
+        FastMCP Client instance
+        
+    Raises:
+        ImportError: If fastmcp cannot be imported
+    """
+    _ensure_site_packages_in_path()
+    
+    if not check_fastmcp_available():
+        raise ImportError(
+            "fastmcp is not available. Please install it with: "
+            "pip install fastmcp>=2.11 or uv pip install fastmcp>=2.11"
+        )
+    
     fastmcp_module = importlib.import_module("fastmcp")
     Client = fastmcp_module.Client
 
@@ -257,161 +336,180 @@ def test_list_tools(mcp_url: str) -> bool:
         return False
 
 
-def test_chat_with_llama(mcp_url: str, namespace: Optional[str] = None):
-    """Test chat tool with local Llama model."""
+def test_chat_with_model(
+    mcp_url: str,
+    model_key: str,
+    namespace: Optional[str] = None,
+    test_number: Optional[int] = None
+) -> bool:
+    """Test chat tool with a specific model.
+    
+    Args:
+        mcp_url: Base URL of MCP server
+        model_key: Key from MODEL_CONFIGS dictionary
+        namespace: Optional Kubernetes namespace
+        test_number: Optional test number for display
+        
+    Returns:
+        True if test succeeded, False otherwise
+    """
+    if model_key not in MODEL_CONFIGS:
+        print(f"❌ Unknown model key: {model_key}")
+        return False
+    
+    config = MODEL_CONFIGS[model_key]
+    display_name = config["display_name"]
+    test_label = f"Test {test_number}: " if test_number else ""
+    
     print("\n" + "="*80)
-    print("Test 1: Chat with Local Llama Model")
+    print(f"{test_label}Chat with {display_name}")
     print("="*80)
 
-    # First, get available models
-    print("\nFetching available models...")
-    models_result = call_mcp_tool(mcp_url, "list_summarization_models", {})
-    print(f"Available models: {models_result}")
+    # Get API key if required
+    api_key: Optional[str] = None
+    if config.get("requires_api_key", False):
+        try:
+            api_key = get_api_key(config["api_key_provider"])
+        except (KeyboardInterrupt, SystemExit):
+            print("\n⚠️  Skipping test due to cancelled API key input.")
+            return False
+
+    # First, get available models (only for llama to show available options)
+    if model_key == "llama":
+        print("\nFetching available models...")
+        models_result = call_mcp_tool(mcp_url, "list_summarization_models", {})
+        print(f"Available models: {models_result}")
 
     # Interactive query selection
-    query = select_query()
+    try:
+        query = select_query()
+    except (KeyboardInterrupt, SystemExit):
+        print("\n⚠️  Skipping test due to cancelled query selection.")
+        return False
 
-    # Test with a local Llama model
-    args = {
-        "model_name": "meta-llama/Llama-3.2-3B-Instruct",  # Adjust based on your setup
+    # Build arguments
+    args: Dict[str, Any] = {
+        "model_name": config["model_name"],
         "message": query
     }
-
+    
+    if api_key:
+        args["api_key"] = api_key
+    
     if namespace:
         args["namespace"] = namespace
 
     result = call_mcp_tool(mcp_url, "chat", args)
-
+    
+    if "error" in result:
+        print_chat_result(result)
+        return False
+    
     print_chat_result(result)
+    return True
 
 
-def test_chat_with_anthropic(mcp_url: str, namespace: Optional[str] = None):
+def test_chat_with_llama(mcp_url: str, namespace: Optional[str] = None) -> bool:
+    """Test chat tool with local Llama model."""
+    return test_chat_with_model(mcp_url, "llama", namespace, test_number=1)
+
+
+def test_chat_with_anthropic(mcp_url: str, namespace: Optional[str] = None) -> bool:
     """Test chat tool with Anthropic Claude model."""
-    print("\n" + "="*80)
-    print("Test 2: Chat with Anthropic Claude")
-    print("="*80)
-
-    # Securely prompt for API key
-    api_key = get_api_key("Anthropic")
-
-    # Interactive query selection
-    query = select_query()
-
-    args = {
-        "model_name": "anthropic/claude-3-5-haiku-20241022",
-        "message": query,
-        "api_key": api_key
-    }
-
-    if namespace:
-        args["namespace"] = namespace
-
-    result = call_mcp_tool(mcp_url, "chat", args)
-
-    print_chat_result(result)
+    return test_chat_with_model(mcp_url, "anthropic", namespace, test_number=2)
 
 
-def test_chat_with_openai(mcp_url: str, namespace: Optional[str] = None):
+def test_chat_with_openai(mcp_url: str, namespace: Optional[str] = None) -> bool:
     """Test chat tool with OpenAI GPT model."""
-    print("\n" + "="*80)
-    print("Test 3: Chat with OpenAI GPT")
-    print("="*80)
-
-    # Securely prompt for API key
-    api_key = get_api_key("OpenAI")
-
-    # Interactive query selection
-    query = select_query()
-
-    args = {
-        "model_name": "openai/gpt-4o-mini",
-        "message": query,
-        "api_key": api_key
-    }
-
-    if namespace:
-        args["namespace"] = namespace
-
-    result = call_mcp_tool(mcp_url, "chat", args)
-
-    print_chat_result(result)
+    return test_chat_with_model(mcp_url, "openai", namespace, test_number=3)
 
 
-def test_chat_with_gemini(mcp_url: str, namespace: Optional[str] = None):
+def test_chat_with_gemini(mcp_url: str, namespace: Optional[str] = None) -> bool:
     """Test chat tool with Gemini model."""
+    return test_chat_with_model(mcp_url, "gemini", namespace, test_number=4)
+
+
+def test_chat_with_scope(mcp_url: str, namespace: str) -> bool:
+    """Test chat tool with namespace and scope filters.
+    
+    Args:
+        mcp_url: Base URL of MCP server
+        namespace: Kubernetes namespace for scoped queries
+        
+    Returns:
+        True if test succeeded, False otherwise
+    """
     print("\n" + "="*80)
-    print("Test 3: Chat with Gemini")
-    print("="*80)
-
-    # Securely prompt for API key
-    api_key = get_api_key("Google Gemini")
-
-    # Interactive query selection
-    query = select_query()
-
-    args = {
-        "model_name": "google/gemini-2.5-flash",
-        "message": query,
-        "api_key": api_key
-    }
-
-    if namespace:
-        args["namespace"] = namespace
-
-    result = call_mcp_tool(mcp_url, "chat", args)
-
-    print_chat_result(result)
-
-
-def test_chat_with_scope(mcp_url: str, namespace: str):
-    """Test chat tool with namespace and scope filters."""
-    print("\n" + "="*80)
-    print("Test 4: Chat with Namespace and Scope")
+    print("Test 5: Chat with Namespace and Scope")
     print("="*80)
 
     # Interactive query selection
-    query = select_query()
+    try:
+        query = select_query()
+    except (KeyboardInterrupt, SystemExit):
+        print("\n⚠️  Skipping test due to cancelled query selection.")
+        return False
 
     args = {
-        "model_name": "meta-llama/Llama-3.2-3B-Instruct",
+        "model_name": MODEL_CONFIGS["llama"]["model_name"],
         "message": query,
         "namespace": namespace,
         "scope": "namespace_scoped"
     }
 
     result = call_mcp_tool(mcp_url, "chat", args)
-
+    
+    if "error" in result:
+        print_chat_result(result)
+        return False
+    
     print_chat_result(result)
+    return True
 
 
-def test_chat_error_handling(mcp_url: str):
-    """Test error handling with invalid inputs."""
+def test_chat_error_handling(mcp_url: str) -> bool:
+    """Test error handling with invalid inputs.
+    
+    Args:
+        mcp_url: Base URL of MCP server
+        
+    Returns:
+        True if all error tests completed (regardless of pass/fail)
+    """
     print("\n" + "="*80)
-    print("Test 5: Error Handling")
+    print("Test 6: Error Handling")
     print("="*80)
 
+    tests_completed = 0
+    total_tests = 3
+
     # Test 1: Missing required parameter
-    print("\n--- Test 5.1: Missing model_name ---")
+    print("\n--- Test 6.1: Missing model_name ---")
     result = call_mcp_tool(mcp_url, "chat", {
         "message": "Test message"
     })
     print(f"Result: {json.dumps(result, indent=2)}")
+    tests_completed += 1
 
     # Test 2: Invalid model name
-    print("\n--- Test 5.2: Invalid model name ---")
+    print("\n--- Test 6.2: Invalid model name ---")
     result = call_mcp_tool(mcp_url, "chat", {
         "model_name": "invalid/non-existent-model",
         "message": "Test message"
     })
     print(f"Result: {json.dumps(result, indent=2)}")
+    tests_completed += 1
 
     # Test 3: Empty message
-    print("\n--- Test 5.3: Empty message ---")
+    print("\n--- Test 6.3: Empty message ---")
     result = call_mcp_tool(mcp_url, "chat", {
-        "model_name": "meta-llama/Llama-3.2-3B-Instruct",
+        "model_name": MODEL_CONFIGS["llama"]["model_name"],
         "message": ""
     })
     print(f"Result: {json.dumps(result, indent=2)}")
+    tests_completed += 1
+
+    return tests_completed == total_tests
 
 
 def print_chat_result(result: Dict[str, Any]):
@@ -507,6 +605,14 @@ def main():
         print(f"Namespace: {args.namespace}")
     print("="*80)
 
+    # Check for fastmcp dependency
+    if not check_fastmcp_available():
+        print("\n❌ fastmcp is not available. Please install it:")
+        print("   pip install fastmcp>=2.11")
+        print("   or")
+        print("   uv pip install fastmcp>=2.11")
+        sys.exit(1)
+
     # Always run health check
     if not test_health_check(args.mcp_url):
         print("\n❌ Server health check failed. Exiting.")
@@ -525,56 +631,70 @@ def main():
 
     if args.test in ["llama", "all"]:
         try:
-            test_chat_with_llama(args.mcp_url, args.namespace)
+            if test_chat_with_llama(args.mcp_url, args.namespace):
+                tests_passed += 1
             tests_run += 1
-            tests_passed += 1
         except Exception as e:
             print(f"❌ Llama test failed: {e}")
+            import traceback
+            traceback.print_exc()
             tests_run += 1
 
     if args.test in ["anthropic", "all"] and not args.skip_external:
         try:
-            test_chat_with_anthropic(args.mcp_url, args.namespace)
+            if test_chat_with_anthropic(args.mcp_url, args.namespace):
+                tests_passed += 1
             tests_run += 1
-            tests_passed += 1
         except Exception as e:
             print(f"❌ Anthropic test failed: {e}")
+            import traceback
+            traceback.print_exc()
             tests_run += 1
 
     if args.test in ["openai", "all"] and not args.skip_external:
         try:
-            test_chat_with_openai(args.mcp_url, args.namespace)
+            if test_chat_with_openai(args.mcp_url, args.namespace):
+                tests_passed += 1
             tests_run += 1
-            tests_passed += 1
         except Exception as e:
             print(f"❌ OpenAI test failed: {e}")
+            import traceback
+            traceback.print_exc()
             tests_run += 1
 
     if args.test in ["gemini", "all"] and not args.skip_external:
         try:
-            test_chat_with_gemini(args.mcp_url, args.namespace)
+            if test_chat_with_gemini(args.mcp_url, args.namespace):
+                tests_passed += 1
             tests_run += 1
-            tests_passed += 1
         except Exception as e:
             print(f"❌ Gemini test failed: {e}")
+            import traceback
+            traceback.print_exc()
             tests_run += 1
 
     if args.test in ["scope", "all"] and args.namespace:
         try:
-            test_chat_with_scope(args.mcp_url, args.namespace)
+            if test_chat_with_scope(args.mcp_url, args.namespace):
+                tests_passed += 1
             tests_run += 1
-            tests_passed += 1
         except Exception as e:
             print(f"❌ Scope test failed: {e}")
+            import traceback
+            traceback.print_exc()
             tests_run += 1
+    elif args.test == "scope" and not args.namespace:
+        print("\n⚠️  Scope test requires --namespace argument. Skipping.")
 
     if args.test in ["errors", "all"]:
         try:
-            test_chat_error_handling(args.mcp_url)
+            if test_chat_error_handling(args.mcp_url):
+                tests_passed += 1
             tests_run += 1
-            tests_passed += 1
         except Exception as e:
             print(f"❌ Error handling test failed: {e}")
+            import traceback
+            traceback.print_exc()
             tests_run += 1
 
     # Print summary
