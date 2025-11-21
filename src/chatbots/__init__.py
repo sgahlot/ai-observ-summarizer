@@ -5,14 +5,14 @@ This package provides multi-provider chat bot implementations with a clean
 base class hierarchy.
 
 Usage:
-    from mcp_server.chatbots import create_chatbot
+    from chatbots import create_chatbot
 
     # Create a chatbot using the factory function
     chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...")
     response = chatbot.chat("What's the CPU usage?")
 
     # Or import specific implementations
-    from mcp_server.chatbots import AnthropicChatBot, OpenAIChatBot
+    from chatbots import AnthropicChatBot, OpenAIChatBot
 
     anthropic_bot = AnthropicChatBot("claude-3-5-haiku", api_key="sk-ant-...")
     openai_bot = OpenAIChatBot("gpt-4o-mini", api_key="sk-...")

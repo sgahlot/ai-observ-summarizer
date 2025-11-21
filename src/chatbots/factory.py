@@ -44,7 +44,7 @@ def create_chatbot(
         >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...", tool_executor=tool_executor)
         >>> response = chatbot.chat("What's the CPU usage?")
 
-        >>> chatbot = create_chatbot("meta-llama/Llama-3.1-8B-Instruct", tool_executor=tool_executor)
+        >>> chatbot = create_chatbot("meta-llama/Llama-3.2-3B-Instruct", tool_executor=tool_executor)
         >>> response = chatbot.chat("Check memory usage")
     """
     if tool_executor is None:

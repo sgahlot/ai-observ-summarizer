@@ -1,8 +1,8 @@
 """
 Deterministic Chat Bot Implementation
 
-This module provides a deterministic parsing implementation for small models
-that don't have reliable tool calling capabilities (<75% accuracy).
+This module provides a deterministic parsing implementation for models
+that don't have reliable tool calling capabilities (e.g., Llama 3.2 with ~67% accuracy).
 """
 
 import json

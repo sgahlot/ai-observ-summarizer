@@ -5,8 +5,8 @@ This interface allows chatbots to execute tools without depending on
 whether they're running in the MCP server process or in a client process.
 
 Implementations:
-- MCPServerAdapter (mcp_server/mcp_tools_adapter.py) - Direct tool calls in server
-- MCPClientAdapter (ui/mcp_client_adapter.py) - HTTP calls to MCP server from UI
+- MCPServerAdapter (mcp_server/mcp_tools_adapter.py) - Direct tool calls in server process
+- MCPClientAdapter (ui/mcp_client_adapter.py) - MCP protocol calls via FastMCP client from UI
 """
 
 from abc import ABC, abstractmethod
