@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+package-lock.json
 
 # Build output
 dist/
@@ -25,4 +26,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# Test coverage
+coverage/
 
