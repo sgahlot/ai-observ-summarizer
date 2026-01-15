@@ -8,7 +8,7 @@ plugin:
     tag: 1.0.7
   imagePullPolicy: Always
   imagePullSecrets: []
-  replicas: 2
+  replicas: 1
   port: 9443
   securityContext:
     enabled: true
