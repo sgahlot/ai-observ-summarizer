@@ -133,9 +133,38 @@ Monitor GPU health across your entire OpenShift cluster:
 - **Prometheus/Thanos**: Metrics collection and long-term storage
 - **vLLM**: Model serving with /metrics endpoint
 - **DCGM**: GPU monitoring and telemetry
-- **Streamlit UI**: Multi-dashboard interface (vLLM, OpenShift, Chat)
+- **UI Options**: Console Plugin (integrated) or React UI (standalone)
 - **MCP Server**: Model Context Protocol server for metrics analysis, report generation, and AI assistant integration
 - **LLM Stack**: Llama models for AI-powered insights and summaries
+
+### **UI Deployment Options**
+
+The platform supports two deployment modes from a single codebase, controlled by the `DEV_MODE` variable:
+
+| Mode | Description | Access | Use Case |
+|------|-------------|--------|----------|
+| **Console Plugin** | Integrated into OpenShift Console | OpenShift Console UI | Production (default) |
+| **React UI** | Standalone web application | Dedicated Route | Development/Standalone |
+
+Both share the same MCP server backend and provide identical monitoring capabilities.
+
+**Console Plugin** (default - DEV_MODE=false):
+```bash
+# Deploy Console Plugin only (production mode)
+make install NAMESPACE=your-namespace
+# or explicitly
+make install NAMESPACE=your-namespace DEV_MODE=false
+```
+
+**React UI** (development - DEV_MODE=true):
+```bash
+# Deploy React UI only (development mode)
+make install NAMESPACE=your-namespace DEV_MODE=true
+```
+
+**Note**: The `make install` target deploys only one UI mode at a time based on DEV_MODE. However, `make uninstall` will attempt to clean up both Console Plugin and React UI if they exist, regardless of the current DEV_MODE setting.
+
+See [Build & Deploy](#build--deploy) section for image build commands.
 
 ### **Key Features**
 1. **vLLM Dashboard**: Monitor model performance, GPU usage, latency
@@ -167,9 +196,15 @@ Monitor GPU health across your entire OpenShift cluster:
 
 Use the included `Makefile` to install everything:
 ```bash
+# Install with Console Plugin (production mode - default)
 make install NAMESPACE=your-namespace
+
+# Install with React UI (development mode)
+make install NAMESPACE=your-namespace DEV_MODE=true
 ```
-This will install the project with the default LLM deployment, `llama-3-1-8b-instruct`.
+This will install the project with:
+- Default LLM deployment: `llama-3-1-8b-instruct`
+- Default UI: Console Plugin (DEV_MODE=false) or React UI (DEV_MODE=true)
 
 ### Using an Existing Model
 
@@ -273,25 +308,28 @@ make remove-tracing NAMESPACE=your-namespace                 # Auto-instrumentat
 
 ### Accessing the Application
 
-The default configuration deploys:
+The standard installation deploys:
 - **llm-service** - LLM inference
 - **llama-stack** - Backend API
 - **pgvector** - Vector database
-- **metric-ui** - Multi-dashboard Streamlit interface
+- **UI Component** - Either Console Plugin (DEV_MODE=false) or React UI (DEV_MODE=true)
 - **mcp-server** - Model Context Protocol server for metrics analysis, report generation, and AI assistant integration
 - **OpenTelemetry Collector** - Distributed tracing collection
 - **Tempo** - Trace storage and analysis
 - **MinIO** - Object storage for traces
 
-Navigate to your **OpenShift Cluster → Networking → Routes** to find the application URL(s). You can also navigate to **Observe → Traces** in the OpenShift console to view traces.
+**Access Options:**
+- **Console Plugin** (DEV_MODE=false, default): Navigate to **OpenShift Console → OpenShift AI Observability** in the left navigation
+- **React UI** (DEV_MODE=true): Find the Route at **Networking → Routes** or run `oc get route aiobs-react-ui`
+- **Traces**: Navigate to **Observe → Traces** in the OpenShift console
 
-On terminal you can access the route with:
+To get the React UI route (when deployed with DEV_MODE=true):
 
 ```bash
-oc get route
+oc get route aiobs-react-ui
 
-NAME              HOST/PORT                                                               PATH   SERVICES        PORT   TERMINATION     WILDCARD
-metric-ui-route   metric-ui-route-llama-1.apps.tsisodia-spark.2vn8.p1.openshiftapps.com          metric-ui-svc   8501   edge/Redirect   None
+NAME                       HOST/PORT                                                        PATH   SERVICES    PORT   TERMINATION   WILDCARD
+aiobs-react-ui  aiobs-react-ui-your-namespace.apps.cluster.example.com       react-ui    8080   edge          None
 ```
 
 ### OpenShift Summarizer Dashboard 
@@ -312,6 +350,8 @@ To uninstall:
 ```bash
 make uninstall NAMESPACE=your-namespace
 ```
+
+**Note**: The uninstall command will remove both Console Plugin and React UI if they exist, regardless of the current DEV_MODE setting. This ensures complete cleanup even if DEV_MODE was changed between install and uninstall.
 
 ---
 
@@ -375,9 +415,11 @@ make build
 make build VERSION=v1.0.0
 
 # Build individual components
-make build-ui            # Streamlit UI  
-make build-alerting      # Alerting Service
-make build-mcp-server    # MCP Server
+make build-ui              # Streamlit UI
+make build-alerting        # Alerting Service
+make build-mcp-server      # MCP Server
+make build-console-plugin  # Console Plugin (OpenShift Console integration)
+make build-react-ui        # React UI (standalone application)
 ```
 
 #### **Push Images to Registry**
@@ -393,6 +435,8 @@ make push VERSION=v1.0.0
 make push-ui
 make push-alerting
 make push-mcp-server
+make push-console-plugin
+make push-react-ui
 ```
 
 #### **Complete Build and Push Workflow**
@@ -409,12 +453,29 @@ make build-and-push VERSION=v1.0.0 REGISTRY=your-registry.com/your-org
 
 #### **Basic Deployment**
 
+The `make install` target uses the `DEV_MODE` variable to control which UI is deployed:
+
 ```bash
-# Deploy to OpenShift namespace
-make deploy NAMESPACE=your-namespace
+# Deploy to OpenShift namespace with Console Plugin (production mode - default)
+make install NAMESPACE=your-namespace
+# or explicitly
+make install NAMESPACE=your-namespace DEV_MODE=false
+
+# Deploy to OpenShift namespace with React UI (development mode)
+make install NAMESPACE=your-namespace DEV_MODE=true
 
 # Deploy with alerting enabled
-make deploy-with-alerts NAMESPACE=your-namespace
+make install NAMESPACE=your-namespace ALERTS=TRUE
+```
+
+**Individual UI Deployments** (if needed):
+
+```bash
+# Deploy Console Plugin only
+make install-console-plugin NAMESPACE=your-namespace
+
+# Deploy React UI only
+make install-react-ui NAMESPACE=your-namespace
 ```
 
 #### **Complete Build, Push, and Deploy Workflow**
@@ -433,9 +494,11 @@ make build-deploy-alerts NAMESPACE=your-namespace
 # Check deployment status
 make status NAMESPACE=your-namespace
 
-# Uninstall deployment
+# Uninstall deployment (removes both Console Plugin and React UI if they exist)
 make uninstall NAMESPACE=your-namespace
 ```
+
+**Note**: The `make build-deploy` command uses `make install`, which respects the DEV_MODE setting to deploy either Console Plugin (DEV_MODE=false) or React UI (DEV_MODE=true).
 
 ### Configuration Options
 
@@ -457,12 +520,15 @@ make config
 
 ### Development Mode (DEV_MODE)
 
-The project supports a **Development Mode** that simplifies testing and development by storing credentials in browser session storage instead of Kubernetes Secrets.
+The project supports a **Development Mode** that provides two key benefits:
+
+1. **UI Selection**: Controls which UI is deployed (Console Plugin vs React UI)
+2. **Credential Storage**: Simplifies testing by storing credentials in browser session storage instead of Kubernetes Secrets
 
 #### When to Use DEV_MODE
 
 Use DEV_MODE when:
-- Testing the OpenShift Console Plugin locally or in a development cluster
+- Testing locally or in a development cluster with the standalone React UI
 - Quickly experimenting with different AI model providers without persisting credentials
 - Developing features that involve API key management
 - Avoiding creation of Kubernetes Secrets during development iterations
@@ -472,26 +538,33 @@ Use DEV_MODE when:
 #### How It Works
 
 **DEV_MODE=false (Production - Default)**:
-- API keys → Saved to Kubernetes Secrets (`ai-<provider>-credentials`)
-- Model selection → Persists across browser sessions (localStorage)
-- Custom models → Persists across browser sessions (localStorage)
+- **Deployment**: Installs Console Plugin (integrated into OpenShift Console)
+- **API keys**: Saved to Kubernetes Secrets (`ai-<provider>-credentials`)
+- **Model selection**: Persists across browser sessions (localStorage)
+- **Custom models**: Persists across browser sessions (localStorage)
 
 **DEV_MODE=true (Development)**:
-- API keys → Cached in browser sessionStorage (cleared on tab close)
-- Model selection → Cached in browser sessionStorage (cleared on tab close)
-- Custom models → Cached in browser sessionStorage (cleared on tab close)
-- No Kubernetes Secrets created
-- Dev mode banner shown in the UI
+- **Deployment**: Installs React UI (standalone web application)
+- **API keys**: Cached in browser sessionStorage (cleared on tab close)
+- **Model selection**: Cached in browser sessionStorage (cleared on tab close)
+- **Custom models**: Cached in browser sessionStorage (cleared on tab close)
+- **No Kubernetes Secrets created**
+- **Dev mode banner shown in the UI**
 
 #### Deployment with DEV_MODE
 
 ```bash
-# Deploy MCP Server with DEV_MODE enabled
-make install-mcp-server NAMESPACE=your-namespace DEV_MODE=true
+# Deploy with Console Plugin (production mode - default)
+make install NAMESPACE=your-namespace
 
-# Deploy with default (production mode)
-make install-mcp-server NAMESPACE=your-namespace
+# Deploy with React UI (development mode)
+make install NAMESPACE=your-namespace DEV_MODE=true
+
+# Deploy only MCP Server with DEV_MODE enabled
+make install-mcp-server NAMESPACE=your-namespace DEV_MODE=true
 ```
+
+**Note**: When running `make uninstall`, both Console Plugin and React UI will be removed if they exist, regardless of the current DEV_MODE setting. This ensures clean uninstallation even if DEV_MODE was changed between install and uninstall.
 
 The MCP Server exposes the dev mode status via its `/config` endpoint:
 ```bash

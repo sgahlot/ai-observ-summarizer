@@ -3,7 +3,7 @@
 
 # NAMESPACE validation for deployment targets
 ifeq ($(NAMESPACE),)
-ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-ui build-alerting build-mcp-server build-console-plugin push push-ui push-alerting push-mcp-server push-console-plugin clean config test test-python test-react check-observability-drift install-operators uninstall-operators check-operators install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r,$(MAKECMDGOALS)))
+ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-ui build-alerting build-mcp-server build-console-plugin build-react-ui push push-ui push-alerting push-mcp-server push-console-plugin push-react-ui clean config test test-python test-react check-observability-drift install-operators uninstall-operators check-operators install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r,$(MAKECMDGOALS)))
 $(error NAMESPACE is not set)
 endif
 endif
@@ -23,6 +23,7 @@ METRICS_UI_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-metrics-ui
 METRICS_ALERTING_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-metrics-alerting
 MCP_SERVER_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-mcp-server
 CONSOLE_PLUGIN_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-console-plugin
+REACT_UI_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-react-ui
 
 # Alert example image
 ALERT_EXAMPLE_IMAGE ?= $(REGISTRY)/$(ORG)/alert-example:$(VERSION)
@@ -72,8 +73,11 @@ METRICS_UI_CHART_PATH ?= ui
 MCP_SERVER_RELEASE_NAME ?= mcp-server
 MCP_SERVER_CHART_PATH ?= mcp-server
 # Console plugin chart
-CONSOLE_PLUGIN_RELEASE_NAME ?= ai-obs-plugin
+CONSOLE_PLUGIN_RELEASE_NAME ?= aiobs-plugin
 CONSOLE_PLUGIN_CHART_PATH ?= openshift-console-plugin
+# React UI chart
+REACT_UI_RELEASE_NAME ?= aiobs-react-ui
+REACT_UI_CHART_PATH ?= react-ui-app
 # Korrel8r chart
 KORREL8R_RELEASE_NAME ?= korrel8r-summarizer
 KORREL8R_CHART_PATH ?= observability/korrel8r
@@ -186,16 +190,18 @@ help:
 	@echo "  build-alerting     - Build Alerting Service (metric-alerting)"
 	@echo "  build-mcp-server   - Build MCP Server (mcp-server)"
 	@echo "  build-console-plugin - Build OpenShift Console Plugin"
+	@echo "  build-react-ui     - Build React UI standalone application"
 	@echo "  push               - Push all container images to registry"
 	@echo "  push-ui            - Push metric-ui image"
 	@echo "  push-alerting      - Push metric-alerting image"
 	@echo "  push-mcp-server    - Push mcp-server image"
 	@echo "  push-console-plugin - Push console-plugin image"
+	@echo "  push-react-ui      - Push react-ui image"
 	@echo "  build-alert-example - Build alert-example test image"
 	@echo "  push-alert-example  - Push alert-example test image"
 	@echo ""
 	@echo "Deployment:"
-	@echo "  install            - Deploy to OpenShift using Helm"
+	@echo "  install            - Deploy to OpenShift using Helm (DEV_MODE=false: Console Plugin only, DEV_MODE=true: React UI only)"
 	@echo "  install-with-alerts - Deploy with alerting enabled"
 	@echo "  install-local      - Set up local development environment"
 	@echo "  install-rag        - Install RAG backend services only"
@@ -203,6 +209,8 @@ help:
 	@echo "  install-mcp-server - Install MCP server only"
 	@echo "  install-console-plugin - Install OpenShift Console Plugin"
 	@echo "  uninstall-console-plugin - Uninstall OpenShift Console Plugin"
+	@echo "  install-react-ui   - Install React UI standalone application"
+	@echo "  uninstall-react-ui - Uninstall React UI standalone application"
 	@echo "  uninstall          - Uninstall from OpenShift"
 	@echo "  status             - Check deployment status"
 	@echo "  list-models        - List available models"
@@ -277,6 +285,7 @@ help:
 	@echo "  PLATFORM           - Target platform (default: linux/amd64)"
 	@echo "  BUILD_TOOL         - Build tool: docker or podman (auto-detected)"
 	@echo "  NAMESPACE          - OpenShift namespace for deployment"
+	@echo "  DEV_MODE           - Set to 'true' to deploy React UI only, 'false' for Console Plugin only (default: false)"
 	@echo "  HF_TOKEN           - Hugging Face Token (will prompt if not provided and LLM_URL not set)"
 	@echo "  DEVICE             - Deploy models on cpu or gpu (default)"
 	@echo "  LLM                - Model id (eg. llama-3-1-8b-instruct)"
@@ -293,7 +302,7 @@ help:
 	@echo ""
 
 .PHONY: build
-build: build-ui build-alerting build-mcp-server build-console-plugin
+build: build-ui build-alerting build-mcp-server build-console-plugin build-react-ui
 	@echo "✅ All container images built successfully"
 
 .PHONY: build-ui
@@ -332,13 +341,27 @@ build-console-plugin:
 	@cd openshift-plugin && yarn build
 	@echo "  → Building container image..."
 	@$(BUILD_TOOL) buildx build --platform $(PLATFORM) \
-		-f openshift-plugin/Dockerfile \
+		-f openshift-plugin/Dockerfile.plugin \
 		-t $(CONSOLE_PLUGIN_IMAGE):$(VERSION) \
 		openshift-plugin
 	@echo "✅ console-plugin image built: $(CONSOLE_PLUGIN_IMAGE):$(VERSION)"
 
+.PHONY: build-react-ui
+build-react-ui:
+	@echo "🔨 Building React UI standalone application..."
+	@echo "  → Installing yarn dependencies..."
+	@cd openshift-plugin && yarn install --frozen-lockfile
+	@echo "  → Building React UI assets..."
+	@cd openshift-plugin && yarn build:react-ui
+	@echo "  → Building container image..."
+	@$(BUILD_TOOL) buildx build --platform $(PLATFORM) \
+		-f openshift-plugin/Dockerfile.react-ui \
+		-t $(REACT_UI_IMAGE):$(VERSION) \
+		openshift-plugin
+	@echo "✅ react-ui image built: $(REACT_UI_IMAGE):$(VERSION)"
+
 .PHONY: push
-push: push-ui push-alerting push-mcp-server push-console-plugin
+push: push-ui push-alerting push-mcp-server push-console-plugin push-react-ui
 	@echo "✅ All container images pushed successfully"
 
 .PHONY: push-ui
@@ -364,6 +387,12 @@ push-console-plugin:
 	@echo "📤 Pushing console-plugin image..."
 	@$(BUILD_TOOL) push $(CONSOLE_PLUGIN_IMAGE):$(VERSION)
 	@echo "✅ console-plugin image pushed"
+
+.PHONY: push-react-ui
+push-react-ui:
+	@echo "📤 Pushing react-ui image..."
+	@$(BUILD_TOOL) push $(REACT_UI_IMAGE):$(VERSION)
+	@echo "✅ react-ui image pushed"
 
 
 # Create namespace and deploy
@@ -461,6 +490,29 @@ uninstall-console-plugin:
 	-@helm -n $(NAMESPACE) uninstall $(CONSOLE_PLUGIN_RELEASE_NAME) --ignore-not-found
 	@echo "✅ Console plugin uninstalled"
 
+.PHONY: install-react-ui
+install-react-ui: namespace
+	@echo "Deploying React UI standalone application"
+	@cd deploy/helm && helm upgrade --install $(REACT_UI_RELEASE_NAME) $(REACT_UI_CHART_PATH) -n $(NAMESPACE) \
+		--set app.image.repository=$(REACT_UI_IMAGE) \
+		--set app.image.tag=$(VERSION) \
+		--set mcpServer.serviceName=$(MCP_SERVER_RELEASE_NAME)-svc
+	@echo "✅ React UI deployed"
+	@echo "→ Getting Route URL..."
+	-@ROUTE_HOST=$$(oc get route aiobs-react-ui -n $(NAMESPACE) -o jsonpath='{.spec.host}' 2>/dev/null); \
+	if [ -n "$$ROUTE_HOST" ]; then \
+		echo "  → React UI accessible at: https://$$ROUTE_HOST"; \
+	else \
+		echo "  → Route not found. Check deployment status with: oc get route -n $(NAMESPACE)"; \
+	fi
+
+.PHONY: uninstall-react-ui
+uninstall-react-ui:
+	@echo "Uninstalling React UI standalone application"
+	@echo "→ Uninstalling Helm release..."
+	-@helm -n $(NAMESPACE) uninstall $(REACT_UI_RELEASE_NAME) --ignore-not-found
+	@echo "✅ React UI uninstalled"
+
 .PHONY: install-rag
 install-rag: namespace
 	@$(eval LLM_SERVICE_ARGS := $(call helm_llm_service_args))
@@ -479,7 +531,16 @@ install-rag: namespace
 
 
 .PHONY: install
-install: namespace enable-user-workload-monitoring depend validate-llm install-operators install-observability-stack install-metric-ui install-mcp-server install-console-plugin install-korrel8r delete-jobs
+install: namespace enable-user-workload-monitoring depend validate-llm install-operators install-observability-stack install-metric-ui install-mcp-server delete-jobs
+	@echo "DEV_MODE is set to: $(DEV_MODE)"
+	@if [ "$(DEV_MODE)" = "true" ]; then \
+		echo "→ DEV_MODE=true: Installing React UI standalone application only"; \
+		$(MAKE) install-react-ui NAMESPACE=$(NAMESPACE); \
+	else \
+		echo "→ DEV_MODE=false: Installing OpenShift Console Plugin only"; \
+		$(MAKE) install-console-plugin NAMESPACE=$(NAMESPACE); \
+	fi
+	@$(MAKE) install-korrel8r
 	@if [ "$(ENABLE_RAG)" != "false" ]; then \
 		echo "Installing RAG backend services (set ENABLE_RAG=false to skip)..."; \
 		$(MAKE) install-rag NAMESPACE=$(NAMESPACE); \
@@ -557,8 +618,9 @@ uninstall:
 	- @helm -n $(NAMESPACE) uninstall $(METRICS_UI_RELEASE_NAME) --ignore-not-found
 	@echo "Uninstalling $(MCP_SERVER_RELEASE_NAME) helm chart (if installed)"
 	- @helm -n $(NAMESPACE) uninstall $(MCP_SERVER_RELEASE_NAME) --ignore-not-found
-	@echo "Uninstalling console plugin (if installed)"
+	@echo "Uninstalling UI components (both Console Plugin and React UI if they exist)"
 	@$(MAKE) uninstall-console-plugin NAMESPACE=$(NAMESPACE) || true
+	@$(MAKE) uninstall-react-ui NAMESPACE=$(NAMESPACE) || true
 	@echo "Uninstalling Korrel8r helm-managed resources (if installed)"
 	@$(MAKE) uninstall-korrel8r || true
 
