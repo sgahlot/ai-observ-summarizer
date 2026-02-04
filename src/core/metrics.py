@@ -1094,6 +1094,9 @@ def discover_openshift_metrics():
             "Total Services": "sum(kube_service_info)",
             "Total Nodes": "sum(kube_node_info)",
             "Total Namespaces": "count(kube_namespace_labels)",
+            # GPU metrics (only available if GPUs are present)
+            "GPU Count": "count(DCGM_FI_DEV_GPU_TEMP) or sum(habana_hpu_count)",
+            "GPU Utilization (%)": "avg(DCGM_FI_DEV_GPU_UTIL) or avg(habanalabs_utilization)",
         },
         "Jobs & Workloads": {
             # Jobs, cronjobs, and other workload types
@@ -1540,7 +1543,8 @@ def chat_openshift_metrics(
         promql = (promql_value or "").strip() if isinstance(promql_value, str) else (promql_value or "")
         if not isinstance(promql, str):
             promql = ""
-        summary = (parsed.get("summary") or llm_response).strip()
+        summary_value = parsed.get("summary") or llm_response
+        summary = summary_value.strip() if isinstance(summary_value, str) else str(summary_value)
 
         # Add namespace filter when needed
         if promql and namespace and "namespace=" not in promql:
