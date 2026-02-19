@@ -651,24 +651,45 @@ export async function analyzeVLLM(
   apiKey?: string
 ): Promise<AnalysisResult> {
   try {
-    const result = await callMcpTool<AnalysisResult>('analyze_vllm', {
+    // Use callMcpToolText to get raw response (handles both JSON and error text)
+    const text = await callMcpToolText('analyze_vllm', {
       model_name: modelName,
       summarize_model_id: summarizeModelId,
       time_range: timeRange,
       api_key: apiKey || undefined,
     });
 
-    return result;
+    // Try to parse as JSON first (success case)
+    try {
+      const parsed = JSON.parse(text) as AnalysisResult;
+      // Validate by shape: must be object with required string fields
+      // Don't use truthy checks (summary could be empty string "")
+      if (parsed &&
+          typeof parsed === 'object' &&
+          !Array.isArray(parsed) &&
+          typeof parsed.model_name === 'string' &&
+          typeof parsed.summary === 'string') {
+        return parsed;
+      }
+    } catch {
+      // Not JSON - treat as formatted error text from MCP
+    }
+
+    // If not valid JSON, treat as MCP error response (already formatted with ❌ emoji)
+    return {
+      model_name: modelName,
+      summary: text,
+      time_range: timeRange,
+    };
   } catch (error) {
     console.error('Failed to analyze vLLM:', error);
 
-    // Check if error message contains error details
+    // Network/transport errors - return as summary for display
     const errorMessage = error instanceof Error ? error.message : String(error);
-
-    // Return error as summary for display
     return {
       model_name: modelName,
       summary: `Analysis failed: ${errorMessage}`,
+      time_range: timeRange,
     };
   }
 }
