@@ -242,10 +242,10 @@ const AIObservabilityPage: React.FC = () => {
                 <TabTitleIcon>
                   <CommentIcon />
                 </TabTitleIcon>
-                <TabTitleText>AI Chat</TabTitleText>
+                <TabTitleText>Chat with Prometheus</TabTitleText>
               </>
             }
-            aria-label="AI Chat"
+            aria-label="Chat with Prometheus"
           />
         </Tabs>
       </PageSection>

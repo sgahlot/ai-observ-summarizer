@@ -40,7 +40,7 @@ const Navigation: React.FC = () => {
     },
     {
       id: 'chat',
-      title: 'AI Chat',
+      title: 'Chat with Prometheus',
       path: '/chat',
       icon: <CommentIcon />,
     },
