@@ -131,7 +131,8 @@ let requestId = 0;
  */
 export async function callMcpTool<T = unknown>(
   toolName: string,
-  args: Record<string, unknown> = {}
+  args: Record<string, unknown> = {},
+  signal?: AbortSignal
 ): Promise<T> {
   // Auto-inject dev credentials if in dev mode
   const enhancedArgs = await injectDevCredentials(toolName, args);
@@ -152,6 +153,7 @@ export async function callMcpTool<T = unknown>(
       },
       id: ++requestId,
     }),
+    signal,
   });
 
   if (!response.ok) {
@@ -648,7 +650,8 @@ export async function analyzeVLLM(
   modelName: string,
   summarizeModelId: string,
   timeRange: string = '1h',
-  apiKey?: string
+  apiKey?: string,
+  signal?: AbortSignal
 ): Promise<AnalysisResult> {
   try {
     // Use callMcpToolText to get raw response (handles both JSON and error text)
@@ -657,7 +660,7 @@ export async function analyzeVLLM(
       summarize_model_id: summarizeModelId,
       time_range: timeRange,
       api_key: apiKey || undefined,
-    });
+    }, signal);
 
     // Try to parse as JSON first (success case)
     try {
