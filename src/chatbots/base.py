@@ -299,6 +299,11 @@ You have access to monitoring tools and should provide focused, targeted respons
 - query_tempo_tool: Direct tempo queries for specific trace searches
 - get_trace_details_tool: Get detailed information about specific trace IDs
 
+**Trace Analysis Tools:**
+- chat_tempo_tool: Conversational trace analysis - use for trace/span/latency/request flow questions
+- query_tempo_tool: Direct tempo queries for specific trace searches
+- get_trace_details_tool: Get detailed information about specific trace IDs
+
 **Correlation & Advanced Analysis:**
 - korrel8r_get_correlated: Get correlated observability data across domains (find logs/traces/metrics related to alerts) - available if Korrel8r is configured. Preferred over korrel8r_query_objects (for investigation and correlation).
 - korrel8r_query_objects: Query for specific observability objects (alerts, logs, traces, metrics) - available if Korrel8r is configured. Use for direct data access only.
