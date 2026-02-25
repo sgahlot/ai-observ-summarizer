@@ -34,6 +34,7 @@ class OpenAIChatBot(BaseChatBot):
         super().__init__(model_name, api_key, tool_executor)
 
         # Import OpenAI SDK
+        self._sdk_import_failed = False
         try:
             from openai import OpenAI
             # Only create client if API key is provided
@@ -44,6 +45,7 @@ class OpenAIChatBot(BaseChatBot):
                 self.client = None
         except ImportError:
             logger.error("OpenAI SDK not installed. Install with: pip install openai")
+            self._sdk_import_failed = True
             self.client = None
 
     def _get_model_specific_instructions(self) -> str:
@@ -77,13 +79,19 @@ class OpenAIChatBot(BaseChatBot):
             })
         return openai_tools
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(
+        self,
+        user_question: str,
+        namespace: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
         """Chat with OpenAI GPT using tool calling."""
         if not self.client:
-            return "Error: OpenAI SDK not installed. Please install it with: pip install openai"
-
-        if not self.api_key:
-            return f"API key required for OpenAI model {self.model_name}. Please provide an API key."
+            if self._sdk_import_failed:
+                return "Error: OpenAI SDK not installed. Please install it with: pip install openai"
+            else:
+                return f"Error: API key required for OpenAI model {self.model_name}. Please configure an API key in Settings."
 
         logger.info(f"🎯 OpenAIChatBot.chat() - Using OpenAI API with model: {self.model_name}")
 
@@ -94,11 +102,16 @@ class OpenAIChatBot(BaseChatBot):
             # Get model name suitable for OpenAI API
             model_name = self._extract_model_name()
 
-            # Prepare messages
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_question}
-            ]
+            # Prepare messages - start with system prompt
+            messages = [{"role": "system", "content": system_prompt}]
+
+            # Add conversation history if provided
+            if conversation_history:
+                logger.info(f"📜 Adding {len(conversation_history)} messages from conversation history")
+                messages.extend(conversation_history)
+
+            # Add current user question
+            messages.append({"role": "user", "content": user_question})
 
             # Convert tools to OpenAI format
             openai_tools = self._convert_tools_to_openai_format()
@@ -169,7 +182,7 @@ class OpenAIChatBot(BaseChatBot):
                             progress_callback(f"🔧 Using tool: {tool_name}")
 
                         # Get tool result with automatic truncation (logging handled in base class)
-                        tool_result = self._get_tool_result(tool_name, tool_args)
+                        tool_result = self._get_tool_result(tool_name, tool_args, namespace=namespace)
 
                         tool_results.append({
                             "role": "tool",
@@ -180,9 +193,8 @@ class OpenAIChatBot(BaseChatBot):
                     # Add tool results to conversation
                     messages.extend(tool_results)
 
-                    # Limit conversation history
-                    if len(messages) > 10:
-                        messages = [messages[0]] + messages[-8:]
+                    # Truncate conversation safely (preserves tool-call/result pairs)
+                    messages = self._truncate_messages(messages, keep_system_prompt=True)
 
                     # Continue loop
                     continue

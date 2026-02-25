@@ -1,0 +1,293 @@
+/* Chat Markdown Styles */
+.chat-markdown {
+  font-family: inherit;
+  line-height: 1.6;
+  color: inherit;
+}
+
+/* Headings */
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.chat-markdown h1 {
+  font-size: 1.5em;
+  border-bottom: 1px solid var(--pf-v5-global--BorderColor--100);
+  padding-bottom: 8px;
+}
+
+.chat-markdown h2 {
+  font-size: 1.3em;
+}
+
+.chat-markdown h3 {
+  font-size: 1.15em;
+}
+
+/* Paragraphs */
+.chat-markdown p {
+  margin: 8px 0;
+}
+
+/* Inline code */
+.chat-markdown code {
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
+  font-size: 0.9em;
+  color: var(--pf-v5-global--danger-color--200);
+}
+
+/* Code blocks */
+.chat-markdown pre {
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 12px 0;
+  border: 1px solid var(--pf-v5-global--BorderColor--100);
+}
+
+.chat-markdown pre code {
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+  font-size: 0.85em;
+  display: block;
+  white-space: pre;
+}
+
+/* Tables */
+.chat-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 0.9em;
+}
+
+.chat-markdown table th,
+.chat-markdown table td {
+  border: 1px solid var(--pf-v5-global--BorderColor--100);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.chat-markdown table th {
+  background-color: rgba(0, 0, 0, 0.05);
+  font-weight: 600;
+}
+
+.chat-markdown table tr:nth-child(even) {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+.chat-markdown table tr:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+/* Lists */
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.chat-markdown li {
+  margin: 4px 0;
+}
+
+.chat-markdown ul ul,
+.chat-markdown ol ol,
+.chat-markdown ul ol,
+.chat-markdown ol ul {
+  margin: 0;
+}
+
+/* Blockquotes */
+.chat-markdown blockquote {
+  border-left: 4px solid #7c3aed;
+  padding-left: 16px;
+  margin: 12px 0;
+  color: var(--pf-v5-global--Color--200);
+  font-style: italic;
+}
+
+/* Links */
+.chat-markdown a {
+  color: var(--pf-v5-global--link--Color);
+  text-decoration: none;
+}
+
+.chat-markdown a:hover {
+  text-decoration: underline;
+}
+
+/* Horizontal rules */
+.chat-markdown hr {
+  border: none;
+  border-top: 1px solid var(--pf-v5-global--BorderColor--100);
+  margin: 16px 0;
+}
+
+/* Strong and emphasis */
+.chat-markdown strong {
+  font-weight: 600;
+}
+
+.chat-markdown em {
+  font-style: italic;
+}
+
+/* Strike through */
+.chat-markdown del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* Images */
+.chat-markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+
+/* Task lists */
+.chat-markdown input[type="checkbox"] {
+  margin-right: 8px;
+}
+
+/* ============================================
+   ANIMATIONS & TRANSITIONS
+   ============================================ */
+
+/* Fade-in animation for new messages */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Smooth expand/collapse for progress logs */
+.progress-log-expanded {
+  max-height: 1000px;
+  opacity: 1;
+  transition: max-height 0.3s ease-in-out, opacity 0.2s ease-in-out;
+  overflow: hidden;
+}
+
+.progress-log-collapsed {
+  max-height: 0;
+  opacity: 0;
+  transition: max-height 0.3s ease-in-out, opacity 0.2s ease-in-out;
+  overflow: hidden;
+}
+
+/* Typing indicator animation */
+@keyframes typingDot {
+  0%, 60%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.typing-indicator span {
+  width: 6px;
+  height: 6px;
+  background-color: currentColor;
+  border-radius: 50%;
+  display: inline-block;
+  animation: typingDot 1.4s infinite;
+}
+
+.typing-indicator span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* Loading shimmer effect */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.loading-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.3) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* Button hover transitions */
+.chat-button-transition {
+  transition: all 0.2s ease-in-out;
+}
+
+.chat-button-transition:hover {
+  transform: scale(1.05);
+}
+
+/* Smooth scroll behavior */
+.chat-messages-container {
+  scroll-behavior: smooth;
+}
+
+/* Edit mode highlight */
+@keyframes pulseBlue {
+  0%, 100% {
+    border-color: #0066cc;
+    box-shadow: 0 0 0 0 rgba(0, 102, 204, 0.4);
+  }
+  50% {
+    border-color: #0066cc;
+    box-shadow: 0 0 0 4px rgba(0, 102, 204, 0.2);
+  }
+}
+
+.edit-mode-active {
+  animation: pulseBlue 2s ease-in-out infinite;
+}

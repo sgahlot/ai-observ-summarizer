@@ -30,8 +30,15 @@ class DeterministicChatBot(BaseChatBot):
         """Local models don't require API keys."""
         return None
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(
+        self,
+        user_question: str,
+        namespace: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
         """Chat using deterministic parsing approach."""
+        # Note: Deterministic bot doesn't use conversation history as it's rule-based
         if progress_callback:
             progress_callback("🔍 Analyzing your question...")
 
@@ -50,7 +57,7 @@ class DeterministicChatBot(BaseChatBot):
                     progress_callback("📊 Querying memory metrics...")
 
                 memory_query = "sum(container_memory_usage_bytes{}) / 1024 / 1024 / 1024"
-                query_result = self._route_tool_call_to_mcp("execute_promql", {"query": memory_query})
+                query_result = self._get_tool_result("execute_promql", {"query": memory_query}, namespace=namespace)
 
                 tool_results.append({
                     "tool": "execute_promql",
@@ -69,7 +76,7 @@ class DeterministicChatBot(BaseChatBot):
                     progress_callback("📊 Querying CPU metrics...")
 
                 cpu_query = "cluster:container_cpu_usage:ratio"
-                query_result = self._route_tool_call_to_mcp("execute_promql", {"query": cpu_query})
+                query_result = self._get_tool_result("execute_promql", {"query": cpu_query}, namespace=namespace)
 
                 tool_results.append({
                     "tool": "execute_promql",

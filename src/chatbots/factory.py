@@ -15,6 +15,7 @@ from .google_bot import GoogleChatBot
 from .llama_bot import LlamaChatBot
 from .deterministic_bot import DeterministicChatBot
 from common.pylogger import get_python_logger
+from core.config import RAG_AVAILABLE
 
 logger = get_python_logger()
 
@@ -50,7 +51,7 @@ def create_chatbot(
         >>> from ui.mcp_client_adapter import MCPClientAdapter
         >>> mcp_client = MCPClientHelper()
         >>> tool_executor = MCPClientAdapter(mcp_client)
-        >>> chatbot = create_chatbot("anthropic/claude-3-5-haiku-20241022", api_key="sk-...", tool_executor=tool_executor)
+        >>> chatbot = create_chatbot("anthropic/claude-haiku-4-5-20251001", api_key="sk-...", tool_executor=tool_executor)
         >>> response = chatbot.chat("Check memory usage")
 
         # Example 3: Local model with MCPServerAdapter
@@ -139,6 +140,15 @@ def create_chatbot(
             logger.warning(f"Unknown external provider {provider}, using OpenAI as fallback")
             return OpenAIChatBot(model_name, api_key, tool_executor)
     else:
+        # Check if RAG (local models) infrastructure is available
+        if not RAG_AVAILABLE:
+            logger.error(f"Local model {model_name} requested but RAG infrastructure not available")
+            raise ValueError(
+                f"Local model '{model_name}' is not available. "
+                "RAG infrastructure is not installed or not accessible. "
+                "Please use an external model (anthropic/claude, openai/gpt, google/gemini) instead."
+            )
+        
         # Local models - detect Llama version and create appropriate bot
         LLAMA_MODEL_PATTERNS = {
             "llama.3.1": (LlamaChatBot, "tool calling capable", ["8b", "70b"]),

@@ -9,6 +9,8 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
+from core.api_key_manager import resolve_api_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,7 +19,8 @@ def chat(
     message: str,
     api_key: Optional[str] = None,
     namespace: Optional[str] = None,
-    scope: Optional[str] = None
+    scope: Optional[str] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None
 ) -> str:
     """
     Chat with AI models using observability tools.
@@ -32,6 +35,8 @@ def chat(
         api_key: Optional API key for external models (Anthropic, OpenAI, Google)
         namespace: Optional Kubernetes namespace filter
         scope: Optional scope (e.g., "cluster-wide")
+        conversation_history: Optional list of previous messages in format:
+                [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
 
     Returns:
         JSON string with response and progress_log
@@ -85,10 +90,23 @@ def chat(
         # Create MCP tools adapter for this server
         tool_executor = MCPServerAdapter(_server_instance)
 
+        # Resolve API key with fallback logic (same as analyze_openshift)
+        # Priority: 1) Provided api_key (from UI), 2) Kubernetes secret
+        resolved_api_key = resolve_api_key(api_key=api_key, model_id=model_name)
+
+        # Auto-detect namespace from question if not provided by UI
+        if not namespace:
+            from core.question_classification import extract_namespace_from_question
+            detected = extract_namespace_from_question(message)
+            if detected:
+                namespace = detected
+                logger.info(f"📌 Auto-detected namespace from question: '{namespace}'")
+                capture_progress(f"📌 Detected namespace: {namespace}")
+
         # Create chatbot with tool executor
         chatbot = create_chatbot(
             model_name=model_name,
-            api_key=api_key,
+            api_key=resolved_api_key if resolved_api_key else None,
             tool_executor=tool_executor
         )
 
@@ -98,10 +116,15 @@ def chat(
         capture_progress(f"🤖 Starting chat with {model_name}")
 
         # Note: scope parameter is not yet supported by chatbots, only namespace
+        # Log conversation history if provided
+        if conversation_history:
+            logger.info(f"📜 Conversation history provided: {len(conversation_history)} messages")
+
         response = chatbot.chat(
             user_question=message,
             namespace=namespace,
-            progress_callback=capture_progress
+            progress_callback=capture_progress,
+            conversation_history=conversation_history
         )
 
         capture_progress("✅ Chat completed")

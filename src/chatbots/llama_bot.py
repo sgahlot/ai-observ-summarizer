@@ -81,7 +81,11 @@ For GPU queries (Multi-vendor: NVIDIA + Intel Gaudi):
 - The "or" pattern automatically selects the correct vendor metric
 
 For Pod Status queries:
-- Use: kube_pod_status_phase == 1 to filter only active states
+- Running/Pending/Succeeded pods: kube_pod_status_phase{phase="Running"} == 1
+- Failing/unhealthy pods require MULTIPLE metrics:
+  - kube_pod_status_phase{phase="Failed"} == 1
+  - kube_pod_container_status_waiting_reason{reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull"} == 1
+  - kube_pod_container_status_terminated_reason{reason=~"Error|OOMKilled"} == 1
 - Include namespace filter and grouping
 
 **Key PromQL Rules:**
@@ -118,7 +122,13 @@ For Pod Status queries:
             })
         return openai_tools
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(
+        self,
+        user_question: str,
+        namespace: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
         """Chat with Llama using LlamaStack OpenAI-compatible API."""
         if not self.client:
             return "Error: OpenAI SDK not installed. Please install it with: pip install openai"
@@ -130,11 +140,16 @@ For Pod Status queries:
             # LlamaStack expects the full model name (override preserves it)
             model_id = self._extract_model_name()
 
-            # Prepare messages
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_question}
-            ]
+            # Prepare messages - start with system prompt
+            messages = [{"role": "system", "content": system_prompt}]
+
+            # Add conversation history if provided
+            if conversation_history:
+                logger.info(f"📜 Adding {len(conversation_history)} messages from conversation history")
+                messages.extend(conversation_history)
+
+            # Add current user question
+            messages.append({"role": "user", "content": user_question})
 
             # Convert tools to OpenAI format
             openai_tools = self._convert_tools_to_openai_format()
@@ -205,7 +220,7 @@ For Pod Status queries:
                             progress_callback(f"🔧 Using tool: {tool_name}")
 
                         # Get tool result with automatic truncation (logging handled in base class)
-                        tool_result = self._get_tool_result(tool_name, tool_args)
+                        tool_result = self._get_tool_result(tool_name, tool_args, namespace=namespace)
 
                         tool_results.append({
                             "role": "tool",
@@ -216,9 +231,8 @@ For Pod Status queries:
                     # Add tool results to conversation
                     messages.extend(tool_results)
 
-                    # Limit conversation history
-                    if len(messages) > 10:
-                        messages = [messages[0]] + messages[-8:]
+                    # Truncate conversation safely (preserves tool-call/result pairs)
+                    messages = self._truncate_messages(messages, keep_system_prompt=True)
 
                     # Continue loop
                     continue
