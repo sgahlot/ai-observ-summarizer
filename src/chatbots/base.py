@@ -14,6 +14,48 @@ from common.pylogger import get_python_logger
 
 logger = get_python_logger()
 
+# PromQL functions, keywords, and common label names that should NOT get
+# namespace injected — only actual metric names should.  Module-level constant
+# to avoid rebuilding on every call.
+_PROMQL_SKIP = frozenset({
+    # Aggregation operators
+    'sum', 'avg', 'min', 'max', 'count', 'stddev', 'stdvar',
+    'topk', 'bottomk', 'quantile', 'count_values',
+    # Rate/counter functions
+    'rate', 'irate', 'increase', 'delta', 'idelta',
+    # Histogram functions
+    'histogram_quantile', 'histogram_count', 'histogram_sum',
+    # Label functions
+    'label_replace', 'label_join',
+    # Math functions
+    'abs', 'ceil', 'floor', 'round', 'clamp', 'clamp_min', 'clamp_max',
+    'exp', 'ln', 'log2', 'log10', 'sqrt',
+    # Sort/utility functions
+    'sort', 'sort_desc', 'time', 'timestamp',
+    'vector', 'scalar', 'sgn',
+    # Range functions
+    'changes', 'resets', 'deriv', 'predict_linear',
+    'absent', 'absent_over_time', 'present_over_time',
+    # Date functions
+    'day_of_month', 'day_of_week', 'days_in_month',
+    'hour', 'minute', 'month', 'year',
+    # Keywords and operators
+    'by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
+    'bool', 'offset', 'and', 'or', 'unless',
+    # Over-time functions
+    'avg_over_time', 'min_over_time', 'max_over_time',
+    'sum_over_time', 'count_over_time', 'stddev_over_time',
+    'last_over_time', 'quantile_over_time',
+    # Common Kubernetes label names (appear in by/without/grouping clauses)
+    'pod', 'namespace', 'container', 'node', 'instance', 'job',
+    'service', 'deployment', 'daemonset', 'statefulset', 'replicaset',
+    'phase', 'reason', 'condition', 'type', 'resource', 'unit',
+    'device', 'interface', 'mode', 'cpu', 'endpoint', 'alertname',
+    'alertstate', 'severity', 'le', 'model_name',
+    # Numeric literals used in comparisons (won't match our regex, but safe)
+    'inf', 'nan',
+})
+
 
 class BaseChatBot(ABC):
     """Base class for all chat bot implementations with common functionality."""
@@ -55,6 +97,9 @@ class BaseChatBot(ABC):
 
         # Store tool executor (dependency injection)
         self.tool_executor = tool_executor
+
+        from core.config import NAMESPACE_AWARE_TOOLS
+        self._namespace_aware_tools = NAMESPACE_AWARE_TOOLS
 
         logger.info(f"{self.__class__.__name__} initialized with model: {self.model_name}")
 
@@ -218,16 +263,98 @@ class BaseChatBot(ABC):
         """
         return 5000
 
-    def _get_tool_result(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+    def _inject_namespace_into_promql(self, query: str, namespace: str) -> str:
+        """Inject a namespace label filter into a PromQL query string.
+
+        Handles common PromQL patterns:
+        - metric_name → metric_name{namespace="ns"}
+        - metric_name{existing="label"} → metric_name{existing="label",namespace="ns"}
+        - sum(metric_name) → sum(metric_name{namespace="ns"})
+        - sum(rate(metric_name[5m])) → sum(rate(metric_name{namespace="ns"}[5m]))
+
+        If the query already contains a namespace filter, it is replaced with
+        the active namespace to ensure the UI dropdown selection takes precedence.
+        """
+        # If namespace filter already present, replace it with the active namespace
+        if f'namespace="' in query or f"namespace='" in query or 'namespace=~' in query:
+            modified = re.sub(
+                r'namespace\s*=~?\s*["\'][^"\']*["\']',
+                f'namespace="{namespace}"',
+                query
+            )
+            if modified != query:
+                logger.info(f"📌 Replaced namespace in PromQL: {query} → {modified}")
+            return modified
+
+        original = query
+
+        # Pattern: find metric names followed by optional labels and/or range vector
+        # This regex matches: metric_name, metric_name{...}, metric_name[5m], metric_name{...}[5m]
+        # We inject namespace into the label set of each metric selector.
+        def inject_ns(match):
+            metric = match.group(1)
+            labels = match.group(2) or ''   # existing {labels} or empty
+            rest = match.group(3) or ''     # trailing [range] or empty
+
+            # Skip PromQL functions/keywords/label names — they aren't metric selectors
+            if metric.lower() in _PROMQL_SKIP:
+                return match.group(0)
+
+            if labels:
+                # Has existing labels: metric{existing="val"} → metric{existing="val",namespace="ns"}
+                inner = labels[1:-1].strip()  # strip { }
+                if inner:
+                    return f'{metric}{{{inner},namespace="{namespace}"}}{rest}'
+                else:
+                    return f'{metric}{{namespace="{namespace}"}}{rest}'
+            else:
+                # No existing labels: metric → metric{namespace="ns"}
+                return f'{metric}{{namespace="{namespace}"}}{rest}'
+
+        # Match metric selectors: word chars and colons (for namespaced metrics like vllm:xxx)
+        # followed by optional {labels} and optional [range]
+        modified = re.sub(
+            r'([a-zA-Z_:][a-zA-Z0-9_:]*)'   # group 1: metric name
+            r'(\{[^}]*\})?'                   # group 2: optional label matchers
+            r'(\[[^\]]*\])?',                  # group 3: optional range vector
+            inject_ns,
+            query
+        )
+
+        if modified != original:
+            logger.info(f"📌 Injected namespace '{namespace}' into PromQL: {original} → {modified}")
+        return modified
+
+    def _get_tool_result(self, tool_name: str, tool_args: Dict[str, Any], namespace: Optional[str] = None) -> str:
         """Execute tool call and truncate result if needed.
+
+        For execute_promql: injects namespace filter directly into the PromQL
+        query string (since execute_promql doesn't accept a namespace parameter).
+
+        For other namespace-aware tools: injects namespace as an argument.
 
         Args:
             tool_name: Name of the tool to call
             tool_args: Arguments to pass to the tool
+            namespace: Optional namespace to inject into tool args
 
         Returns:
             Tool result, truncated if it exceeds max length
         """
+        # Inject namespace for namespace-scoped queries
+        if namespace and tool_name in self._namespace_aware_tools:
+            if tool_name == 'execute_promql' and 'query' in tool_args:
+                # For execute_promql: modify the PromQL query string itself
+                tool_args = dict(tool_args)
+                tool_args['query'] = self._inject_namespace_into_promql(
+                    tool_args['query'], namespace
+                )
+            elif not tool_args.get('namespace'):
+                # For other tools: inject namespace as an argument
+                tool_args = dict(tool_args)
+                tool_args['namespace'] = namespace
+                logger.info(f"📌 Injected namespace '{namespace}' into {tool_name} args")
+
         # Log tool request with arguments
         logger.info(f"🔧 Requesting tool: {tool_name} with args: {tool_args}")
 
@@ -246,6 +373,110 @@ class BaseChatBot(ABC):
             logger.info(f"📦 Tool result size: {len(str(tool_result))} chars (within limit of {max_length})")
 
         return tool_result
+
+    def _truncate_messages(
+        self,
+        messages: list,
+        keep_system_prompt: bool = True,
+        max_messages: int = 20,
+        target_messages: int = 14,
+    ) -> list:
+        """Truncate messages while keeping tool-call/result pairs atomic.
+
+        Groups assistant messages that contain tool_calls together with their
+        corresponding tool-result messages, so truncation never orphans a
+        tool call from its results (which causes LLMs to hallucinate).
+
+        Supports two message formats:
+        - OpenAI/LlamaStack: tool results are separate {"role": "tool", ...} messages
+        - Anthropic: tool results are a single {"role": "user", "content": [{"type": "tool_result", ...}]} message
+
+        Args:
+            messages: The current message list (mutated in-place style; returns new list).
+            keep_system_prompt: If True, preserves messages[0] as the system prompt.
+            max_messages: Trigger truncation when len(messages) exceeds this.
+            target_messages: Keep this many messages (plus optional system prompt) after truncation.
+
+        Returns:
+            Truncated message list.
+        """
+        if len(messages) <= max_messages:
+            return messages
+
+        # Separate system prompt if needed
+        if keep_system_prompt and messages:
+            system = [messages[0]]
+            body = messages[1:]
+        else:
+            system = []
+            body = list(messages)
+
+        # Build atomic groups from body messages.
+        # A "group" is either:
+        #   1. A standalone message (user or assistant without tool_calls)
+        #   2. An assistant message with tool_calls + all subsequent tool-result messages
+        groups: list[list] = []
+        i = 0
+        while i < len(body):
+            msg = body[i]
+
+            # Detect assistant message with tool_calls (OpenAI/Llama format)
+            has_tool_calls = (
+                isinstance(msg, dict)
+                and msg.get("role") == "assistant"
+                and msg.get("tool_calls")
+            )
+
+            if has_tool_calls:
+                group = [msg]
+                i += 1
+                # Collect subsequent tool-result messages
+                while i < len(body):
+                    next_msg = body[i]
+                    is_tool_result = False
+
+                    # OpenAI format: {"role": "tool", ...}
+                    if isinstance(next_msg, dict) and next_msg.get("role") == "tool":
+                        is_tool_result = True
+
+                    # Anthropic format: {"role": "user", "content": [{"type": "tool_result", ...}]}
+                    if (
+                        isinstance(next_msg, dict)
+                        and next_msg.get("role") == "user"
+                        and isinstance(next_msg.get("content"), list)
+                        and any(
+                            isinstance(c, dict) and c.get("type") == "tool_result"
+                            for c in next_msg["content"]
+                        )
+                    ):
+                        is_tool_result = True
+
+                    if is_tool_result:
+                        group.append(next_msg)
+                        i += 1
+                    else:
+                        break
+                groups.append(group)
+            else:
+                groups.append([msg])
+                i += 1
+
+        # Drop oldest groups until we're at or below target
+        total = sum(len(g) for g in groups)
+        while groups and (len(system) + total) > target_messages:
+            dropped = groups.pop(0)
+            total -= len(dropped)
+
+        # Reconstruct
+        result = system[:]
+        for g in groups:
+            result.extend(g)
+
+        logger.info(
+            f"✂️ Truncated messages from {len(messages)} to {len(result)} "
+            f"({len(groups)} atomic groups preserved)"
+        )
+        return result
 
     def _get_model_specific_instructions(self) -> str:
         """Override this in subclasses for model-specific guidance.
@@ -268,6 +499,31 @@ class BaseChatBot(ABC):
             return f"{base_prompt}\n\n{model_specific}"
         return base_prompt
 
+    def _format_scope_line(self, namespace: Optional[str]) -> str:
+        """Format the Scope line for the system prompt."""
+        if namespace:
+            return (
+                "**NAMESPACE-SCOPED: %s** — ALL queries MUST be filtered "
+                "to this namespace only" % namespace
+            )
+        return "Cluster-wide analysis"
+
+    def _format_namespace_directive(self, namespace: Optional[str]) -> str:
+        """Format the namespace scoping directive for the system prompt."""
+        if not namespace:
+            return ""
+        return (
+            "\n**NAMESPACE SCOPE REQUIREMENT — MANDATORY:**\n"
+            'You are operating in NAMESPACE-SCOPED mode for namespace **"%s"**.\n'
+            "- You MUST call tools (execute_promql, search_metrics, etc.) to get FRESH data for this namespace.\n"
+            "- Do NOT reuse or reference results from previous queries — they may be from a different scope.\n"
+            '- Do NOT add namespace filters to your PromQL queries — the system automatically injects namespace="%s" for you.\n'
+            '- If a previous conversation shows cluster-wide data, IGNORE it and query fresh data for "%s".\n'
+            '- Every answer must reflect data from namespace "%s" ONLY.\n'
+            '- If the user mentions a different namespace in their question, still answer the question but use "%s"'
+            " — the active namespace selected in the UI always takes precedence.\n"
+        ) % (namespace, namespace, namespace, namespace, namespace)
+
     def _get_base_prompt(self, namespace: Optional[str] = None) -> str:
         """Create base system prompt shared by all models."""
         prompt = f"""You are an expert Kubernetes and Prometheus observability assistant.
@@ -278,9 +534,10 @@ You have access to monitoring tools and should provide focused, targeted respons
 
 **Your Environment:**
 - Cluster: OpenShift with AI/ML workloads, GPUs, and comprehensive monitoring
-- Scope: {namespace if namespace else 'Cluster-wide analysis'}
+- Scope: {self._format_scope_line(namespace)}
 - Tools: Direct access to Prometheus/Thanos metrics via MCP tools
-- **Enhanced Metrics Catalog**: Smart discovery of 2,037 High/Medium priority OpenShift metrics across 19 categories (GPU/AI, Cluster Health, Networking, Storage, etcd, etc.)
+- **Enhanced Metrics Catalog**: Smart category-aware metric discovery via catalog tools
+{self._format_namespace_directive(namespace)}
 
 **Available Tools:**
 
@@ -407,18 +664,8 @@ use the `vllm:` prefix and live in the `gpu_ai` category. Key concepts:
   - Per-instance breakdown: add `by (instance)` to aggregations
   - Cache saturation check: `vllm:gpu_cache_usage_perc > 0.9`
 
-**📚 Enhanced Metrics Catalog Features:**
-
-The system now has intelligent metric discovery with category-aware filtering:
-- **19 Categories**: GPU/AI, Cluster Health, Node Hardware, Pods/Containers, Networking, Storage, etcd, API Server, and more
-- **Priority-Based Selection**: Automatically focuses on High/Medium priority metrics (2,037 metrics) for faster, more relevant results
-- **Smart Category Detection**: Automatically identifies relevant categories from your question (e.g., "GPU temperature" → gpu_ai category)
-- **70% Faster Discovery**: Pre-filtered catalog reduces discovery time from 3.7s to 1.1s
-
-**When to Use Enhanced Catalog Tools:**
-- Use `get_metrics_categories` when you want to explore available metric categories
-- Use `search_metrics_by_category` when you need metrics from a specific category (e.g., all GPU metrics, all etcd metrics)
-- The standard tools (search_metrics, get_metric_metadata) automatically benefit from smart catalog filtering
+**📚 Enhanced Metrics Catalog:**
+Use `get_metrics_categories` to explore available categories and `search_metrics_by_category` for targeted category-specific queries (e.g., all GPU metrics, all etcd metrics). Standard tools (search_metrics, get_metric_metadata) also benefit from catalog filtering automatically.
 
 **Your Workflow (FOCUSED & DIRECT):**
 1. 🎯 **STOP AND THINK**: What exactly is the user asking for?
@@ -449,6 +696,20 @@ The system now has intelligent metric discovery with category-aware filtering:
 - **Show detailed breakdowns** not just summary totals
 - List top consumers by pod and namespace with actual names
 - Categorize by workload type such as AI/ML versus Infrastructure
+
+**Pod Health & Failure Detection:**
+- `kube_pod_status_phase` only tracks pod-level phases (Pending, Running, Succeeded, Failed, Unknown)
+- Most common failures (CrashLoopBackOff, ImagePullBackOff, OOMKilled, Error) are NOT in the "Failed" phase
+- To find ALL unhealthy pods, you MUST check multiple metrics:
+  - `kube_pod_container_status_waiting_reason{{reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|CreateContainerConfigError"}}` — containers stuck in waiting state
+  - `kube_pod_container_status_terminated_reason{{reason=~"Error|OOMKilled"}}` — containers that terminated with errors
+  - `kube_pod_status_phase{{phase="Failed"}}` — pods in Failed phase
+- When a user asks about "failing", "unhealthy", "problem", or "broken" pods, ALWAYS query container-level metrics, not just pod phase
+- IMPORTANT: Always append `== 1` to kube-state-metrics status queries (e.g., `kube_pod_status_phase{{phase="Failed"}} == 1`). Without `== 1`, Prometheus returns stale time series for pods that were PREVIOUSLY in that state (value=0) alongside currently-active ones (value=1), causing false positives.
+
+**PromQL Pod/Container Name Matching:**
+- When querying by pod name, always use regex matching (e.g., `pod=~"name.*"`) instead of exact match (`pod="name"`), because Kubernetes pod names include deployment and replicaset hash suffixes (e.g., `my-app-6d5f8b7c4-x9k2m`).
+- Apply the same regex pattern for container and deployment names that may have generated suffixes.
 
 **CORE PRINCIPLES:**
 - **BE THOROUGH BUT FOCUSED**: Use as many tools as needed to answer comprehensively

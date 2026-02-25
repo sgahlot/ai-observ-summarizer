@@ -246,24 +246,12 @@ describe('AIChatPage', () => {
 
       const input = screen.getByPlaceholderText('Ask about your metrics...');
       fireEvent.change(input, { target: { value: 'Test message' } });
-      fireEvent.keyPress(input, { key: 'Enter', code: 'Enter', charCode: 13 });
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
       await waitFor(() => {
         expect(mockChat).toHaveBeenCalled();
       });
     });
-
-    // Note: Shift+Enter is not currently handled differently in the implementation
-    // This test is commented out as it was aspirational
-    // it('should not send message when Shift+Enter pressed', () => {
-    //   render(<AIChatPage />);
-    //
-    //   const input = screen.getByPlaceholderText('Ask about your metrics...');
-    //   fireEvent.change(input, { target: { value: 'Test message' } });
-    //   fireEvent.keyPress(input, { key: 'Enter', code: 'Enter', charCode: 13, shiftKey: true });
-    //
-    //   expect(mockChat).not.toHaveBeenCalled();
-    // });
 
     it('should not send empty message', () => {
       render(<AIChatPage />);
@@ -1546,7 +1534,7 @@ describe('AIChatPage', () => {
       fireEvent.change(input, { target: { value: 'Edited with Enter' } });
 
       // Press Enter
-      fireEvent.keyPress(input, { key: 'Enter', code: 'Enter', charCode: 13 });
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
       await waitFor(() => {
         expect(mockChat).toHaveBeenCalledWith(
@@ -1557,40 +1545,38 @@ describe('AIChatPage', () => {
       });
     });
 
-    // Note: Escape key handling in edit mode would need to use onKeyDown instead of onKeyPress
-    // This test is commented out pending implementation update
-    // it('should cancel edit when Escape key pressed', () => {
-    //   const mockMessages = [
-    //     {
-    //       id: '1',
-    //       role: 'user' as const,
-    //       content: 'Original message',
-    //       timestamp: new Date(),
-    //     },
-    //   ];
-    //
-    //   (useChatHistoryModule.useChatHistory as jest.Mock).mockReturnValue({
-    //     messages: mockMessages,
-    //     setMessages: mockSetMessages,
-    //     clearHistory: mockClearHistory,
-    //     exportToMarkdown: mockExportToMarkdown,
-    //   });
-    //
-    //   render(<AIChatPage />);
-    //
-    //   // Enter edit mode
-    //   fireEvent.click(screen.getByTitle('Edit and resend'));
-    //
-    //   // Verify we're in edit mode
-    //   expect(screen.getByText('Save & Resend')).toBeInTheDocument();
-    //
-    //   const input = screen.getByLabelText('Edit message');
-    //   fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
-    //
-    //   // Should exit edit mode - Save & Resend should disappear
-    //   expect(screen.queryByText('Save & Resend')).not.toBeInTheDocument();
-    //   expect(screen.queryByText('Cancel')).not.toBeInTheDocument();
-    // });
+    it('should cancel edit when Escape key pressed', () => {
+      const mockMessages = [
+        {
+          id: '1',
+          role: 'user' as const,
+          content: 'Original message',
+          timestamp: new Date(),
+        },
+      ];
+
+      (useChatHistoryModule.useChatHistory as jest.Mock).mockReturnValue({
+        messages: mockMessages,
+        setMessages: mockSetMessages,
+        clearHistory: mockClearHistory,
+        exportToMarkdown: mockExportToMarkdown,
+      });
+
+      render(<AIChatPage />);
+
+      // Enter edit mode
+      fireEvent.click(screen.getByTitle('Edit and resend'));
+
+      // Verify we're in edit mode
+      expect(screen.getByText('Save & Resend')).toBeInTheDocument();
+
+      const input = screen.getByLabelText('Edit message');
+      fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
+
+      // Should exit edit mode - Save & Resend should disappear
+      expect(screen.queryByText('Save & Resend')).not.toBeInTheDocument();
+      expect(screen.queryByText('Cancel')).not.toBeInTheDocument();
+    });
 
     it('should disable save button when edit value is empty', () => {
       const mockMessages = [

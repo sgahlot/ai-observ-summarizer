@@ -657,7 +657,8 @@ Use time range syntax `[{time_range_syntax}]` in PromQL queries where appropriat
 
     # Common OpenShift metrics for reference
     common_metrics = """**📊 Comprehensive OpenShift/Kubernetes Metrics:**
-- Pods: `sum(kube_pod_status_phase{phase="Running"})`, `sum(kube_pod_status_phase{phase="Failed"})`
+- Pods Running: `sum(kube_pod_status_phase{phase="Running"})`
+- Pods Failing: `kube_pod_status_phase{phase="Failed"} == 1`, `kube_pod_container_status_waiting_reason{reason=~"CrashLoopBackOff|ImagePullBackOff"} == 1`, `kube_pod_container_status_terminated_reason{reason=~"Error|OOMKilled"} == 1`
 - Deployments: `sum(kube_deployment_status_replicas_ready)`, `sum(kube_deployment_spec_replicas)`
 - Services: `sum(kube_service_info)`, `sum(kube_endpoint_address_available)`
 - Jobs: `sum(kube_job_status_active)`, `sum(kube_job_status_succeeded)`, `sum(kube_job_status_failed)`
@@ -668,6 +669,8 @@ Use time range syntax `[{time_range_syntax}]` in PromQL queries where appropriat
 - Memory: `100 - (sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes) * 100)`
 - Containers: `count(count by (image)(container_spec_image))`, `sum(kube_pod_container_status_running)`
 - Workloads: `sum(kube_daemonset_status_number_ready)`, `sum(kube_statefulset_status_replicas_ready)`
+
+**Note:** When filtering by pod, container, or deployment name, use regex matching (e.g., `pod=~"name.*"`) because Kubernetes names include generated hash suffixes.
 
 """
 

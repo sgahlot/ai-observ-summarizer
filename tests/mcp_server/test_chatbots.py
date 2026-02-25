@@ -735,6 +735,92 @@ def test_no_claude_integration_references(mock_mcp_tools):
         f"Found references to PrometheusChatBot: {result.stdout}"
 
 
+class TestNamespaceInjection:
+    """Test namespace injection via _get_tool_result parameter."""
+
+    def test_get_tool_result_injects_namespace_into_promql(self, mock_mcp_tools):
+        """Test that passing namespace to _get_tool_result modifies the PromQL query."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        with patch.object(bot, '_route_tool_call_to_mcp', return_value="result") as mock_route:
+            bot._get_tool_result("execute_promql", {"query": "up"}, namespace="test-ns")
+
+            # The query should have been modified to include namespace
+            call_args = mock_route.call_args
+            actual_args = call_args[0][1]  # second positional arg is tool_args
+            assert 'namespace="test-ns"' in actual_args["query"]
+
+    def test_get_tool_result_injects_namespace_into_tool_args(self, mock_mcp_tools):
+        """Test that passing namespace to a namespace-aware non-PromQL tool adds namespace to tool_args."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        # search_metrics is in NAMESPACE_AWARE_TOOLS
+        with patch.object(bot, '_namespace_aware_tools', {"search_metrics", "execute_promql"}):
+            with patch.object(bot, '_route_tool_call_to_mcp', return_value="result") as mock_route:
+                bot._get_tool_result("search_metrics", {"pattern": "cpu"}, namespace="test-ns")
+
+                call_args = mock_route.call_args
+                actual_args = call_args[0][1]
+                assert actual_args["namespace"] == "test-ns"
+                assert actual_args["pattern"] == "cpu"
+
+
+class TestGeminiTextToolCallDetection:
+    """Test detection of text-based tool calls in Gemini responses."""
+
+    def test_detect_text_tool_call_with_function_syntax(self, mock_mcp_tools):
+        """Test that tool_name(...) in markdown code block triggers detection."""
+        from chatbots import GoogleChatBot
+
+        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools)
+        text = '**Tool Call:**\n```python\nexecute_promql(query="up")\n```'
+        tool_names = ["execute_promql", "get_label_values"]
+
+        assert bot._detect_text_tool_calls(text, tool_names) is True
+
+    def test_detect_text_tool_call_with_header(self, mock_mcp_tools):
+        """Test that 'Tool Call:' header triggers detection."""
+        from chatbots import GoogleChatBot
+
+        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools)
+        text = "I need to use the following:\nTool Call:\nget_label_values with label=namespace"
+        tool_names = ["execute_promql", "get_label_values"]
+
+        assert bot._detect_text_tool_calls(text, tool_names) is True
+
+    def test_no_false_positive_normal_text(self, mock_mcp_tools):
+        """Test that mentioning a tool name in prose does NOT trigger detection."""
+        from chatbots import GoogleChatBot
+
+        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools)
+        text = "I used the execute_promql tool to query your cluster metrics and found 5 targets."
+        tool_names = ["execute_promql", "get_label_values"]
+
+        assert bot._detect_text_tool_calls(text, tool_names) is False
+
+    def test_no_false_positive_empty_text(self, mock_mcp_tools):
+        """Test that empty string returns False."""
+        from chatbots import GoogleChatBot
+
+        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools)
+
+        assert bot._detect_text_tool_calls("", ["execute_promql"]) is False
+
+    def test_detect_inline_call(self, mock_mcp_tools):
+        """Test that execute_promql(query='up') inline triggers detection."""
+        from chatbots import GoogleChatBot
+
+        bot = GoogleChatBot(GEMINI_FLASH, api_key="test", tool_executor=mock_mcp_tools)
+        text = "Let me run execute_promql(query='up') to check."
+        tool_names = ["execute_promql", "get_label_values"]
+
+        assert bot._detect_text_tool_calls(text, tool_names) is True
+
+
 if __name__ == "__main__":
     # Run with: python -m pytest tests/mcp_server/test_chatbots.py -v
     pytest.main([__file__, "-v"])

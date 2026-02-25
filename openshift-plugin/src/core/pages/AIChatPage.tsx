@@ -45,6 +45,8 @@ import { SuggestedQuestionsPopover } from '../components/SuggestedQuestionsPopov
 import { MetricCategoriesPopover } from '../components/MetricCategoriesPopover';
 import { MetricCategoriesInline } from '../components/MetricCategoriesInline';
 import { ConfigurationRequiredAlert } from '../components/ConfigurationRequiredAlert';
+import { NamespaceScopeSelector } from '../components/NamespaceScopeSelector';
+import { ChatScope } from '../data/namespaceDefaults';
 import '../styles/chat-markdown.css';
 
 const AIChatPage: React.FC = () => {
@@ -66,6 +68,8 @@ const AIChatPage: React.FC = () => {
   const [copySuccess, setCopySuccess] = React.useState(false);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [editValue, setEditValue] = React.useState('');
+  const [chatScope, setChatScope] = React.useState<ChatScope>('cluster_wide');
+  const [selectedNamespace, setSelectedNamespace] = React.useState<string | null>(null);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const isMountedRef = React.useRef(true);
@@ -160,6 +164,9 @@ const AIChatPage: React.FC = () => {
     let textToSend = messageText || inputValue.trim();
     if (!textToSend || isLoading) return;
 
+    const currentScope = chatScope;
+    const currentNamespace = selectedNamespace;
+
     // Auto-prefix with category context when user types in the main input
     if (!messageText && selectedCategoryName) {
       textToSend = `Regarding ${selectedCategoryName} metrics: ${textToSend}`;
@@ -196,6 +203,8 @@ const AIChatPage: React.FC = () => {
       role: 'user',
       content: textToSend,
       timestamp: new Date(),
+      scope: currentScope,
+      namespace: currentNamespace || undefined,
     };
 
     setMessages(prev => [...prev, userMessage]);
@@ -207,19 +216,24 @@ const AIChatPage: React.FC = () => {
       // Build conversation history from previous messages (exclude current and error messages)
       // Limit to last N messages based on settings
       const conversationHistory = messages
-        .filter(msg => !msg.error) // Exclude error messages
-        .slice(-chatSettings.conversationContextLimit) // Apply context limit from settings
-        .map(msg => ({
-          role: msg.role,
-          content: msg.content,
-        }));
+        .filter(msg => !msg.error)
+        .filter(msg => {
+          const msgScope = msg.scope || 'cluster_wide';
+          if (currentScope === 'namespace_scoped') {
+            return msgScope === 'namespace_scoped' && msg.namespace === currentNamespace;
+          }
+          return msgScope === 'cluster_wide';
+        })
+        .slice(-chatSettings.conversationContextLimit)
+        .map(msg => ({ role: msg.role, content: msg.content }));
 
       // Call real MCP chat endpoint with conversation history
       const { response, progressLog } = await chat(
         config.ai_model,
         userMessage.content,
         {
-          scope: 'cluster_wide',
+          scope: currentScope,
+          namespace: currentNamespace || undefined,
           apiKey: config.api_key,
           conversationHistory,
         }
@@ -236,6 +250,8 @@ const AIChatPage: React.FC = () => {
         content: response,
         timestamp: new Date(),
         progressLog: progressLog && progressLog.length > 0 ? progressLog : undefined,
+        scope: currentScope,
+        namespace: currentNamespace || undefined,
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -251,13 +267,16 @@ const AIChatPage: React.FC = () => {
 
       stopProgress();
 
+      const errorMsg = error instanceof Error ? error.message : String(error);
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `❌ I encountered an error: ${error.message}`,
+        content: `❌ I encountered an error: ${errorMsg}`,
         timestamp: new Date(),
         error: true,
-        originalUserMessage: userMessage.content, // Store original message for retry
+        originalUserMessage: userMessage.content,
+        scope: currentScope,
+        namespace: currentNamespace || undefined,
       };
 
       setMessages(prev => [...prev, errorMessage]);
@@ -268,7 +287,7 @@ const AIChatPage: React.FC = () => {
     }
   };
 
-  const handleKeyPress = (event: React.KeyboardEvent) => {
+  const handleKeyDown = (event: React.KeyboardEvent) => {
     // Enter - Send message
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -397,18 +416,38 @@ const AIChatPage: React.FC = () => {
             </TextContent>
           </FlexItem>
           <FlexItem>
-            {chatSettings.suggestedQuestionsLocation === 'header' && (
-              <SuggestedQuestionsPopover onSelectQuestion={(question) => handleSend(question)} />
-            )}
-            {chatSettings.metricCategoriesLocation === 'header' && (
-              <MetricCategoriesPopover onSelectQuestion={(question) => handleSend(question)} />
-            )}
-            <Button variant="plain" onClick={handleExportConversation} title="Export conversation" style={{ marginRight: '8px' }}>
-              <DownloadIcon /> Export
-            </Button>
-            <Button variant="plain" onClick={handleClear} title="Clear chat">
-              <TrashIcon /> Clear
-            </Button>
+            <Flex alignItems={{ default: 'alignItemsCenter' }} spaceItems={{ default: 'spaceItemsSm' }}>
+              <FlexItem>
+                <NamespaceScopeSelector
+                  scope={chatScope}
+                  namespace={selectedNamespace}
+                  onScopeChange={(scope, namespace) => {
+                    setChatScope(scope);
+                    setSelectedNamespace(namespace);
+                  }}
+                />
+              </FlexItem>
+              {chatSettings.suggestedQuestionsLocation === 'header' && (
+                <FlexItem>
+                  <SuggestedQuestionsPopover onSelectQuestion={(question) => handleSend(question)} />
+                </FlexItem>
+              )}
+              {chatSettings.metricCategoriesLocation === 'header' && (
+                <FlexItem>
+                  <MetricCategoriesPopover onSelectQuestion={(question) => handleSend(question)} />
+                </FlexItem>
+              )}
+              <FlexItem>
+                <Button variant="plain" onClick={handleExportConversation} title="Export conversation" style={{ marginRight: '8px' }}>
+                  <DownloadIcon /> Export
+                </Button>
+              </FlexItem>
+              <FlexItem>
+                <Button variant="plain" onClick={handleClear} title="Clear chat">
+                  <TrashIcon /> Clear
+                </Button>
+              </FlexItem>
+            </Flex>
           </FlexItem>
         </Flex>
       </div>
@@ -482,7 +521,7 @@ const AIChatPage: React.FC = () => {
                       type="text"
                       value={editValue}
                       onChange={(_event, value) => setEditValue(value)}
-                      onKeyPress={(e) => {
+                      onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           handleSaveEdit(message.id);
                         } else if (e.key === 'Escape') {
@@ -765,10 +804,12 @@ const AIChatPage: React.FC = () => {
                 type="text"
                 value={inputValue}
                 onChange={(_event, value) => setInputValue(value)}
-                onKeyPress={handleKeyPress}
+                onKeyDown={handleKeyDown}
                 placeholder={selectedCategoryName
                   ? `Ask about ${selectedCategoryName}...`
-                  : 'Ask about your metrics...'}
+                  : selectedNamespace
+                    ? `Ask about metrics in ${selectedNamespace}...`
+                    : 'Ask about your metrics...'}
                 aria-label="Chat input"
                 isDisabled={isLoading}
               />
