@@ -184,6 +184,7 @@ export const MetricsChatPanel: React.FC<MetricsChatPanelProps> = ({
   const [showSuggestions, setShowSuggestions] = React.useState(true);
   const [lastContext, setLastContext] = React.useState({ category, scope, namespace, timeRange });
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
   React.useEffect(() => {
@@ -205,6 +206,15 @@ export const MetricsChatPanel: React.FC<MetricsChatPanelProps> = ({
       setLastContext(currentContext);
     }
   }, [category, scope, namespace, timeRange, messages.length, lastContext]);
+
+  // Auto-focus input when panel opens
+  React.useEffect(() => {
+    if (isOpen) {
+      // Small delay to ensure DOM is rendered before focusing
+      const timer = setTimeout(() => inputRef.current?.focus(), 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -302,6 +312,8 @@ export const MetricsChatPanel: React.FC<MetricsChatPanelProps> = ({
       setError(err instanceof Error ? err.message : 'Failed to get response from AI assistant');
     } finally {
       setIsLoading(false);
+      // Re-focus input after response or error
+      inputRef.current?.focus();
     }
   };
 
@@ -548,6 +560,7 @@ export const MetricsChatPanel: React.FC<MetricsChatPanelProps> = ({
         <Flex alignItems={{ default: 'alignItemsFlexEnd' }} spaceItems={{ default: 'spaceItemsXs' }}>
           <FlexItem flex={{ default: 'flex_1' }}>
             <TextInput
+              ref={inputRef}
               type="text"
               value={currentQuestion}
               onChange={(_event, value) => setCurrentQuestion(value)}
