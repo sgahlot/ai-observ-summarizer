@@ -447,6 +447,7 @@ def fetch_goal_query_objects(
                         qstr = q.get("query") if isinstance(q, dict) else None
                         if not qstr:
                             continue
+                        logger.debug("fetch_goal_query_objects executing goal query: %s (goal=%s, bucket=%s)", qstr, goal_name, bucket)
                         t_start = time.perf_counter()
                         obj_result = client.query_objects(qstr)
                         time_korrel8r_query_objects += time.perf_counter() - t_start
