@@ -5,6 +5,7 @@ This module provides Llama-specific implementation using LlamaStack's OpenAI-com
 """
 
 import json
+import re
 from typing import Optional, List, Dict, Any, Callable
 
 from .base import BaseChatBot
@@ -25,6 +26,39 @@ class LlamaChatBot(BaseChatBot):
     def _get_max_tool_result_length(self) -> int:
         """Llama 3.1 supports 128K token context - 8K chars is reasonable."""
         return 8000
+
+    # Tools that Llama should have access to. Excludes admin/config tools,
+    # LLM-chaining tools (analyze_vllm, chat_openshift, etc.), and the
+    # recursive `chat` tool to stay within the 14K token context limit.
+    _TOOL_ALLOWLIST = {
+        # Prometheus / metrics
+        "execute_promql",
+        "search_metrics",
+        "get_metric_metadata",
+        "get_label_values",
+        "suggest_queries",
+        "explain_results",
+        "select_best_metric",
+        "get_metrics_categories",
+        "search_metrics_by_category",
+        "get_category_metrics_detail",
+        # Traces
+        "chat_tempo_tool",
+        "query_tempo_tool",
+        "get_trace_details_tool",
+        # Correlation & logs
+        "korrel8r_get_correlated",
+        "korrel8r_query_objects",
+        "get_correlated_logs",
+        # Infrastructure discovery
+        "get_gpu_info",
+        "get_deployment_info",
+        "list_openshift_namespaces",
+    }
+
+    def _get_tool_allowlist(self) -> set:
+        """Limit tools to reduce context usage for Llama's constrained context."""
+        return self._TOOL_ALLOWLIST
 
     def _extract_model_name(self) -> str:
         """LlamaStack expects the full model name including provider prefix.
@@ -53,59 +87,77 @@ class LlamaChatBot(BaseChatBot):
             self.client = None
 
     def _get_model_specific_instructions(self) -> str:
-        """Llama-specific instructions to avoid tool calling issues."""
-        return """---
+        """No separate model-specific block — merged into _get_base_prompt."""
+        return ""
 
-**LLAMA-SPECIFIC INSTRUCTIONS:**
+    def _get_base_prompt(self, namespace=None) -> str:
+        """Compact system prompt for Llama's constrained context window."""
+        scope = self._format_scope_line(namespace)
+        ns_directive = self._format_namespace_directive(namespace)
 
-**Tool Calling Format:**
-- Use the provided tools via the API - do NOT output JSON tool calls as text
-- When you want to use a tool, invoke it through the function calling mechanism
-- Never output raw JSON like {{"name": "tool_name", "parameters": {{...}}}}
+        return f"""You are an expert Kubernetes and Prometheus observability assistant.
 
-**PromQL Query Patterns - Use These Proven Patterns:**
+**Scope:** {scope}
+{ns_directive}
+**CRITICAL — Tool Calling:**
+- ALWAYS call tools via the function calling API to get real data.
+- NEVER fabricate data or make up numbers.
+- NEVER output tool calls as JSON text — use the function calling mechanism.
 
-For CPU queries:
-- Use: sum(rate(container_cpu_usage_seconds_total[5m])) by (pod, namespace)
-- NOT: container_cpu_usage_seconds_total alone
+**Tool Selection:**
+- Metrics/pods/GPU/CPU/memory → execute_promql (primary), search_metrics, suggest_queries
+- Traces/spans/latency → chat_tempo_tool, query_tempo_tool, get_trace_details_tool
+- Logs/errors → get_correlated_logs
+- Alert investigation → execute_promql with ALERTS metric, then korrel8r_get_correlated
+- Correlation → korrel8r_get_correlated, korrel8r_query_objects
 
-For Memory queries:
-- Use: sum(container_memory_usage_bytes) by (pod, namespace)
-- NOT: container_memory_usage_bytes alone
+**PromQL Patterns:**
+- CPU: sum(rate(container_cpu_usage_seconds_total[5m])) by (pod, namespace)
+- Memory: sum(container_memory_usage_bytes) by (pod, namespace)
+- GPU temp: avg(DCGM_FI_DEV_GPU_TEMP) or avg(habanalabs_temperature_onchip)
+- GPU util: avg(DCGM_FI_DEV_GPU_UTIL) or avg(habanalabs_utilization)
+- GPU power: avg(DCGM_FI_DEV_POWER_USAGE) or avg(habanalabs_power_mW) / 1000
+- Pod status: kube_pod_status_phase{{phase="Running"}} == 1
+- Failing pods: kube_pod_container_status_waiting_reason{{reason=~"CrashLoopBackOff|ImagePullBackOff"}} == 1
+- Always use aggregation (sum/avg/max) and group by (pod, namespace)
+- Use rate() for counters, append == 1 for boolean metrics
+- Use regex for pod names: pod=~"name.*" (pods have hash suffixes)
 
-For GPU queries (Multi-vendor: NVIDIA + Intel Gaudi):
-- Temperature: avg(DCGM_FI_DEV_GPU_TEMP) or avg(habanalabs_temperature_onchip)
-- Utilization: avg(DCGM_FI_DEV_GPU_UTIL) or avg(habanalabs_utilization)
-- Power: avg(DCGM_FI_DEV_POWER_USAGE) or avg(habanalabs_power_mW) / 1000
-- For detailed breakdowns, use: sum(...) by (pod, namespace)
-- The "or" pattern automatically selects the correct vendor metric
+**Response Format:**
+- Use markdown (bold, lists) — no code block wrappers
+- Include PromQL used, metric source, and data points in a Technical Details section
+- Provide operational context and actionable insights"""
 
-For Pod Status queries:
-- Running/Pending/Succeeded pods: kube_pod_status_phase{phase="Running"} == 1
-- Failing/unhealthy pods require MULTIPLE metrics:
-  - kube_pod_status_phase{phase="Failed"} == 1
-  - kube_pod_container_status_waiting_reason{reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull"} == 1
-  - kube_pod_container_status_terminated_reason{reason=~"Error|OOMKilled"} == 1
-- Include namespace filter and grouping
+    def _detect_text_tool_calls(self, text: str, tool_names: List[str]) -> bool:
+        """Detect if the model described a tool call in text instead of using the function calling API.
 
-**Key PromQL Rules:**
-- Always use aggregation functions: sum(), avg(), max(), etc.
-- Always group by (pod, namespace) for detailed breakdowns (or just by pod if namespace already filtered)
-- Use rate() for counter metrics with time window like [5m]
-- Filter boolean metrics with == 1 to show only true states
-- Extract namespace from user query and add as label filter
+        Llama models may output tool calls as plain text in several formats:
+        - Tool Call: header (case-insensitive)
+        - tool_name( function-call syntax
+        - {"name": "tool_name"} JSON pattern
 
-**Response Formatting:**
-- Use markdown formatting (bold, lists, etc.) for readability
-- Do NOT wrap the response or sections in code blocks (no ``` markers)
-- Format lists with proper markdown: `- Item` or `**Label:** value`
-- Use bold (**text**) for emphasis and section headers
+        Returns True if a text-based tool call pattern is detected.
+        """
+        if not text or not tool_names:
+            return False
 
-**Remember:**
-- Always use tools through proper function calling, not by generating JSON text
-- Use the query patterns above for accurate results
-- Pay special attention to namespace filters in user queries
-- Format your responses with clean markdown, not code blocks"""
+        # Check for "Tool Call:" header pattern (shared with Google)
+        if re.search(r'Tool Call:', text, re.IGNORECASE):
+            return True
+
+        # Check for tool_name( pattern — function invocation syntax (shared with Google)
+        for name in tool_names:
+            pattern = r'\b' + re.escape(name) + r'\s*\('
+            if re.search(pattern, text):
+                return True
+
+        # Check for JSON-style {"name": "tool_name"} pattern (Llama-specific)
+        for name in tool_names:
+            pattern = r'"name"\s*:\s*"' + re.escape(name) + r'"'
+            if re.search(pattern, text):
+                return True
+
+        return False
 
     def _convert_tools_to_openai_format(self) -> List[Dict[str, Any]]:
         """Convert MCP tools to OpenAI function calling format."""
@@ -154,9 +206,14 @@ For Pod Status queries:
             # Convert tools to OpenAI format
             openai_tools = self._convert_tools_to_openai_format()
 
+            # Extract tool names for text-tool-call detection
+            tool_names = [t["function"]["name"] for t in openai_tools]
+
             # Iterative tool calling loop
             max_iterations = 30
             iteration = 0
+            nudge_retried = False
+            tool_choice = "auto"
 
             while iteration < max_iterations:
                 iteration += 1
@@ -170,8 +227,12 @@ For Pod Status queries:
                     model=model_id,
                     messages=messages,
                     tools=openai_tools,
+                    tool_choice=tool_choice,
                     temperature=0
                 )
+
+                # Reset to auto after each call so forced tool calls don't persist
+                tool_choice = "auto"
 
                 choice = response.choices[0]
                 finish_reason = choice.finish_reason
@@ -238,8 +299,49 @@ For Pod Status queries:
                     continue
 
                 else:
-                    # Model is done, return final response
                     final_response = message.content or ''
+
+                    if not nudge_retried:
+                        # Guard 1: Fabrication — model returned stop on iteration 1
+                        # without ever calling tools (likely fabricated response)
+                        if iteration == 1:
+                            logger.warning(
+                                "Llama returned finish_reason=stop on iteration 1 "
+                                "without calling any tools — possible fabrication. "
+                                "Nudging model to use tools."
+                            )
+                            nudge_retried = True
+                            tool_choice = "required"
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    "You MUST use the provided tools to answer this question. "
+                                    "Do NOT fabricate data. Call the appropriate tool now."
+                                )
+                            })
+                            continue
+
+                        # Guard 2: Text tool calls — model wrote tool call as text
+                        # instead of using the function calling API
+                        if self._detect_text_tool_calls(final_response, tool_names):
+                            logger.warning(
+                                "Llama output a tool call as text instead of using "
+                                "the function calling API. Nudging model to retry."
+                            )
+                            nudge_retried = True
+                            tool_choice = "required"
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    "You wrote a tool call as text instead of using the "
+                                    "function calling API. Do NOT output JSON tool calls "
+                                    "as text. Use the function calling mechanism to invoke "
+                                    "the tool."
+                                )
+                            })
+                            continue
+
+                    # Normal completion (or already nudged once)
                     logger.info(f"LlamaStack tool calling completed in {iteration} iterations")
                     return final_response
 

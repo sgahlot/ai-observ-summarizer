@@ -8,6 +8,7 @@ This module tests the refactored chatbot architecture including:
 - Model-specific configurations
 """
 
+import json
 import os
 import pytest
 from unittest.mock import Mock, patch, MagicMock
@@ -322,6 +323,55 @@ class TestToolResultTruncation:
             mock_route.assert_called_once_with(tool_name, tool_args)
 
 
+class TestToolAllowlist:
+    """Test tool filtering via _get_tool_allowlist."""
+
+    def test_llama_filters_tools(self, mock_mcp_tools):
+        """Test LlamaChatBot only receives allowlisted tools."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        allowlist = bot._get_tool_allowlist()
+
+        assert allowlist is not None
+        assert "execute_promql" in allowlist
+        assert "get_label_values" in allowlist
+        # Admin/config tools should NOT be in the allowlist
+        assert "chat" not in allowlist
+        assert "save_api_key" not in allowlist
+        assert "validate_api_key" not in allowlist
+        assert "add_model_to_config" not in allowlist
+        # LLM-chaining tools should NOT be in the allowlist
+        assert "analyze_vllm" not in allowlist
+        assert "chat_openshift" not in allowlist
+
+    def test_llama_get_mcp_tools_respects_allowlist(self, mock_mcp_tools):
+        """Test that _get_mcp_tools returns only allowlisted tools for Llama."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        tools = bot._get_mcp_tools()
+        tool_names = {t["name"] for t in tools}
+
+        # mock_mcp_tools has execute_promql and get_label_values — both in allowlist
+        assert tool_names == {"execute_promql", "get_label_values"}
+
+    def test_other_bots_get_all_tools(self, mock_mcp_tools):
+        """Test that non-Llama bots return None allowlist (all tools)."""
+        from chatbots import AnthropicChatBot, OpenAIChatBot, GoogleChatBot
+
+        for BotClass, name, key in [
+            (AnthropicChatBot, CLAUDE_HAIKU, "test"),
+            (OpenAIChatBot, GPT_4O_MINI, "test"),
+            (GoogleChatBot, GEMINI_FLASH, "test"),
+        ]:
+            bot = BotClass(name, api_key=key, tool_executor=mock_mcp_tools)
+            assert bot._get_tool_allowlist() is None
+            tools = bot._get_mcp_tools()
+            # Should get all tools from mock (2 tools)
+            assert len(tools) == 2
+
+
 class TestModelSpecificInstructions:
     """Test that each bot has model-specific instructions."""
 
@@ -355,17 +405,19 @@ class TestModelSpecificInstructions:
         assert "GEMINI-SPECIFIC" in instructions
         assert len(instructions) > 0
 
-    def test_llama_bot_has_specific_instructions(self, mock_mcp_tools):
-        """Test LlamaChatBot has Llama-specific instructions."""
+    def test_llama_bot_has_compact_prompt(self, mock_mcp_tools):
+        """Test LlamaChatBot uses compact base prompt with key instructions."""
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        instructions = bot._get_model_specific_instructions()
+        prompt = bot._get_base_prompt()
 
-        assert "LLAMA-SPECIFIC" in instructions
-        assert "Tool Calling Format" in instructions
-        assert "PromQL Query Patterns" in instructions
-        assert "Key PromQL Rules" in instructions
+        assert "Tool Calling" in prompt
+        assert "PromQL Patterns" in prompt
+        assert "execute_promql" in prompt
+        # Compact prompt should be significantly shorter than the base class version
+        base_prompt = super(LlamaChatBot, bot)._get_base_prompt()
+        assert len(prompt) < len(base_prompt)
 
 
 class TestModelNameExtraction:
@@ -496,9 +548,10 @@ class TestBaseChatBot:
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         prompt = bot._create_system_prompt(namespace="test-namespace")
 
-        # Should include both base prompt and model-specific instructions
-        assert "Kubernetes and Prometheus" in prompt  # Base prompt
-        assert "LLAMA-SPECIFIC" in prompt  # Model-specific
+        # Llama overrides _get_base_prompt with a compact version
+        assert "Kubernetes and Prometheus" in prompt
+        assert "Tool Calling" in prompt
+        assert "PromQL Patterns" in prompt
 
 
 class TestKorrel8rNormalization:
@@ -819,6 +872,164 @@ class TestGeminiTextToolCallDetection:
         tool_names = ["execute_promql", "get_label_values"]
 
         assert bot._detect_text_tool_calls(text, tool_names) is True
+
+
+class TestLlamaTextToolCallDetection:
+    """Test detection of text-based tool calls in Llama responses."""
+
+    def test_detect_json_tool_call(self, mock_mcp_tools):
+        """Test that JSON-style {"name": "tool_name"} triggers detection."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        text = '{"type":"function","name":"execute_promql","parameters":{"query":"up"}}'
+        tool_names = ["execute_promql", "get_label_values"]
+
+        assert bot._detect_text_tool_calls(text, tool_names) is True
+
+    def test_detect_tool_call_header(self, mock_mcp_tools):
+        """Test that 'Tool Call:' header triggers detection."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        text = "I need to run:\nTool Call:\nexecute_promql with query=up"
+        tool_names = ["execute_promql", "get_label_values"]
+
+        assert bot._detect_text_tool_calls(text, tool_names) is True
+
+    def test_detect_function_syntax(self, mock_mcp_tools):
+        """Test that tool_name(...) function syntax triggers detection."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        text = 'Let me call execute_promql(query="up") to check.'
+        tool_names = ["execute_promql", "get_label_values"]
+
+        assert bot._detect_text_tool_calls(text, tool_names) is True
+
+    def test_no_false_positive_normal_prose(self, mock_mcp_tools):
+        """Test that mentioning a tool name in prose does NOT trigger detection."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        text = "I used execute_promql to query your cluster and found 5 running pods."
+        tool_names = ["execute_promql", "get_label_values"]
+
+        assert bot._detect_text_tool_calls(text, tool_names) is False
+
+    def test_no_false_positive_empty_text(self, mock_mcp_tools):
+        """Test that empty string returns False."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        assert bot._detect_text_tool_calls("", ["execute_promql"]) is False
+
+    def test_no_false_positive_unknown_tool_names(self, mock_mcp_tools):
+        """Test that JSON with unknown tool names does NOT trigger detection."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        text = '{"name": "unknown_tool", "parameters": {}}'
+        tool_names = ["execute_promql", "get_label_values"]
+
+        assert bot._detect_text_tool_calls(text, tool_names) is False
+
+
+class TestLlamaNudgeBehavior:
+    """Test the nudge retry logic in LlamaChatBot.chat()."""
+
+    def _make_mock_response(self, content, finish_reason="stop", tool_calls=None):
+        """Helper to create a mock OpenAI chat completion response."""
+        message = MagicMock()
+        message.content = content
+        message.tool_calls = tool_calls
+
+        choice = MagicMock()
+        choice.finish_reason = finish_reason
+        choice.message = message
+
+        response = MagicMock()
+        response.choices = [choice]
+        return response
+
+    def _make_tool_call_response(self, tool_name, tool_args, tool_id="call_1"):
+        """Helper to create a mock response with tool calls."""
+        tc = MagicMock()
+        tc.id = tool_id
+        tc.function.name = tool_name
+        tc.function.arguments = json.dumps(tool_args)
+
+        return self._make_mock_response(
+            content=None,
+            finish_reason="tool_calls",
+            tool_calls=[tc]
+        )
+
+    def test_fabrication_guard_triggers_on_iteration_1(self, mock_mcp_tools):
+        """Test that fabrication guard triggers when model returns stop on iteration 1."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        # First call: fabricated response (stop, no tools, iteration 1)
+        # Second call: proper final response after nudge
+        fabricated = self._make_mock_response("Here are your pods: pod1, pod2")
+        final = self._make_mock_response("I apologize, let me use the tools. Unfortunately I cannot proceed.")
+
+        bot.client = MagicMock()
+        bot.client.chat.completions.create = MagicMock(side_effect=[fabricated, final])
+
+        result = bot.chat("show me running pods")
+
+        # Should have made 2 API calls (original + retry after nudge)
+        assert bot.client.chat.completions.create.call_count == 2
+        assert result == "I apologize, let me use the tools. Unfortunately I cannot proceed."
+
+        # First call should use tool_choice="auto", retry should use "required"
+        calls = bot.client.chat.completions.create.call_args_list
+        assert calls[0].kwargs["tool_choice"] == "auto"
+        assert calls[1].kwargs["tool_choice"] == "required"
+
+    def test_no_nudge_when_tools_called(self, mock_mcp_tools):
+        """Test that no nudge fires when model properly calls tools."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        # First call: model calls a tool
+        tool_response = self._make_tool_call_response("execute_promql", {"query": "up"})
+        # Second call: model returns final answer
+        final = self._make_mock_response("There are 5 running pods.")
+
+        bot.client = MagicMock()
+        bot.client.chat.completions.create = MagicMock(side_effect=[tool_response, final])
+
+        result = bot.chat("show me running pods")
+
+        # 2 calls: tool call + final answer (no nudge)
+        assert bot.client.chat.completions.create.call_count == 2
+        assert result == "There are 5 running pods."
+
+    def test_nudge_fires_only_once(self, mock_mcp_tools):
+        """Test that nudge only fires once to prevent infinite loops."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        # First call: fabricated (triggers nudge)
+        fabricated = self._make_mock_response("Fake data: pod1, pod2")
+        # Second call: still fabricated (nudge already fired, should return)
+        still_fabricated = self._make_mock_response("More fake data: pod3, pod4")
+
+        bot.client = MagicMock()
+        bot.client.chat.completions.create = MagicMock(side_effect=[fabricated, still_fabricated])
+
+        result = bot.chat("show me running pods")
+
+        # Should only make 2 calls (original + 1 nudge retry), not loop forever
+        assert bot.client.chat.completions.create.call_count == 2
+        assert result == "More fake data: pod3, pod4"
 
 
 if __name__ == "__main__":
