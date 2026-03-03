@@ -128,6 +128,80 @@ class LlamaChatBot(BaseChatBot):
 - Include PromQL used, metric source, and data points in a Technical Details section
 - Provide operational context and actionable insights"""
 
+    # Query category patterns → specific tool + usage hint for the nudge message.
+    # Order matters: first match wins. More specific patterns come first.
+    _QUERY_CATEGORIES = [
+        # Alerts
+        (re.compile(r'alert', re.IGNORECASE),
+         'execute_promql',
+         'Call execute_promql with query: ALERTS{namespace="<namespace>"} or ALERTS{} for cluster-wide.'),
+        # Pod health / failures
+        (re.compile(r'pod.*(fail|crash|error|unhealthy|status|restart)', re.IGNORECASE),
+         'execute_promql',
+         'Call execute_promql with query: '
+         'kube_pod_container_status_waiting_reason{namespace="<namespace>", '
+         'reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull"} == 1'),
+        # Correlation / korrel8r
+        (re.compile(r'correlat|korrel8r|investigate', re.IGNORECASE),
+         'korrel8r_get_correlated',
+         'Call korrel8r_get_correlated with goals=["trace:span","log:application","log:infrastructure"] '
+         'and query="k8s:Pod:{\\"namespace\\":\\"<namespace>\\",\\"name\\":\\"<pod>\\"}"'),
+        # Trace details (specific trace ID)
+        (re.compile(r'trace.*(detail|id|info)|detail.*trace', re.IGNORECASE),
+         'get_trace_details_tool',
+         'Call get_trace_details_tool with the trace ID from the user query.'),
+        # Traces (general)
+        (re.compile(r'trace|span|latency', re.IGNORECASE),
+         'chat_tempo_tool',
+         'Call chat_tempo_tool with the user query to search for traces.'),
+        # Logs
+        (re.compile(r'\blog', re.IGNORECASE),
+         'get_correlated_logs',
+         'Call get_correlated_logs with namespace and optional pod name.'),
+        # GPU metrics
+        (re.compile(r'gpu|power|temperature|temp\b', re.IGNORECASE),
+         'execute_promql',
+         'Call execute_promql for each metric separately. '
+         'GPU power: avg(DCGM_FI_DEV_POWER_USAGE) by (pod, namespace). '
+         'GPU temperature: avg(DCGM_FI_DEV_GPU_TEMP) by (pod, namespace).'),
+        # CPU / memory metrics
+        (re.compile(r'cpu|memory|mem\b', re.IGNORECASE),
+         'execute_promql',
+         'Call execute_promql. '
+         'CPU: sum(rate(container_cpu_usage_seconds_total[5m])) by (pod, namespace). '
+         'Memory: sum(container_memory_usage_bytes) by (pod, namespace).'),
+        # Generic metrics
+        (re.compile(r'metric|promql|prometheus', re.IGNORECASE),
+         'execute_promql',
+         'Call execute_promql with the appropriate PromQL query.'),
+    ]
+
+    def _get_nudge_for_query(self, user_question: str, namespace: Optional[str] = None) -> str:
+        """Build a category-specific nudge message based on the user's query.
+
+        Returns a nudge string with the specific tool name and usage hint,
+        or a generic nudge if no category matches.
+        """
+        for pattern, tool_name, hint in self._QUERY_CATEGORIES:
+            if pattern.search(user_question):
+                # Substitute namespace placeholder if available
+                resolved_hint = hint
+                if namespace:
+                    resolved_hint = resolved_hint.replace('<namespace>', namespace)
+                else:
+                    resolved_hint = resolved_hint.replace('<namespace>', '')
+                logger.info("Smart nudge matched category: tool=%s", tool_name)
+                return (
+                    f"You MUST call the `{tool_name}` tool now to answer this question. "
+                    f"Do NOT fabricate data. {resolved_hint}"
+                )
+
+        # Generic fallback nudge
+        return (
+            "You MUST use the provided tools to answer this question. "
+            "Do NOT fabricate data. Call the appropriate tool now."
+        )
+
     def _detect_text_tool_calls(self, text: str, tool_names: List[str]) -> bool:
         """Detect if the model described a tool call in text instead of using the function calling API.
 
@@ -305,25 +379,24 @@ class LlamaChatBot(BaseChatBot):
                         # Guard 1: Fabrication — model returned stop on iteration 1
                         # without ever calling tools (likely fabricated response)
                         if iteration == 1:
+                            nudge_text = self._get_nudge_for_query(user_question, namespace)
                             logger.warning(
                                 "Llama returned finish_reason=stop on iteration 1 "
                                 "without calling any tools — possible fabrication. "
-                                "Nudging model to use tools."
+                                "Nudging model with category-specific hint."
                             )
                             nudge_retried = True
                             tool_choice = "required"
                             messages.append({
                                 "role": "user",
-                                "content": (
-                                    "You MUST use the provided tools to answer this question. "
-                                    "Do NOT fabricate data. Call the appropriate tool now."
-                                )
+                                "content": nudge_text
                             })
                             continue
 
                         # Guard 2: Text tool calls — model wrote tool call as text
                         # instead of using the function calling API
                         if self._detect_text_tool_calls(final_response, tool_names):
+                            nudge_text = self._get_nudge_for_query(user_question, namespace)
                             logger.warning(
                                 "Llama output a tool call as text instead of using "
                                 "the function calling API. Nudging model to retry."
@@ -335,13 +408,24 @@ class LlamaChatBot(BaseChatBot):
                                 "content": (
                                     "You wrote a tool call as text instead of using the "
                                     "function calling API. Do NOT output JSON tool calls "
-                                    "as text. Use the function calling mechanism to invoke "
-                                    "the tool."
+                                    "as text. Use the function calling mechanism. "
+                                    + nudge_text
                                 )
                             })
                             continue
 
-                    # Normal completion (or already nudged once)
+                    # Nudge was already attempted — return response or graceful fallback
+                    if not final_response or not final_response.strip():
+                        logger.warning(
+                            "Llama returned empty response after nudge. "
+                            "Returning graceful fallback."
+                        )
+                        return (
+                            "I wasn't able to retrieve data for this query. "
+                            "Please try rephrasing your question or being more "
+                            "specific about what information you need."
+                        )
+
                     logger.info(f"LlamaStack tool calling completed in {iteration} iterations")
                     return final_response
 

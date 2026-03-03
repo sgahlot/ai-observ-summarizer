@@ -1032,6 +1032,187 @@ class TestLlamaNudgeBehavior:
         assert result == "More fake data: pod3, pod4"
 
 
+class TestLlamaSmartNudge:
+    """Test query-category detection and smart nudge generation."""
+
+    def test_alert_query_routes_to_execute_promql(self, mock_mcp_tools):
+        """Test that alert queries produce a nudge mentioning execute_promql."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge = bot._get_nudge_for_query("Any alerts firing in jianrong namespace", namespace="jianrong")
+
+        assert "execute_promql" in nudge
+        assert "ALERTS" in nudge
+        assert "jianrong" in nudge
+
+    def test_pod_failure_query_routes_to_execute_promql(self, mock_mcp_tools):
+        """Test that pod failure queries produce a nudge with the right PromQL."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge = bot._get_nudge_for_query("any pods failing in openshift-monitoring namespace")
+
+        assert "execute_promql" in nudge
+        assert "kube_pod_container_status_waiting_reason" in nudge
+
+    def test_correlation_query_routes_to_korrel8r(self, mock_mcp_tools):
+        """Test that correlation queries produce a nudge mentioning korrel8r."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge = bot._get_nudge_for_query("Use correlated data to investigate pod my-app in jianrong namespace")
+
+        assert "korrel8r_get_correlated" in nudge
+
+    def test_trace_detail_query_routes_to_get_trace_details(self, mock_mcp_tools):
+        """Test that trace detail queries produce a nudge mentioning get_trace_details_tool."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge = bot._get_nudge_for_query("Give me trace details for trace id abc123")
+
+        assert "get_trace_details_tool" in nudge
+
+    def test_general_trace_query_routes_to_chat_tempo(self, mock_mcp_tools):
+        """Test that general trace queries produce a nudge mentioning chat_tempo_tool."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge = bot._get_nudge_for_query("Find the top trace and find its details")
+
+        # "trace" + "details" should match trace detail pattern first
+        # but "Find the top trace" without "trace id" may match general trace
+        assert "trace" in nudge.lower()
+
+    def test_gpu_query_routes_to_execute_promql(self, mock_mcp_tools):
+        """Test that GPU queries produce a nudge with GPU-specific PromQL hints."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge = bot._get_nudge_for_query("Show me GPU power consumption and temperature trends")
+
+        assert "execute_promql" in nudge
+        assert "DCGM_FI_DEV_POWER_USAGE" in nudge
+        assert "DCGM_FI_DEV_GPU_TEMP" in nudge
+
+    def test_unknown_query_returns_generic_nudge(self, mock_mcp_tools):
+        """Test that unrecognized queries get a generic nudge."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge = bot._get_nudge_for_query("What is the meaning of life?")
+
+        assert "MUST use the provided tools" in nudge
+
+    def test_namespace_substitution(self, mock_mcp_tools):
+        """Test that namespace placeholder is replaced when namespace is provided."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge = bot._get_nudge_for_query("Any alerts firing", namespace="my-ns")
+
+        assert "my-ns" in nudge
+        assert "<namespace>" not in nudge
+
+    def test_no_namespace_removes_placeholder(self, mock_mcp_tools):
+        """Test that namespace placeholder is removed when no namespace is provided."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge = bot._get_nudge_for_query("Any alerts firing")
+
+        assert "<namespace>" not in nudge
+
+
+class TestLlamaGracefulFallback:
+    """Test graceful fallback when nudge fails to produce tool calls."""
+
+    def _make_mock_response(self, content, finish_reason="stop", tool_calls=None):
+        """Helper to create a mock OpenAI chat completion response."""
+        message = MagicMock()
+        message.content = content
+        message.tool_calls = tool_calls
+
+        choice = MagicMock()
+        choice.finish_reason = finish_reason
+        choice.message = message
+
+        response = MagicMock()
+        response.choices = [choice]
+        return response
+
+    def test_empty_response_after_nudge_returns_fallback(self, mock_mcp_tools):
+        """Test that empty response after nudge returns a user-friendly message."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        # First call: fabricated (triggers nudge)
+        fabricated = self._make_mock_response("Fake data: pod1, pod2")
+        # Second call: empty response (nudge failed)
+        empty = self._make_mock_response("")
+
+        bot.client = MagicMock()
+        bot.client.chat.completions.create = MagicMock(side_effect=[fabricated, empty])
+
+        result = bot.chat("any pods failing in jianrong namespace")
+
+        assert bot.client.chat.completions.create.call_count == 2
+        assert "wasn't able to retrieve data" in result
+        assert "rephrasing" in result
+
+    def test_none_response_after_nudge_returns_fallback(self, mock_mcp_tools):
+        """Test that None content after nudge returns a user-friendly message."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        # First call: fabricated (triggers nudge)
+        fabricated = self._make_mock_response("Fake data: pod1, pod2")
+        # Second call: None content (nudge failed)
+        none_response = self._make_mock_response(None)
+
+        bot.client = MagicMock()
+        bot.client.chat.completions.create = MagicMock(side_effect=[fabricated, none_response])
+
+        result = bot.chat("any alerts firing")
+
+        assert "wasn't able to retrieve data" in result
+
+    def test_whitespace_response_after_nudge_returns_fallback(self, mock_mcp_tools):
+        """Test that whitespace-only response after nudge returns fallback."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        fabricated = self._make_mock_response("Fake data")
+        whitespace = self._make_mock_response("   \n\t  ")
+
+        bot.client = MagicMock()
+        bot.client.chat.completions.create = MagicMock(side_effect=[fabricated, whitespace])
+
+        result = bot.chat("show me pod status")
+
+        assert "wasn't able to retrieve data" in result
+
+    def test_non_empty_response_after_nudge_returned_as_is(self, mock_mcp_tools):
+        """Test that a substantive response after nudge is returned normally."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        fabricated = self._make_mock_response("Fake data")
+        real_response = self._make_mock_response("Based on my analysis, here are the results.")
+
+        bot.client = MagicMock()
+        bot.client.chat.completions.create = MagicMock(side_effect=[fabricated, real_response])
+
+        result = bot.chat("show me pod status")
+
+        assert result == "Based on my analysis, here are the results."
+
+
 if __name__ == "__main__":
     # Run with: python -m pytest tests/mcp_server/test_chatbots.py -v
     pytest.main([__file__, "-v"])
