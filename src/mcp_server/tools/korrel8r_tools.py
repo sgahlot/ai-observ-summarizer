@@ -39,6 +39,22 @@ def korrel8r_query_objects(query: str) -> List[Dict[str, Any]]:
         return err.to_mcp_response()
 
 
+def _extract_pod_from_query(query: str) -> tuple:
+    """Extract namespace and pod name from a k8s:Pod query string.
+
+    Returns (namespace, pod_name) if the query is a k8s:Pod query with both
+    fields, otherwise (None, None).
+    """
+    if not query.startswith("k8s:Pod:"):
+        return None, None
+    try:
+        selector_str = query[len("k8s:Pod:"):]
+        selector = json.loads(selector_str)
+        return selector.get("namespace"), selector.get("name")
+    except (json.JSONDecodeError, AttributeError):
+        return None, None
+
+
 def korrel8r_get_correlated(goals: List[str], query: str) -> List[Dict[str, Any]]:
     """Return correlated objects for a query by leveraging listGoals + query_objects.
 
@@ -68,7 +84,23 @@ def korrel8r_get_correlated(goals: List[str], query: str) -> List[Dict[str, Any]
             return err.to_mcp_response()
 
         aggregated = fetch_goal_query_objects(goals, query)
-        # aggregated is now a dict with 'logs' and 'traces' keys
+
+        # Retry with resolved pod names if no results found
+        has_results = any(v for v in aggregated.values() if v)
+        if not has_results:
+            ns, pod_name = _extract_pod_from_query(query)
+            if ns and pod_name:
+                pattern = pod_name if "*" in pod_name else pod_name + "*"
+                resolved_pods = _resolve_pod_names(ns, pattern)
+                for exact_pod in resolved_pods:
+                    selector = json.dumps({"namespace": ns, "name": exact_pod})
+                    retry_query = f"k8s:Pod:{selector}"
+                    logger.info("korrel8r_get_correlated: retrying with resolved pod: %s", exact_pod)
+                    retry_result = fetch_goal_query_objects(goals, retry_query)
+                    for key in retry_result:
+                        if retry_result[key]:
+                            aggregated.setdefault(key, []).extend(retry_result[key])
+
         return make_mcp_text_response(json.dumps(aggregated))
     except Exception as e:
         logger.error("korrel8r_list_goals failed: goals=%s, query=%s, error=%s", goals, query, e)

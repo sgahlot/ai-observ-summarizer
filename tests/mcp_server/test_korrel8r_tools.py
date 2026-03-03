@@ -228,3 +228,172 @@ class TestFetchLogsViaDirectQuery:
 
         assert len(result) == 1
         assert result[0]["level"] == "INFO"
+
+
+class TestExtractPodFromQuery:
+    """Tests for _extract_pod_from_query helper."""
+
+    def test_valid_pod_query(self):
+        """Valid k8s:Pod query returns (namespace, name)."""
+        query = 'k8s:Pod:{"namespace":"test-ns","name":"my-pod"}'
+        ns, name = korrel8r_tools._extract_pod_from_query(query)
+        assert ns == "test-ns"
+        assert name == "my-pod"
+
+    def test_non_pod_query(self):
+        """Non-Pod query returns (None, None)."""
+        query = 'alert:alert:{"alertname":"PodDisruptionBudgetAtLimit"}'
+        ns, name = korrel8r_tools._extract_pod_from_query(query)
+        assert ns is None
+        assert name is None
+
+    def test_malformed_json(self):
+        """Malformed JSON returns (None, None)."""
+        query = "k8s:Pod:{not valid json}"
+        ns, name = korrel8r_tools._extract_pod_from_query(query)
+        assert ns is None
+        assert name is None
+
+    def test_missing_name(self):
+        """Missing name field returns None for name."""
+        query = 'k8s:Pod:{"namespace":"test-ns"}'
+        ns, name = korrel8r_tools._extract_pod_from_query(query)
+        assert ns == "test-ns"
+        assert name is None
+
+    def test_missing_namespace(self):
+        """Missing namespace field returns None for namespace."""
+        query = 'k8s:Pod:{"name":"my-pod"}'
+        ns, name = korrel8r_tools._extract_pod_from_query(query)
+        assert ns is None
+        assert name == "my-pod"
+
+
+class TestKorrel8rGetCorrelatedPodResolution:
+    """Tests for pod name resolution retry in korrel8r_get_correlated."""
+
+    @patch("src.mcp_server.tools.korrel8r_tools.fetch_goal_query_objects")
+    def test_results_found_no_retry(self, mock_fetch):
+        """When initial query returns results, no resolution is attempted."""
+        mock_fetch.return_value = {"logs": [{"msg": "found"}], "traces": []}
+
+        result = korrel8r_tools.korrel8r_get_correlated(
+            ["log:application"], 'k8s:Pod:{"namespace":"ns","name":"partial-pod"}'
+        )
+
+        mock_fetch.assert_called_once()
+        data = json.loads(_text(result))
+        assert len(data["logs"]) == 1
+
+    @patch("src.mcp_server.tools.korrel8r_tools._resolve_pod_names")
+    @patch("src.mcp_server.tools.korrel8r_tools.fetch_goal_query_objects")
+    def test_empty_results_triggers_resolution(self, mock_fetch, mock_resolve):
+        """When initial query returns empty and pod name is partial, resolves and retries."""
+        mock_fetch.side_effect = [
+            {"logs": [], "traces": []},  # initial call returns empty
+            {"logs": [{"msg": "from-resolved"}], "traces": []},  # retry call
+        ]
+        mock_resolve.return_value = ["partial-pod-abc123"]
+
+        result = korrel8r_tools.korrel8r_get_correlated(
+            ["log:application"], 'k8s:Pod:{"namespace":"ns","name":"partial-pod"}'
+        )
+
+        mock_resolve.assert_called_once_with("ns", "partial-pod*")
+        assert mock_fetch.call_count == 2
+        data = json.loads(_text(result))
+        assert len(data["logs"]) == 1
+        assert data["logs"][0]["msg"] == "from-resolved"
+
+    @patch("src.mcp_server.tools.korrel8r_tools._resolve_pod_names")
+    @patch("src.mcp_server.tools.korrel8r_tools.fetch_goal_query_objects")
+    def test_resolution_finds_no_pods(self, mock_fetch, mock_resolve):
+        """When resolution finds no pods, returns empty gracefully."""
+        mock_fetch.return_value = {"logs": [], "traces": []}
+        mock_resolve.return_value = []
+
+        result = korrel8r_tools.korrel8r_get_correlated(
+            ["log:application"], 'k8s:Pod:{"namespace":"ns","name":"no-match"}'
+        )
+
+        mock_resolve.assert_called_once_with("ns", "no-match*")
+        mock_fetch.assert_called_once()  # only initial call, no retry
+        data = json.loads(_text(result))
+        assert data["logs"] == []
+
+    @patch("src.mcp_server.tools.korrel8r_tools._resolve_pod_names")
+    @patch("src.mcp_server.tools.korrel8r_tools.fetch_goal_query_objects")
+    def test_non_pod_query_no_resolution(self, mock_fetch, mock_resolve):
+        """Non-Pod queries don't trigger resolution."""
+        mock_fetch.return_value = {"logs": [], "traces": []}
+
+        korrel8r_tools.korrel8r_get_correlated(
+            ["log:application"], 'alert:alert:{"alertname":"TestAlert"}'
+        )
+
+        mock_resolve.assert_not_called()
+
+    @patch("src.mcp_server.tools.korrel8r_tools._resolve_pod_names")
+    @patch("src.mcp_server.tools.korrel8r_tools.fetch_goal_query_objects")
+    def test_glob_pattern_preserved(self, mock_fetch, mock_resolve):
+        """Pod name with glob pattern is passed through without adding another *."""
+        mock_fetch.return_value = {"logs": [], "traces": []}
+        mock_resolve.return_value = []
+
+        korrel8r_tools.korrel8r_get_correlated(
+            ["log:application"], 'k8s:Pod:{"namespace":"ns","name":"my-pod*"}'
+        )
+
+        mock_resolve.assert_called_once_with("ns", "my-pod*")
+
+
+class TestResolvePodNames:
+    """Tests for _resolve_pod_names helper."""
+
+    @patch("src.mcp_server.tools.korrel8r_tools.execute_promql_query")
+    def test_successful_resolution(self, mock_promql):
+        """Successful Prometheus query returns list of pod names."""
+        mock_promql.return_value = {
+            "status": "success",
+            "results": [
+                {"metric": {"pod": "my-app-abc123", "namespace": "ns"}},
+                {"metric": {"pod": "my-app-def456", "namespace": "ns"}},
+            ],
+        }
+
+        result = korrel8r_tools._resolve_pod_names("ns", "my-app*")
+
+        assert result == ["my-app-abc123", "my-app-def456"]
+
+    @patch("src.mcp_server.tools.korrel8r_tools.execute_promql_query")
+    def test_prometheus_failure_returns_empty(self, mock_promql):
+        """Prometheus failure returns empty list."""
+        mock_promql.side_effect = RuntimeError("connection refused")
+
+        result = korrel8r_tools._resolve_pod_names("ns", "my-app*")
+
+        assert result == []
+
+    @patch("src.mcp_server.tools.korrel8r_tools.execute_promql_query")
+    def test_deduplication(self, mock_promql):
+        """Duplicate pod names are deduplicated."""
+        mock_promql.return_value = {
+            "status": "success",
+            "results": [
+                {"metric": {"pod": "my-app-abc123", "namespace": "ns"}},
+                {"metric": {"pod": "my-app-abc123", "namespace": "ns"}},
+            ],
+        }
+
+        result = korrel8r_tools._resolve_pod_names("ns", "my-app*")
+
+        assert result == ["my-app-abc123"]
+
+    @patch("src.mcp_server.tools.korrel8r_tools.execute_promql_query")
+    def test_non_success_status_returns_empty(self, mock_promql):
+        """Non-success status returns empty list."""
+        mock_promql.return_value = {"status": "error", "results": []}
+
+        result = korrel8r_tools._resolve_pod_names("ns", "my-app*")
+
+        assert result == []
