@@ -1213,6 +1213,104 @@ class TestLlamaGracefulFallback:
         assert result == "Based on my analysis, here are the results."
 
 
+class TestToolLoopDetection:
+    """Test the consecutive same-tool loop detection in BaseChatBot."""
+
+    def test_no_loop_different_tools(self, mock_mcp_tools):
+        """Test that different tools don't trigger loop detection."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        tracker = {"name": None, "count": 0}
+
+        assert bot._check_tool_loop("execute_promql", tracker) is False
+        assert bot._check_tool_loop("get_label_values", tracker) is False
+        assert bot._check_tool_loop("execute_promql", tracker) is False
+        assert tracker["count"] == 1  # Reset on tool change
+
+    def test_same_tool_below_threshold(self, mock_mcp_tools):
+        """Test that same tool called < 5 times doesn't trigger."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        tracker = {"name": None, "count": 0}
+
+        for i in range(4):
+            assert bot._check_tool_loop("execute_promql", tracker) is False
+        assert tracker["count"] == 4
+
+    def test_same_tool_at_threshold_triggers(self, mock_mcp_tools):
+        """Test that same tool called 5 times triggers loop detection."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        tracker = {"name": None, "count": 0}
+
+        for i in range(4):
+            assert bot._check_tool_loop("query_tempo_tool", tracker) is False
+        # 5th call triggers
+        assert bot._check_tool_loop("query_tempo_tool", tracker) is True
+
+    def test_counter_resets_on_different_tool(self, mock_mcp_tools):
+        """Test that the counter resets when a different tool is called."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        tracker = {"name": None, "count": 0}
+
+        # Call same tool 4 times (just below threshold)
+        for i in range(4):
+            bot._check_tool_loop("query_tempo_tool", tracker)
+        assert tracker["count"] == 4
+
+        # Different tool resets counter
+        bot._check_tool_loop("execute_promql", tracker)
+        assert tracker["count"] == 1
+        assert tracker["name"] == "execute_promql"
+
+    def test_tool_loop_breaks_chat_loop(self, mock_mcp_tools):
+        """Test that tool loop detection breaks the chat iteration loop."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+        # Create 6 responses that all call the same tool
+        def make_tool_response():
+            tc = MagicMock()
+            tc.id = "call_1"
+            tc.function.name = "query_tempo_tool"
+            tc.function.arguments = json.dumps({"query": "traces"})
+
+            message = MagicMock()
+            message.content = None
+            message.tool_calls = [tc]
+
+            choice = MagicMock()
+            choice.finish_reason = "tool_calls"
+            choice.message = message
+
+            response = MagicMock()
+            response.choices = [choice]
+            return response
+
+        responses = [make_tool_response() for _ in range(6)]
+        bot.client = MagicMock()
+        bot.client.chat.completions.create = MagicMock(side_effect=responses)
+
+        result = bot.chat("find traces")
+
+        # Should break after 5 consecutive same-tool calls, not use all 6
+        assert bot.client.chat.completions.create.call_count == 5
+        assert "got stuck in a loop" in result
+
+    def test_threshold_constant(self, mock_mcp_tools):
+        """Test that the threshold constant is accessible and correct."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        assert bot._MAX_CONSECUTIVE_SAME_TOOL == 5
+
+
 if __name__ == "__main__":
     # Run with: python -m pytest tests/mcp_server/test_chatbots.py -v
     pytest.main([__file__, "-v"])

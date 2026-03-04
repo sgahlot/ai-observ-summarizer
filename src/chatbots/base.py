@@ -129,6 +129,37 @@ class BaseChatBot(ABC):
             return self.model_name.split("/", 1)[1]
         return self.model_name
 
+    # Maximum number of consecutive calls to the same tool before breaking
+    # the loop. Legitimate multi-call patterns (e.g., execute_promql for
+    # power then temperature) use at most 3 consecutive same-tool calls.
+    _MAX_CONSECUTIVE_SAME_TOOL = 5
+
+    def _check_tool_loop(self, tool_name: str, consecutive_tool_tracker: dict) -> bool:
+        """Check if the same tool has been called too many times consecutively.
+
+        Args:
+            tool_name: The tool being called this iteration.
+            consecutive_tool_tracker: Dict with 'name' and 'count' keys,
+                mutated in place to track state across calls.
+
+        Returns:
+            True if the tool loop threshold has been reached (caller should break).
+        """
+        if tool_name == consecutive_tool_tracker.get("name"):
+            consecutive_tool_tracker["count"] += 1
+        else:
+            consecutive_tool_tracker["name"] = tool_name
+            consecutive_tool_tracker["count"] = 1
+
+        if consecutive_tool_tracker["count"] >= self._MAX_CONSECUTIVE_SAME_TOOL:
+            logger.warning(
+                "Tool loop detected: %s called %d times consecutively. "
+                "Breaking loop.",
+                tool_name, consecutive_tool_tracker["count"],
+            )
+            return True
+        return False
+
     def _get_tool_allowlist(self) -> Optional[set]:
         """Return a set of tool names this model should receive, or None for all tools.
 

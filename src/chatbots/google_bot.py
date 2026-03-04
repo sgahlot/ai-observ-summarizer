@@ -256,6 +256,7 @@ class GoogleChatBot(BaseChatBot):
             max_iterations = 10  # Reduced from 30 to prevent long waits
             iteration = 0
             function_responses = []  # Initialize outside loop
+            consecutive_tool_tracker = {"name": None, "count": 0}
 
             while iteration < max_iterations:
                 iteration += 1
@@ -310,10 +311,16 @@ class GoogleChatBot(BaseChatBot):
 
                     # Build function responses for next iteration
                     function_responses = []  # Clear previous responses
+                    tool_loop_detected = False
                     for part in parts:
                         if hasattr(part, 'function_call') and part.function_call:
                             func_call = part.function_call
                             tool_name = func_call.name
+
+                            if self._check_tool_loop(tool_name, consecutive_tool_tracker):
+                                tool_loop_detected = True
+                                break
+
                             # Convert proto args to native Python types (dict with proto values -> dict with native values)
                             tool_args = self._convert_proto_to_native(dict(func_call.args))
 
@@ -332,6 +339,12 @@ class GoogleChatBot(BaseChatBot):
                                     )
                                 )
                             )
+
+                    if tool_loop_detected:
+                        return (
+                            "I got stuck in a loop calling the same tool repeatedly. "
+                            "Please try rephrasing your question or being more specific."
+                        )
 
                     logger.info(f"Prepared {len(function_responses)} function response(s) for next iteration")
                     # Continue loop to send function responses

@@ -288,6 +288,7 @@ class LlamaChatBot(BaseChatBot):
             iteration = 0
             nudge_retried = False
             tool_choice = "auto"
+            consecutive_tool_tracker = {"name": None, "count": 0}
 
             while iteration < max_iterations:
                 iteration += 1
@@ -340,6 +341,7 @@ class LlamaChatBot(BaseChatBot):
                     logger.info(f"🤖 LlamaStack requesting {len(message.tool_calls)} tool(s)")
 
                     tool_results = []
+                    tool_loop_detected = False
                     for tool_call in message.tool_calls:
                         tool_name = tool_call.function.name
                         tool_args_str = tool_call.function.arguments
@@ -350,6 +352,10 @@ class LlamaChatBot(BaseChatBot):
                             tool_args = json.loads(tool_args_str)
                         except json.JSONDecodeError:
                             tool_args = {}
+
+                        if self._check_tool_loop(tool_name, consecutive_tool_tracker):
+                            tool_loop_detected = True
+                            break
 
                         if progress_callback:
                             progress_callback(f"🔧 Using tool: {tool_name}")
@@ -362,6 +368,12 @@ class LlamaChatBot(BaseChatBot):
                             "tool_call_id": tool_id,
                             "content": tool_result
                         })
+
+                    if tool_loop_detected:
+                        return (
+                            "I got stuck in a loop calling the same tool repeatedly. "
+                            "Please try rephrasing your question or being more specific."
+                        )
 
                     # Add tool results to conversation
                     messages.extend(tool_results)
