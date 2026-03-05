@@ -17,7 +17,7 @@ def korrel8r_query_objects(query: str) -> List[Dict[str, Any]]:
 
     Example query strings (see docs [korrel8r#_query_8](https://korrel8r.github.io/korrel8r/#_query_8)):
       - alert:alert:{"alertname":"PodDisruptionBudgetAtLimit"}
-      - k8s:Pod:{"namespace", "llm-serving", "name":"vllm-inference-*"}
+      - k8s:Pod:{"namespace":"llm-serving", "name":"vllm-inference-*"}
       - loki:log:{"kubernetes.namespace_name":"llm-serving","kubernetes.pod_name":"p-abc"}
       - trace:span:{".k8s.namespace.name":"llm-serving"}
     """
@@ -59,9 +59,13 @@ def korrel8r_get_correlated(goals: List[str], query: str) -> List[Dict[str, Any]
     """Return correlated objects for a query by leveraging listGoals + query_objects.
 
     Args:
-        goals: Korrel8r goal classes to correlate. Use ['trace:span','log:application','log:infrastructure'] unless users ask for specific domain.
-        query: A single Korrel8r domain query string (same format as query_objects),
-               e.g., "alert:alert:{\"alertname\":\"PodDisruptionBudgetAtLimit\"}"
+        goals: Korrel8r goal classes to correlate.
+            Valid goals: 'alert:alert', 'log:application', 'log:infrastructure', 'trace:span', 'metric:metric'.
+            Default: ['alert:alert','trace:span','log:application','log:infrastructure'].
+        query: A Korrel8r domain query string. Use the domain matching the starting resource:
+            - Pod investigation: "k8s:Pod:{\"namespace\":\"NS\",\"name\":\"POD_NAME\"}"
+            - Alert investigation: "alert:alert:{\"alertname\":\"ALERT_NAME\"}"
+            - Namespace-wide: "k8s:Namespace:{\"name\":\"NS\"}"
     """
     try:
         if not isinstance(goals, list) or not all(isinstance(g, str) for g in goals):
