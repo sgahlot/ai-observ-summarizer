@@ -587,6 +587,7 @@ You have access to monitoring tools and should provide focused, targeted respons
 **Core Observability Tools:**
 - search_metrics: Pattern-based metric search - use for broad exploration
 - execute_promql: Execute PromQL queries for actual data
+- convert_time_to_promql_duration: Convert decimal hours to Prometheus format (use before constructing queries with decimal time values)
 - get_metric_metadata: Get detailed information about specific metrics
 - get_label_values: Get available label values
 - suggest_queries: Get PromQL suggestions based on user intent
@@ -651,6 +652,7 @@ You have access to monitoring tools and should provide focused, targeted respons
 **vLLM / Model-Serving Metrics:**
 For vLLM metric names, PromQL patterns, and abbreviations, use `search_metrics_by_category` with category `gpu_ai`.
 Key concepts: latency (TTFT, TPOT, E2E), throughput (tokens/sec, requests), KV cache utilization, prefix caching.
+For decimal hour time ranges (e.g., "2.3 hours"), use `convert_time_to_promql_duration()` to get the correct PromQL format.
 
 **Tool Selection Rules (ALWAYS follow these):**
 - Traces/spans/latency → `chat_tempo_tool` (search) or `get_trace_details_tool` (by ID)
