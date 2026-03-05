@@ -199,12 +199,18 @@ TEMPO_DATASOURCE_UID: str = os.getenv("TEMPO_DATASOURCE_UID", "")
 LOKI_DATASOURCE_UID: str = os.getenv("LOKI_DATASOURCE_UID", "")
 
 
-# Tools that accept a namespace parameter for scoping Prometheus/log queries
-# Used by chatbots to automatically inject namespace into tool arguments
+# Tools that accept a namespace parameter for scoping queries.
+# Used by chatbots to automatically inject namespace into tool arguments.
+#
+# execute_promql is handled separately — namespace is injected into the PromQL
+# query string itself (not as a function argument).
+#
+# Metric discovery/catalog tools (search_metrics, search_metrics_by_category,
+# get_label_values, get_metric_metadata, suggest_queries, explain_results,
+# find_best_metric_with_metadata) are intentionally excluded — they search
+# the metrics catalog and do not accept a namespace parameter.
 NAMESPACE_AWARE_TOOLS = frozenset({
-    'execute_promql', 'search_metrics', 'get_metric_metadata',
-    'get_label_values', 'suggest_queries', 'explain_results',
-    'search_metrics_by_category', 'find_best_metric_with_metadata',
+    'execute_promql',
     'fetch_openshift_metrics_data', 'analyze_openshift', 'chat_openshift',
     'get_correlated_logs',
 })

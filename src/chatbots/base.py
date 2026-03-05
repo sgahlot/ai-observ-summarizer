@@ -51,7 +51,7 @@ _PROMQL_SKIP = frozenset({
     'service', 'deployment', 'daemonset', 'statefulset', 'replicaset',
     'phase', 'reason', 'condition', 'type', 'resource', 'unit',
     'device', 'interface', 'mode', 'cpu', 'endpoint', 'alertname',
-    'alertstate', 'severity', 'le', 'model_name',
+    'alertstate', 'severity', 'le', 'model_name', 'model',
     # Numeric literals used in comparisons (won't match our regex, but safe)
     'inf', 'nan',
 })
@@ -652,16 +652,20 @@ You have access to monitoring tools and should provide focused, targeted respons
 For vLLM metric names, PromQL patterns, and abbreviations, use `search_metrics_by_category` with category `gpu_ai`.
 Key concepts: latency (TTFT, TPOT, E2E), throughput (tokens/sec, requests), KV cache utilization, prefix caching.
 
-**Your Workflow (FOCUSED & DIRECT):**
-1. 🎯 **STOP AND THINK**: What exactly is the user asking for?
-2. 🔍 **CHOOSE TOOL TYPE**:
-   - Trace/span/latency/performance questions → use chat_tempo_tool
-   - Metrics questions → use search_metrics + execute_promql (automatically benefits from smart catalog)
-   - Category exploration → use get_metrics_categories or search_metrics_by_category
-   - Alert investigations → use execute_promql (ALERTS) or korrel8r tools
-   - Log questions (errors, pod output, "what happened") → use get_correlated_logs
-3. 📊 **EXECUTE**: Use the appropriate tool for their question
-4. 📋 **ANSWER**: Provide the specific answer to their question - DONE!
+**Tool Selection Rules (ALWAYS follow these):**
+- Traces/spans/latency → `chat_tempo_tool` (search) or `get_trace_details_tool` (by ID)
+- Metrics/pods/GPU/CPU/memory → first `search_metrics` to discover exact metric names, then `execute_promql`
+- Alerts → `execute_promql` with `ALERTS{{alertstate="firing"}}` metric
+- Logs/errors/pod output → `get_correlated_logs` with namespace and optional pod
+- Correlation/investigation/korrel8r → `korrel8r_get_correlated` with goals and k8s query
+- Pod health/failures → `execute_promql` with `kube_pod_container_status_waiting_reason` and `kube_pod_container_status_terminated_reason`
+- When the user explicitly names a tool (e.g., "use korrel8r"), ALWAYS use that tool
+
+**Your Workflow:**
+1. Determine what the user is asking for
+2. Select the correct tool using the rules above
+3. Execute the tool and collect results
+4. Provide the specific answer - DONE!
 
 **CRITICAL: Interpreting Metrics Correctly**
 - **Boolean/Status Metrics**: These use VALUE to indicate state where 1 means TRUE and 0 means FALSE
