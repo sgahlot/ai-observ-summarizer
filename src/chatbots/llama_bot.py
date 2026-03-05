@@ -109,7 +109,10 @@ class LlamaChatBot(BaseChatBot):
 - Traces/spans/latency → chat_tempo_tool, query_tempo_tool, get_trace_details_tool
 - Logs/errors → get_correlated_logs
 - Alert investigation → execute_promql with ALERTS metric, then korrel8r_get_correlated
-- Correlation → korrel8r_get_correlated, korrel8r_query_objects
+- Correlation/investigation/korrel8r → korrel8r_get_correlated with:
+  goals=["alert:alert","trace:span","log:application","log:infrastructure"]
+  query="k8s:Pod:{{\\"namespace\\":\\"NS\\",\\"name\\":\\"POD_NAME\\"}}"
+  For namespace-wide: query="k8s:Namespace:{{\\"name\\":\\"NS\\"}}"
 
 **PromQL Patterns:**
 - CPU: sum(rate(container_cpu_usage_seconds_total[5m])) by (pod, namespace)
@@ -131,8 +134,16 @@ class LlamaChatBot(BaseChatBot):
     # Query category patterns → specific tool + usage hint for the nudge message.
     # Order matters: first match wins. More specific patterns come first.
     _QUERY_CATEGORIES = [
-        # Alerts
-        (re.compile(r'alert', re.IGNORECASE),
+        # Correlation / korrel8r — must precede "alert" because pod names
+        # like "alert-example-5d9cbf68fd-62zsb" would otherwise match the
+        # alert pattern and route to execute_promql instead.
+        (re.compile(r'correlat|korrel8r|investigate', re.IGNORECASE),
+         'korrel8r_get_correlated',
+         'Call korrel8r_get_correlated with goals=["trace:span","log:application","log:infrastructure"] '
+         'and query="k8s:Pod:{\\"namespace\\":\\"<namespace>\\",\\"name\\":\\"<pod>\\"}"'),
+        # Alerts — only match "alert" as a standalone concept (firing alerts),
+        # not as part of pod/deployment names like "alert-example".
+        (re.compile(r'\balerts?\b(?!-)', re.IGNORECASE),
          'execute_promql',
          'Call execute_promql with query: ALERTS{namespace="<namespace>"} or ALERTS{} for cluster-wide.'),
         # Pod health / failures
@@ -141,11 +152,6 @@ class LlamaChatBot(BaseChatBot):
          'Call execute_promql with query: '
          'kube_pod_container_status_waiting_reason{namespace="<namespace>", '
          'reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull"} == 1'),
-        # Correlation / korrel8r
-        (re.compile(r'correlat|korrel8r|investigate', re.IGNORECASE),
-         'korrel8r_get_correlated',
-         'Call korrel8r_get_correlated with goals=["trace:span","log:application","log:infrastructure"] '
-         'and query="k8s:Pod:{\\"namespace\\":\\"<namespace>\\",\\"name\\":\\"<pod>\\"}"'),
         # Trace details (specific trace ID)
         (re.compile(r'trace.*(detail|id|info)|detail.*trace', re.IGNORECASE),
          'get_trace_details_tool',
@@ -176,11 +182,11 @@ class LlamaChatBot(BaseChatBot):
          'Call execute_promql with the appropriate PromQL query.'),
     ]
 
-    def _get_nudge_for_query(self, user_question: str, namespace: Optional[str] = None) -> str:
+    def _get_nudge_for_query(self, user_question: str, namespace: Optional[str] = None) -> tuple:
         """Build a category-specific nudge message based on the user's query.
 
-        Returns a nudge string with the specific tool name and usage hint,
-        or a generic nudge if no category matches.
+        Returns (nudge_text, tool_name) where tool_name is the matched tool
+        or None if no category matched.
         """
         for pattern, tool_name, hint in self._QUERY_CATEGORIES:
             if pattern.search(user_question):
@@ -191,16 +197,121 @@ class LlamaChatBot(BaseChatBot):
                 else:
                     resolved_hint = resolved_hint.replace('<namespace>', '')
                 logger.info("Smart nudge matched category: tool=%s", tool_name)
-                return (
+                nudge_text = (
                     f"You MUST call the `{tool_name}` tool now to answer this question. "
                     f"Do NOT fabricate data. {resolved_hint}"
                 )
+                return nudge_text, tool_name
 
         # Generic fallback nudge
         return (
             "You MUST use the provided tools to answer this question. "
-            "Do NOT fabricate data. Call the appropriate tool now."
+            "Do NOT fabricate data. Call the appropriate tool now.",
+            None
         )
+
+    # Patterns to extract namespace and pod from user queries for direct tool execution
+    _NS_RE = re.compile(
+        r'(?:in|namespace|ns)[:\s]+([a-z0-9][-a-z0-9]*)',
+        re.IGNORECASE
+    )
+    _POD_RE = re.compile(
+        r'pod\s+([a-z0-9][-a-z0-9]*)',
+        re.IGNORECASE
+    )
+
+    def _try_direct_tool_call(
+        self,
+        user_question: str,
+        namespace: Optional[str],
+        openai_tools: List[Dict],
+        messages: List[Dict],
+        progress_callback: Optional[Callable] = None,
+    ) -> Optional[str]:
+        """Last-resort: directly execute the matched tool and ask the model to summarise.
+
+        When the nudge fails (model returns empty), we know which tool to call
+        from ``_get_nudge_for_query``.  For korrel8r queries we can construct
+        the arguments from the user question and execute the tool ourselves,
+        then feed the result back so the model can produce a human-readable
+        summary.
+
+        Returns the model's summary string, or None if direct execution is
+        not applicable.
+        """
+        _, matched_tool = self._get_nudge_for_query(user_question, namespace)
+        if matched_tool != 'korrel8r_get_correlated':
+            return None  # only korrel8r supported for now
+
+        # Extract namespace (prefer injected, fall back to regex)
+        ns = namespace
+        if not ns:
+            m = self._NS_RE.search(user_question)
+            ns = m.group(1) if m else None
+        if not ns:
+            return None
+
+        # Extract pod name
+        m = self._POD_RE.search(user_question)
+        pod_name = m.group(1) if m else None
+
+        # Build korrel8r args
+        goals = ["alert:alert", "trace:span", "log:application", "log:infrastructure"]
+        if pod_name:
+            query = f'k8s:Pod:{json.dumps({"namespace": ns, "name": pod_name})}'
+        else:
+            query = f'k8s:Namespace:{json.dumps({"name": ns})}'
+
+        tool_args = {"goals": goals, "query": query}
+        logger.info(
+            "Direct tool execution fallback: tool=%s, args=%s",
+            matched_tool, tool_args
+        )
+
+        if progress_callback:
+            progress_callback(f"🔧 Using tool: {matched_tool}")
+
+        tool_result = self._get_tool_result(matched_tool, tool_args, namespace=namespace)
+
+        # Feed the result back to the model for summarisation
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "direct_call_1",
+                "type": "function",
+                "function": {
+                    "name": matched_tool,
+                    "arguments": json.dumps(tool_args),
+                }
+            }]
+        })
+        messages.append({
+            "role": "tool",
+            "tool_call_id": "direct_call_1",
+            "content": tool_result,
+        })
+
+        try:
+            if progress_callback:
+                progress_callback("🤖 Summarising results...")
+
+            summary_response = self.client.chat.completions.create(
+                model=self._extract_model_name(),
+                messages=messages,
+                tools=openai_tools,
+                tool_choice="none",
+                temperature=0,
+            )
+            summary = summary_response.choices[0].message.content or ''
+            if summary.strip():
+                logger.info("Direct tool execution produced a summary (%d chars)", len(summary))
+                return summary
+        except Exception as e:
+            logger.warning("Summary call after direct tool execution failed: %s", e)
+
+        # If summary is empty, return the raw tool result
+        return f"Korrel8r correlation results for {ns}:\n\n{tool_result}"
 
     def _detect_text_tool_calls(self, text: str, tool_names: List[str]) -> bool:
         """Detect if the model described a tool call in text instead of using the function calling API.
@@ -313,6 +424,12 @@ class LlamaChatBot(BaseChatBot):
                 finish_reason = choice.finish_reason
                 message = choice.message
 
+                logger.debug(
+                    "LlamaStack iteration %d: finish_reason=%s, has_tool_calls=%s, content_len=%d",
+                    iteration, finish_reason, bool(message.tool_calls),
+                    len(message.content or '')
+                )
+
                 # Convert message to dict format for conversation history
                 message_dict = {
                     "role": "assistant",
@@ -336,8 +453,11 @@ class LlamaChatBot(BaseChatBot):
                 # Add assistant's response to conversation
                 messages.append(message_dict)
 
-                # If model wants to use tools, execute them
-                if finish_reason == 'tool_calls' and message.tool_calls:
+                # If model wants to use tools, execute them.
+                # Check tool_calls presence regardless of finish_reason —
+                # LlamaStack may return finish_reason='stop' even with tool calls
+                # when tool_choice forces a specific function.
+                if message.tool_calls:
                     logger.info(f"🤖 LlamaStack requesting {len(message.tool_calls)} tool(s)")
 
                     tool_results = []
@@ -391,7 +511,7 @@ class LlamaChatBot(BaseChatBot):
                         # Guard 1: Fabrication — model returned stop on iteration 1
                         # without ever calling tools (likely fabricated response)
                         if iteration == 1:
-                            nudge_text = self._get_nudge_for_query(user_question, namespace)
+                            nudge_text, matched_tool = self._get_nudge_for_query(user_question, namespace)
                             logger.warning(
                                 "Llama returned finish_reason=stop on iteration 1 "
                                 "without calling any tools — possible fabrication. "
@@ -408,7 +528,7 @@ class LlamaChatBot(BaseChatBot):
                         # Guard 2: Text tool calls — model wrote tool call as text
                         # instead of using the function calling API
                         if self._detect_text_tool_calls(final_response, tool_names):
-                            nudge_text = self._get_nudge_for_query(user_question, namespace)
+                            nudge_text, matched_tool = self._get_nudge_for_query(user_question, namespace)
                             logger.warning(
                                 "Llama output a tool call as text instead of using "
                                 "the function calling API. Nudging model to retry."
@@ -426,8 +546,15 @@ class LlamaChatBot(BaseChatBot):
                             })
                             continue
 
-                    # Nudge was already attempted — return response or graceful fallback
+                    # Nudge was already attempted — try direct tool execution
+                    # as last resort, then fall back to graceful message.
                     if not final_response or not final_response.strip():
+                        direct_result = self._try_direct_tool_call(
+                            user_question, namespace, openai_tools, messages, progress_callback
+                        )
+                        if direct_result:
+                            return direct_result
+
                         logger.warning(
                             "Llama returned empty response after nudge. "
                             "Returning graceful fallback."

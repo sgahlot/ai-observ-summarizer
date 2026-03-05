@@ -1040,8 +1040,9 @@ class TestLlamaSmartNudge:
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        nudge = bot._get_nudge_for_query("Any alerts firing in jianrong namespace", namespace="jianrong")
+        nudge, tool = bot._get_nudge_for_query("Any alerts firing in jianrong namespace", namespace="jianrong")
 
+        assert tool == "execute_promql"
         assert "execute_promql" in nudge
         assert "ALERTS" in nudge
         assert "jianrong" in nudge
@@ -1051,8 +1052,9 @@ class TestLlamaSmartNudge:
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        nudge = bot._get_nudge_for_query("any pods failing in openshift-monitoring namespace")
+        nudge, tool = bot._get_nudge_for_query("any pods failing in openshift-monitoring namespace")
 
+        assert tool == "execute_promql"
         assert "execute_promql" in nudge
         assert "kube_pod_container_status_waiting_reason" in nudge
 
@@ -1061,8 +1063,21 @@ class TestLlamaSmartNudge:
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        nudge = bot._get_nudge_for_query("Use correlated data to investigate pod my-app in jianrong namespace")
+        nudge, tool = bot._get_nudge_for_query("Use correlated data to investigate pod my-app in jianrong namespace")
 
+        assert tool == "korrel8r_get_correlated"
+        assert "korrel8r_get_correlated" in nudge
+
+    def test_korrel8r_beats_alert_in_pod_name(self, mock_mcp_tools):
+        """Test that korrel8r/investigate matches before alert pattern for pod names like alert-example."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        nudge, tool = bot._get_nudge_for_query(
+            "Use korrel8r to investigate pod alert-example-5d9cbf68fd-62zsb in jianrong ns"
+        )
+
+        assert tool == "korrel8r_get_correlated"
         assert "korrel8r_get_correlated" in nudge
 
     def test_trace_detail_query_routes_to_get_trace_details(self, mock_mcp_tools):
@@ -1070,8 +1085,9 @@ class TestLlamaSmartNudge:
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        nudge = bot._get_nudge_for_query("Give me trace details for trace id abc123")
+        nudge, tool = bot._get_nudge_for_query("Give me trace details for trace id abc123")
 
+        assert tool == "get_trace_details_tool"
         assert "get_trace_details_tool" in nudge
 
     def test_general_trace_query_routes_to_chat_tempo(self, mock_mcp_tools):
@@ -1079,7 +1095,7 @@ class TestLlamaSmartNudge:
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        nudge = bot._get_nudge_for_query("Find the top trace and find its details")
+        nudge, tool = bot._get_nudge_for_query("Find the top trace and find its details")
 
         # "trace" + "details" should match trace detail pattern first
         # but "Find the top trace" without "trace id" may match general trace
@@ -1090,8 +1106,9 @@ class TestLlamaSmartNudge:
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        nudge = bot._get_nudge_for_query("Show me GPU power consumption and temperature trends")
+        nudge, tool = bot._get_nudge_for_query("Show me GPU power consumption and temperature trends")
 
+        assert tool == "execute_promql"
         assert "execute_promql" in nudge
         assert "DCGM_FI_DEV_POWER_USAGE" in nudge
         assert "DCGM_FI_DEV_GPU_TEMP" in nudge
@@ -1101,8 +1118,9 @@ class TestLlamaSmartNudge:
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        nudge = bot._get_nudge_for_query("What is the meaning of life?")
+        nudge, tool = bot._get_nudge_for_query("What is the meaning of life?")
 
+        assert tool is None
         assert "MUST use the provided tools" in nudge
 
     def test_namespace_substitution(self, mock_mcp_tools):
@@ -1110,7 +1128,7 @@ class TestLlamaSmartNudge:
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        nudge = bot._get_nudge_for_query("Any alerts firing", namespace="my-ns")
+        nudge, tool = bot._get_nudge_for_query("Any alerts firing", namespace="my-ns")
 
         assert "my-ns" in nudge
         assert "<namespace>" not in nudge
@@ -1120,7 +1138,7 @@ class TestLlamaSmartNudge:
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
-        nudge = bot._get_nudge_for_query("Any alerts firing")
+        nudge, tool = bot._get_nudge_for_query("Any alerts firing")
 
         assert "<namespace>" not in nudge
 
