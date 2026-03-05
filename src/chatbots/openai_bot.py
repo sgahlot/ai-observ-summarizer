@@ -54,13 +54,20 @@ class OpenAIChatBot(BaseChatBot):
 
 **GPT-SPECIFIC INSTRUCTIONS:**
 
-**Your Strengths:**
-- Strong general-purpose performance
-- Reliable tool calling with function API
-- Good balance of speed and accuracy
+**MANDATORY — Metric Discovery Before Queries:**
+You MUST call `search_metrics` or `search_metrics_by_category` BEFORE calling
+`execute_promql`. NEVER guess metric names — they are non-obvious
+(e.g., `vllm:gpu_cache_usage_perc` not `vllm:kv_cache_usage_percentage`,
+`DCGM_FI_DEV_GPU_TEMP` not `DCGM_FI_DEV_TEMP`).
+
+Correct flow:
+1. `search_metrics("GPU temperature")` → discover `DCGM_FI_DEV_GPU_TEMP`
+2. `execute_promql("avg(DCGM_FI_DEV_GPU_TEMP) by (pod)")` → get data
+
+Wrong flow:
+1. `execute_promql("avg(DCGM_FI_DEV_TEMP)")` → no data (wrong name)
 
 **Best Practices:**
-- Use clear, structured queries with proper grouping
 - Provide detailed breakdowns by pod and namespace
 - Balance comprehensiveness with conciseness"""
 
