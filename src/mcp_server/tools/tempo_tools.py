@@ -21,6 +21,42 @@ from core.tempo_service import TempoQueryService
 logger = get_python_logger()
 
 
+# Pattern for relative time strings like "now-1h", "now-30m", "now-2d", "now"
+_RELATIVE_TIME_RE = re.compile(
+    r'^now(?:-(\d+)([smhdw]))?$', re.IGNORECASE
+)
+
+_RELATIVE_UNITS = {
+    's': 'seconds',
+    'm': 'minutes',
+    'h': 'hours',
+    'd': 'days',
+    'w': 'weeks',
+}
+
+
+def _resolve_relative_time(time_str: str) -> str:
+    """Convert a relative time string (e.g. 'now-1h') to ISO 8601.
+
+    Supports: 'now', 'now-30m', 'now-1h', 'now-2d', 'now-1w', etc.
+    If the string is already ISO 8601 or unrecognised, returns it unchanged.
+    """
+    match = _RELATIVE_TIME_RE.match(time_str.strip())
+    if not match:
+        return time_str  # Not relative — pass through as-is
+
+    now = datetime.utcnow()
+    amount_str = match.group(1)
+    unit = match.group(2).lower() if match.group(2) else None
+    if amount_str and unit:
+        kwargs = {_RELATIVE_UNITS[unit]: int(amount_str)}
+        resolved = now - timedelta(**kwargs)
+    else:
+        # bare "now"
+        resolved = now
+    return resolved.isoformat() + "Z"
+
+
 class TempoQueryTool:
     """Tool for querying Tempo traces with async support."""
 
@@ -56,14 +92,18 @@ async def query_tempo_tool(
     MCP tool function for querying Tempo traces.
 
     Args:
-        query: TraceQL query string (e.g., "service.name=my-service" or "service=my-service")
-        start_time: Start time in ISO format (e.g., "2024-01-01T00:00:00Z")
-        end_time: End time in ISO format (e.g., "2024-01-01T23:59:59Z")
+        query: TraceQL query string (e.g., "service.name=my-service" or "{}" for all)
+        start_time: Start time — ISO 8601 (e.g., "2024-01-01T00:00:00Z") or relative (e.g., "now-1h", "now-30m")
+        end_time: End time — ISO 8601 (e.g., "2024-01-01T23:59:59Z") or relative (e.g., "now")
         limit: Maximum number of traces to return (default: DEFAULT_QUERY_LIMIT)
 
     Returns:
         List of trace information
     """
+    # Resolve relative time strings (e.g. "now-1h") to ISO 8601
+    start_time = _resolve_relative_time(start_time)
+    end_time = _resolve_relative_time(end_time)
+
     tempo_tool = TempoQueryTool()
     result = await tempo_tool.query_traces(query, start_time, end_time, limit)
 
