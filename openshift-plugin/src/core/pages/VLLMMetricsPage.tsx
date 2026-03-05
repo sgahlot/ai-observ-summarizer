@@ -161,9 +161,9 @@ const MetricCard: React.FC<MetricCardProps> = ({ label, value, unit = '', descri
   const isNull = value === null;
 
   return (
-    <Card 
-      isCompact 
-      style={{ 
+    <Card
+      isCompact
+      style={{
         height: '100%',
         transition: 'all 0.3s ease',
         cursor: 'default',
@@ -185,9 +185,9 @@ const MetricCard: React.FC<MetricCardProps> = ({ label, value, unit = '', descri
         </TextContent>
         <Flex alignItems={{ default: 'alignItemsCenter' }}>
           <FlexItem>
-            <Text 
-              component={TextVariants.h2} 
-              style={{ 
+            <Text
+              component={TextVariants.h2}
+              style={{
                 color: isNull ? 'var(--pf-v5-global--Color--200)' : isZero ? 'var(--pf-v5-global--success-color--100)' : 'inherit',
                 marginBottom: '2px',
                 fontSize: '1.5rem',
@@ -201,8 +201,8 @@ const MetricCard: React.FC<MetricCardProps> = ({ label, value, unit = '', descri
           </FlexItem>
           {trend && trend.direction !== 'flat' && (
             <FlexItem>
-              <span style={{ 
-                fontSize: '0.7rem', 
+              <span style={{
+                fontSize: '0.7rem',
                 color: trend.direction === 'up' ? '#3e8635' : '#c9190b',
                 marginLeft: '4px',
               }}>
@@ -221,7 +221,7 @@ const MetricCard: React.FC<MetricCardProps> = ({ label, value, unit = '', descri
   );
 };
 
-// Key Metric Card Component - Shows Average + Max values (Streamlit-style)
+// Key Metric Card Component - Shows Average + Max values (legacy-style)
 interface KeyMetricCardProps {
   label: string;
   avgValue: number | null;
@@ -426,7 +426,7 @@ const KeyMetricsSection: React.FC<KeyMetricsSectionProps> = ({ data, loading, ti
     return 3600; // Default to 1 hour
   };
 
-  // Calculate avg and max from time series data (with NaN filtering like Streamlit)
+  // Calculate avg and max from time series data with strict NaN/null filtering.
   const getAvgAndMax = (key: string): { avg: number | null; max: number | null } => {
     const metricData = data[key];
 
@@ -473,7 +473,7 @@ const KeyMetricsSection: React.FC<KeyMetricsSectionProps> = ({ data, loading, ti
     if (!metricData || !metricData.time_series || metricData.time_series.length === 0) {
       const latestValue = metricData?.latest_value;
 
-      // Filter out NaN, null, and infinite values (matches Streamlit behavior)
+      // Filter out NaN, null, and infinite values.
       if (latestValue === null || latestValue === undefined ||
           isNaN(latestValue) || !isFinite(latestValue)) {
         return { avg: null, max: null };
@@ -483,7 +483,6 @@ const KeyMetricsSection: React.FC<KeyMetricsSectionProps> = ({ data, loading, ti
     }
 
     // Filter out NaN, null, and infinite values from time series
-    // This matches the Streamlit UI's behavior in mcp_client_helper.py:720
     const validValues = metricData.time_series
       .map(p => p.value)
       .filter(v => v !== null && v !== undefined && !isNaN(v) && isFinite(v));
@@ -693,7 +692,7 @@ const VLLMMetricsPage: React.FC = () => {
       ]);
       setModels(modelsData);
       setNamespaces(namespacesData);
-      
+
       // Detect RAG availability based on presence of vLLM models
       setRagAvailable(modelsData.length > 0);
 
@@ -844,9 +843,9 @@ const VLLMMetricsPage: React.FC = () => {
   return (
     <Page className="vllm-dashboard">
       {/* Header with animated gradient background */}
-      <PageSection 
-        variant="light" 
-        style={{ 
+      <PageSection
+        variant="light"
+        style={{
           background: 'linear-gradient(-45deg, #7c3aed, #4f46e5, #3b82f6, #06b6d4, #8b5cf6)',
           backgroundSize: '400% 400%',
           animation: 'gradientShift 15s ease infinite',
@@ -869,7 +868,7 @@ const VLLMMetricsPage: React.FC = () => {
                 background-position: 0% 50%;
               }
             }
-            
+
             @keyframes shimmer {
               0% {
                 transform: translateX(-100%);
@@ -878,7 +877,7 @@ const VLLMMetricsPage: React.FC = () => {
                 transform: translateX(100%);
               }
             }
-            
+
             @keyframes subtleGlow {
               0%, 100% {
                 box-shadow: 0 0 20px rgba(124,58,237,0.1);
@@ -887,13 +886,13 @@ const VLLMMetricsPage: React.FC = () => {
                 box-shadow: 0 0 30px rgba(124,58,237,0.2);
               }
             }
-            
+
             .vllm-dashboard {
               animation: subtleGlow 12s ease-in-out infinite;
             }
           `}
         </style>
-        
+
         {/* Subtle overlay shimmer effect */}
         <div
           style={{
@@ -1213,4 +1212,3 @@ const VLLMMetricsPage: React.FC = () => {
 };
 
 export default VLLMMetricsPage;
-
