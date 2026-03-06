@@ -318,9 +318,9 @@ class BaseChatBot(ABC):
         the active namespace to ensure the UI dropdown selection takes precedence.
         """
         # If namespace filter already present, replace it with the active namespace
-        if f'namespace="' in query or f"namespace='" in query or 'namespace=~' in query or 'namespace!' in query:
+        if f'namespace="' in query or f"namespace='" in query or 'namespace=~' in query or 'namespace!=' in query or 'namespace!~' in query:
             modified = re.sub(
-                r'namespace\s*!?=~?\s*["\'][^"\']*["\']',
+                r'namespace\s*(?:!?=~?|!~)\s*["\'][^"\']*["\']',
                 f'namespace="{namespace}"',
                 query
             )

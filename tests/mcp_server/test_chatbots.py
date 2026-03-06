@@ -822,6 +822,46 @@ class TestNamespaceInjection:
                 assert actual_args["pattern"] == "cpu"
 
 
+class TestNamespaceInjectionPromQL:
+    """Test _inject_namespace_into_promql handles negated operators correctly."""
+
+    def _make_bot(self, mock_mcp_tools):
+        from chatbots import LlamaChatBot
+        return LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+
+    def test_replaces_namespace_not_equal(self, mock_mcp_tools):
+        """namespace!=\"kube-system\" should be replaced with the active namespace."""
+        bot = self._make_bot(mock_mcp_tools)
+        query = 'ALERTS{namespace!="kube-system",alertstate="firing"}'
+        result = bot._inject_namespace_into_promql(query, "my-app")
+        assert 'namespace="my-app"' in result
+        assert 'namespace!=' not in result
+
+    def test_replaces_namespace_not_regex(self, mock_mcp_tools):
+        """namespace!~\"kube-.*\" should be replaced with the active namespace."""
+        bot = self._make_bot(mock_mcp_tools)
+        query = 'up{namespace!~"kube-.*"}'
+        result = bot._inject_namespace_into_promql(query, "my-app")
+        assert 'namespace="my-app"' in result
+        assert 'namespace!~' not in result
+
+    def test_replaces_namespace_regex_match(self, mock_mcp_tools):
+        """namespace=~\"test-.*\" should be replaced with the active namespace."""
+        bot = self._make_bot(mock_mcp_tools)
+        query = 'container_memory_usage_bytes{namespace=~"test-.*"}'
+        result = bot._inject_namespace_into_promql(query, "my-app")
+        assert 'namespace="my-app"' in result
+        assert 'namespace=~' not in result
+
+    def test_no_namespace_injects_new_filter(self, mock_mcp_tools):
+        """Query without any namespace filter should get one injected."""
+        bot = self._make_bot(mock_mcp_tools)
+        query = 'container_cpu_usage_seconds_total{pod="web-1"}'
+        result = bot._inject_namespace_into_promql(query, "my-app")
+        assert 'namespace="my-app"' in result
+        assert 'pod="web-1"' in result
+
+
 class TestGeminiTextToolCallDetection:
     """Test detection of text-based tool calls in Gemini responses."""
 

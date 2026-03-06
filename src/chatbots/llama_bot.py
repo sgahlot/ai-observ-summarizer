@@ -29,9 +29,21 @@ class LlamaChatBot(BaseChatBot):
         """Llama 3.1 supports 128K token context - 8K chars is reasonable."""
         return 8000
 
-    # Tools that Llama should have access to. Excludes admin/config tools,
-    # LLM-chaining tools (analyze_vllm, chat_openshift, etc.), and the
-    # recursive `chat` tool to stay within the 14K token context limit.
+    # Tools that Llama should have access to.
+    #
+    # Selection criteria — include a tool here if it:
+    #   1. Retrieves or queries observability data (metrics, traces, logs, alerts)
+    #   2. Helps the model understand or navigate that data (metadata, categories, explain)
+    #   3. Provides infrastructure context (namespaces, deployments, GPUs)
+    #
+    # Exclude a tool if it:
+    #   1. Chains to another LLM (analyze_vllm, chat_openshift, etc.)
+    #   2. Is administrative/config-only (not useful for end-user queries)
+    #   3. Is the recursive `chat` tool (would blow context)
+    #
+    # When adding a new tool to the MCP server, check these criteria and update
+    # this list accordingly. The allowlist lives here (not in the MCP server)
+    # because the constraint is specific to Llama's limited context window.
     _TOOL_ALLOWLIST = {
         # Prometheus / metrics
         "execute_promql",
