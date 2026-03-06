@@ -158,6 +158,26 @@ const AIChatPage: React.FC = () => {
       setConfigError(null);
       setConfigErrorType(null);
     }
+    // Defer focus to ensure the ref is attached after render
+    const timer = setTimeout(() => {
+      if (getSessionConfig().ai_model) {
+        inputRef.current?.focus();
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Re-focus input when Settings modal is closed (component stays mounted)
+  React.useEffect(() => {
+    const handleSettingsClosed = () => {
+      setTimeout(() => {
+        if (getSessionConfig().ai_model) {
+          inputRef.current?.focus();
+        }
+      }, 100);
+    };
+    window.addEventListener('settings-closed', handleSettingsClosed);
+    return () => window.removeEventListener('settings-closed', handleSettingsClosed);
   }, []);
 
   const handleSend = async (messageText?: string) => {
@@ -283,6 +303,8 @@ const AIChatPage: React.FC = () => {
     } finally {
       if (isMountedRef.current) {
         setIsLoading(false);
+        // Re-focus input after response or error so user can type next question
+        inputRef.current?.focus();
       }
     }
   };
@@ -424,6 +446,8 @@ const AIChatPage: React.FC = () => {
                   onScopeChange={(scope, namespace) => {
                     setChatScope(scope);
                     setSelectedNamespace(namespace);
+                    // Re-focus input after scope/namespace change
+                    inputRef.current?.focus();
                   }}
                 />
               </FlexItem>

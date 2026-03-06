@@ -54,13 +54,20 @@ class OpenAIChatBot(BaseChatBot):
 
 **GPT-SPECIFIC INSTRUCTIONS:**
 
-**Your Strengths:**
-- Strong general-purpose performance
-- Reliable tool calling with function API
-- Good balance of speed and accuracy
+**MANDATORY — Metric Discovery Before Queries:**
+You MUST call `search_metrics` or `search_metrics_by_category` BEFORE calling
+`execute_promql`. NEVER guess metric names — they are non-obvious
+(e.g., `vllm:gpu_cache_usage_perc` not `vllm:kv_cache_usage_percentage`,
+`DCGM_FI_DEV_GPU_TEMP` not `DCGM_FI_DEV_TEMP`).
+
+Correct flow:
+1. `search_metrics("GPU temperature")` → discover `DCGM_FI_DEV_GPU_TEMP`
+2. `execute_promql("avg(DCGM_FI_DEV_GPU_TEMP) by (pod)")` → get data
+
+Wrong flow:
+1. `execute_promql("avg(DCGM_FI_DEV_TEMP)")` → no data (wrong name)
 
 **Best Practices:**
-- Use clear, structured queries with proper grouping
 - Provide detailed breakdowns by pod and namespace
 - Balance comprehensiveness with conciseness"""
 
@@ -119,6 +126,7 @@ class OpenAIChatBot(BaseChatBot):
             # Iterative tool calling loop
             max_iterations = 30
             iteration = 0
+            consecutive_tool_tracker = {"name": None, "count": 0}
 
             while iteration < max_iterations:
                 iteration += 1
@@ -167,6 +175,7 @@ class OpenAIChatBot(BaseChatBot):
                     logger.info(f"🤖 OpenAI requesting {len(message.tool_calls)} tool(s)")
 
                     tool_results = []
+                    tool_loop_detected = False
                     for tool_call in message.tool_calls:
                         tool_name = tool_call.function.name
                         tool_args_str = tool_call.function.arguments
@@ -177,6 +186,10 @@ class OpenAIChatBot(BaseChatBot):
                             tool_args = json.loads(tool_args_str)
                         except json.JSONDecodeError:
                             tool_args = {}
+
+                        if self._check_tool_loop(tool_name, consecutive_tool_tracker):
+                            tool_loop_detected = True
+                            break
 
                         if progress_callback:
                             progress_callback(f"🔧 Using tool: {tool_name}")
@@ -189,6 +202,12 @@ class OpenAIChatBot(BaseChatBot):
                             "tool_call_id": tool_id,
                             "content": tool_result
                         })
+
+                    if tool_loop_detected:
+                        return (
+                            "I got stuck in a loop calling the same tool repeatedly. "
+                            "Please try rephrasing your question or being more specific."
+                        )
 
                     # Add tool results to conversation
                     messages.extend(tool_results)

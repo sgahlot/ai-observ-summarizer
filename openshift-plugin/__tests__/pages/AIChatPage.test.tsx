@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { AIChatPage } from '../../src/core/pages/AIChatPage';
 import * as mcpClient from '../../src/core/services/mcpClient';
@@ -1869,6 +1869,90 @@ describe('AIChatPage', () => {
       // Progress log should be collapsed by default
       const collapsedElement = container.querySelector('.progress-log-collapsed');
       expect(collapsedElement).toBeInTheDocument();
+    });
+  });
+
+  describe('Focus Management', () => {
+    it('should focus input on page load when config is valid', () => {
+      render(<AIChatPage />);
+
+      // Focus is deferred via setTimeout(100)
+      act(() => {
+        jest.advanceTimersByTime(100);
+      });
+
+      const input = screen.getByPlaceholderText('Ask about your metrics...');
+      expect(document.activeElement).toBe(input);
+    });
+
+    it('should not focus input on page load when config is missing', () => {
+      mockGetSessionConfig.mockReturnValue({ ai_model: '' });
+
+      render(<AIChatPage />);
+
+      act(() => {
+        jest.advanceTimersByTime(100);
+      });
+
+      const input = screen.getByPlaceholderText('Ask about your metrics...');
+      expect(document.activeElement).not.toBe(input);
+    });
+
+    it('should focus input after successful response', async () => {
+      mockChat.mockResolvedValue({
+        response: 'AI response',
+        progressLog: [],
+      });
+
+      render(<AIChatPage />);
+
+      const input = screen.getByPlaceholderText('Ask about your metrics...') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Test message' } });
+      fireEvent.click(screen.getByRole('button', { name: '' }));
+
+      await waitFor(() => {
+        expect(mockChat).toHaveBeenCalled();
+      });
+
+      await waitFor(() => {
+        expect(document.activeElement).toBe(input);
+      });
+    });
+
+    it('should focus input after error response', async () => {
+      mockChat.mockRejectedValue(new Error('Network error'));
+
+      render(<AIChatPage />);
+
+      const input = screen.getByPlaceholderText('Ask about your metrics...') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Test message' } });
+      fireEvent.click(screen.getByRole('button', { name: '' }));
+
+      await waitFor(() => {
+        expect(document.activeElement).toBe(input);
+      });
+    });
+
+    it('should focus input when settings-closed event is dispatched', () => {
+      render(<AIChatPage />);
+
+      // Advance past the initial mount focus timer
+      act(() => {
+        jest.advanceTimersByTime(100);
+      });
+
+      // Blur the input to simulate focus being elsewhere (e.g., in settings modal)
+      const input = screen.getByPlaceholderText('Ask about your metrics...') as HTMLInputElement;
+      input.blur();
+      expect(document.activeElement).not.toBe(input);
+
+      // Dispatch settings-closed event (as Settings modal does on close)
+      act(() => {
+        window.dispatchEvent(new CustomEvent('settings-closed'));
+        jest.advanceTimersByTime(100);
+      });
+
+      expect(document.activeElement).toBe(input);
     });
   });
 });

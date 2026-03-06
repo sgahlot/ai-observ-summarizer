@@ -63,7 +63,8 @@ class GPUMetricsDiscovery:
             r"^nvidia_",         # Generic NVIDIA metrics
         ],
         GPUVendor.INTEL: [
-            r"^habana_",         # Intel Gaudi/Habana
+            r"^habanalabs_",     # Intel Gaudi/Habana (habanalabs exporter)
+            r"^habana_",         # Intel Gaudi/Habana (habana exporter)
             r"^xpu_",            # Intel XPU
             r"^intel_gpu_",      # Intel GPU specific
         ],
@@ -85,6 +86,9 @@ class GPUMetricsDiscovery:
         r"^DCGM_FI_DEV_(GPU_UTIL|GPU_TEMP|MEMORY_TEMP|POWER_USAGE|FB_USED|FB_FREE)",
         r"^DCGM_FI_DEV_(MEM_COPY_UTIL|ENC_UTIL|DEC_UTIL|SM_CLOCK|MEM_CLOCK)",
         # Intel high priority
+        r"^habanalabs_(utilization|energy|power_mW|power_default_limit_mW)",
+        r"^habanalabs_temperature_(onboard|onchip|threshold_gpu|threshold_memory)",
+        r"^habanalabs_memory_(used_bytes|free_bytes|total_bytes)",
         r"^habana_hl_(utilization|memory_used|temperature|power)",
         r"^xpu_(utilization|memory|temperature|power)",
         # AMD high priority
@@ -112,11 +116,52 @@ class GPUMetricsDiscovery:
 
     # Curated keywords for specific metrics
     CURATED_KEYWORDS: Dict[str, List[str]] = {
+        # NVIDIA DCGM — High priority
         "DCGM_FI_DEV_GPU_UTIL": ["gpu utilization", "gpu usage", "nvidia utilization"],
         "DCGM_FI_DEV_GPU_TEMP": ["gpu temperature", "temp", "overheating", "thermal"],
         "DCGM_FI_DEV_POWER_USAGE": ["gpu power", "power usage", "watts", "power consumption"],
         "DCGM_FI_DEV_FB_USED": ["gpu memory", "vram", "framebuffer", "fb used"],
         "DCGM_FI_DEV_FB_FREE": ["gpu memory free", "vram available", "framebuffer free"],
+        "DCGM_FI_DEV_MEMORY_TEMP": ["memory temperature", "vram temp", "hbm temperature", "thermal"],
+        "DCGM_FI_DEV_MEM_COPY_UTIL": ["memory copy utilization", "mem copy", "memory bandwidth", "dma utilization"],
+        "DCGM_FI_DEV_MEM_CLOCK": ["memory clock", "mem clock", "memory frequency", "vram clock"],
+        "DCGM_FI_DEV_SM_CLOCK": ["sm clock", "gpu clock", "gpu frequency", "streaming multiprocessor clock"],
+        "DCGM_FI_DEV_ENC_UTIL": ["encoder utilization", "nvenc", "video encode", "encoder usage"],
+        "DCGM_FI_DEV_DEC_UTIL": ["decoder utilization", "nvdec", "video decode", "decoder usage"],
+        # NVIDIA DCGM — Medium priority
+        "DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION": ["energy consumption", "total energy", "gpu energy", "power consumed"],
+        "DCGM_FI_DEV_PCIE_REPLAY_COUNTER": ["pcie replay", "pcie errors", "pcie retransmit"],
+        "DCGM_FI_DEV_FB_RESERVED": ["reserved memory", "vram reserved", "framebuffer reserved"],
+        "DCGM_FI_DEV_CORRECTABLE_REMAPPED_ROWS": ["remapped rows", "ecc correctable", "memory errors", "row remap"],
+        "DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS": ["uncorrectable errors", "ecc uncorrectable", "memory errors"],
+        "DCGM_FI_DEV_ROW_REMAP_FAILURE": ["row remap failure", "remap failure", "memory reliability"],
+        "DCGM_FI_PROF_DRAM_ACTIVE": ["dram active", "memory controller active", "dram utilization"],
+        "DCGM_FI_PROF_GR_ENGINE_ACTIVE": ["graphics engine active", "gr engine", "compute active"],
+        "DCGM_FI_PROF_PCIE_RX_BYTES": ["pcie rx", "pcie receive", "pcie bandwidth", "pcie throughput"],
+        "DCGM_FI_PROF_PCIE_TX_BYTES": ["pcie tx", "pcie transmit", "pcie bandwidth", "pcie throughput"],
+        "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE": ["tensor core active", "tensor utilization", "tensor pipe", "tensor core usage"],
+        # Intel Gaudi — Core / Compute
+        "habanalabs_utilization": ["gaudi utilization", "hpu utilization", "device utilization", "gaudi usage"],
+        "habanalabs_energy": ["gaudi energy", "device energy", "energy usage", "power consumption"],
+        "habanalabs_power_mW": ["gaudi power", "power usage", "milliwatts", "power consumption"],
+        "habanalabs_power_default_limit_mW": ["power cap", "power limit", "default power limit"],
+        "habanalabs_temperature_onboard": ["board temperature", "gaudi temperature", "thermal", "overheating"],
+        "habanalabs_temperature_onchip": ["chip temperature", "asic temperature", "gaudi temp", "thermal"],
+        "habanalabs_temperature_threshold_gpu": ["gpu temp threshold", "temperature limit", "thermal threshold"],
+        "habanalabs_temperature_threshold_memory": ["memory temp threshold", "hbm temperature limit"],
+        # Intel Gaudi — Memory (HBM)
+        "habanalabs_memory_used_bytes": ["gaudi memory", "hbm used", "memory usage", "device memory"],
+        "habanalabs_memory_free_bytes": ["gaudi memory free", "hbm free", "memory available"],
+        "habanalabs_memory_total_bytes": ["gaudi memory total", "hbm capacity", "total memory"],
+        # Intel Gaudi — Interconnect (PCIe / HL-Link)
+        "habanalabs_pcie_receive_throughput": ["pcie rx throughput", "pcie receive", "pcie bandwidth"],
+        "habanalabs_pcie_transmit_throughput": ["pcie tx throughput", "pcie transmit", "pcie bandwidth"],
+        "habanalabs_pcie_rx": ["pcie receive traffic", "pcie rx"],
+        "habanalabs_pcie_tx": ["pcie transmit traffic", "pcie tx"],
+        "habanalabs_pcie_replay_count": ["pcie replay", "pcie errors", "pcie retransmit"],
+        "habanalabs_pci_link_speed": ["pcie link speed", "pcie speed"],
+        "habanalabs_pci_link_width": ["pcie link width", "pcie lanes"],
+        # vLLM inference framework
         "vllm:e2e_request_latency_seconds": ["latency", "response time", "slow", "p95", "p99", "e2e latency", "end to end"],
         "vllm:num_requests_running": ["requests running", "inflight", "concurrency", "active requests"],
         "vllm:num_requests_waiting": ["queue", "waiting", "backlog", "pending requests"],
@@ -134,6 +179,8 @@ class GPUMetricsDiscovery:
         "vllm:generation_tokens_total": ["generation throughput", "output tokens", "generation tokens", "tokens generated"],
         "vllm:num_preemptions_total": ["preemption", "eviction", "preemptions", "scheduling pressure"],
         "vllm:request_success_total": ["success rate", "successful requests", "completion rate"],
+        "vllm:time_per_output_token_seconds": ["tpot", "time per output token", "decode speed", "token generation time"],
+        "vllm:kv_cache_usage_perc": ["kv cache", "cache utilization", "kv usage", "cache capacity"],
     }
 
     def __init__(
@@ -217,42 +264,44 @@ class GPUMetricsDiscovery:
         return bool(self._high_priority_regex.match(metric_name))
 
     def _generate_keywords(self, metric_name: str, help_text: str, vendor: GPUVendor) -> List[str]:
-        """Generate keywords for a GPU metric."""
-        keywords: Set[str] = set()
+        """Generate keywords for a GPU metric.
 
-        # Add curated keywords if available
-        # Check exact match first
+        Keywords are added in priority order: curated > vendor > name-derived > help-text.
+        When the 12-keyword limit is reached, lower-priority keywords are dropped.
+        """
+        seen: Set[str] = set()
+        ordered: List[str] = []
+
+        def _add(words):
+            for w in words:
+                if w not in seen:
+                    seen.add(w)
+                    ordered.append(w)
+
+        # Priority 1: curated keywords (hand-written, highest quality)
         if metric_name in self.CURATED_KEYWORDS:
-            keywords.update(self.CURATED_KEYWORDS[metric_name])
+            _add(self.CURATED_KEYWORDS[metric_name])
         else:
-            # Check prefix matches (for histogram variants like _bucket, _count, _sum)
             base_name = re.sub(r"_(bucket|count|sum|total)$", "", metric_name)
             if base_name in self.CURATED_KEYWORDS:
-                keywords.update(self.CURATED_KEYWORDS[base_name])
+                _add(self.CURATED_KEYWORDS[base_name])
 
-        # Add vendor keywords
-        keywords.update(self.VENDOR_KEYWORDS.get(vendor, []))
+        # Priority 2: vendor keywords
+        _add(self.VENDOR_KEYWORDS.get(vendor, []))
 
-        # Extract keywords from metric name
+        # Priority 3: keywords extracted from metric name
         name_parts = re.split(r"[_:]", metric_name.lower())
-        # Filter out common prefixes and short words
-        skip_words = {"dcgm", "fi", "dev", "vllm", "habana", "hl", "amdgpu", "rocm", "smi"}
-        for part in name_parts:
-            if len(part) > 2 and part not in skip_words:
-                keywords.add(part)
+        skip_words = {"dcgm", "fi", "dev", "vllm", "habana", "habanalabs", "hl", "amdgpu", "rocm", "smi"}
+        _add(part for part in name_parts if len(part) > 2 and part not in skip_words)
 
-        # Extract keywords from help text
+        # Priority 4: keywords extracted from help text
         if help_text:
-            # Simple word extraction from help text
             help_words = re.findall(r"\b[a-z]{4,}\b", help_text.lower())
-            # Take most relevant words (limit to avoid noise)
             stopwords = {"this", "that", "with", "from", "which", "when", "will", "been", "being"}
-            for word in help_words[:10]:
-                if word not in stopwords:
-                    keywords.add(word)
+            _add(w for w in help_words[:10] if w not in stopwords)
 
         # Limit total keywords
-        return list(keywords)[:12]
+        return ordered[:12]
 
     def discover(self, timeout_seconds: float = DISCOVERY_TIMEOUT_SECONDS) -> GPUDiscoveryResult:
         """

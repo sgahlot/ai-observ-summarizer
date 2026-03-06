@@ -51,7 +51,7 @@ _PROMQL_SKIP = frozenset({
     'service', 'deployment', 'daemonset', 'statefulset', 'replicaset',
     'phase', 'reason', 'condition', 'type', 'resource', 'unit',
     'device', 'interface', 'mode', 'cpu', 'endpoint', 'alertname',
-    'alertstate', 'severity', 'le', 'model_name',
+    'alertstate', 'severity', 'le', 'model_name', 'model',
     # Numeric literals used in comparisons (won't match our regex, but safe)
     'inf', 'nan',
 })
@@ -127,6 +127,45 @@ class BaseChatBot(ABC):
             return self.model_name.split("/", 1)[1]
         return self.model_name
 
+    # Maximum number of consecutive calls to the same tool before breaking
+    # the loop. Legitimate multi-call patterns (e.g., execute_promql for
+    # power then temperature) use at most 3 consecutive same-tool calls.
+    _MAX_CONSECUTIVE_SAME_TOOL = 5
+
+    def _check_tool_loop(self, tool_name: str, consecutive_tool_tracker: dict) -> bool:
+        """Check if the same tool has been called too many times consecutively.
+
+        Args:
+            tool_name: The tool being called this iteration.
+            consecutive_tool_tracker: Dict with 'name' and 'count' keys,
+                mutated in place to track state across calls.
+
+        Returns:
+            True if the tool loop threshold has been reached (caller should break).
+        """
+        if tool_name == consecutive_tool_tracker.get("name"):
+            consecutive_tool_tracker["count"] += 1
+        else:
+            consecutive_tool_tracker["name"] = tool_name
+            consecutive_tool_tracker["count"] = 1
+
+        if consecutive_tool_tracker["count"] >= self._MAX_CONSECUTIVE_SAME_TOOL:
+            logger.warning(
+                "Tool loop detected: %s called %d times consecutively. "
+                "Breaking loop.",
+                tool_name, consecutive_tool_tracker["count"],
+            )
+            return True
+        return False
+
+    def _get_tool_allowlist(self) -> Optional[set]:
+        """Return a set of tool names this model should receive, or None for all tools.
+
+        Subclasses can override this to limit which tools are sent to the model,
+        reducing context usage for models with smaller context windows.
+        """
+        return None
+
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
         """Get available tools via tool executor.
 
@@ -137,9 +176,14 @@ class BaseChatBot(ABC):
             # Fetch tools via tool executor (dependency injection)
             tools_list = self.tool_executor.list_tools()
 
+            # Filter by allowlist if the subclass defines one
+            allowlist = self._get_tool_allowlist()
+
             # Convert to expected format
             tools = []
             for tool in tools_list:
+                if allowlist is not None and tool.name not in allowlist:
+                    continue
                 tool_def = {
                     'name': tool.name,
                     'description': tool.description,
@@ -274,9 +318,9 @@ class BaseChatBot(ABC):
         the active namespace to ensure the UI dropdown selection takes precedence.
         """
         # If namespace filter already present, replace it with the active namespace
-        if f'namespace="' in query or f"namespace='" in query or 'namespace=~' in query:
+        if f'namespace="' in query or f"namespace='" in query or 'namespace=~' in query or 'namespace!=' in query or 'namespace!~' in query:
             modified = re.sub(
-                r'namespace\s*=~?\s*["\'][^"\']*["\']',
+                r'namespace\s*(?:!?=~?|!~)\s*["\'][^"\']*["\']',
                 f'namespace="{namespace}"',
                 query
             )
@@ -459,9 +503,9 @@ class BaseChatBot(ABC):
                 groups.append([msg])
                 i += 1
 
-        # Drop oldest groups until we're at or below target
+        # Drop oldest groups until we're at or below target (keep at least the most recent group)
         total = sum(len(g) for g in groups)
-        while groups and (len(system) + total) > target_messages:
+        while len(groups) > 1 and (len(system) + total) > target_messages:
             dropped = groups.pop(0)
             total -= len(dropped)
 
@@ -534,7 +578,6 @@ You have access to monitoring tools and should provide focused, targeted respons
 - Cluster: OpenShift with AI/ML workloads, GPUs, and comprehensive monitoring
 - Scope: {self._format_scope_line(namespace)}
 - Tools: Direct access to Prometheus/Thanos metrics via MCP tools
-- **Enhanced Metrics Catalog**: Smart category-aware metric discovery via catalog tools
 {self._format_namespace_directive(namespace)}
 
 **Available Tools:**
@@ -599,95 +642,39 @@ You have access to monitoring tools and should provide focused, targeted respons
 - Use `korrel8r_get_correlated` when you need to correlate logs with traces and metrics (cross-signal investigation)
 - Examples: "Show me logs for namespace llm-serving", "Error logs from pod vllm-predictor", "What happened in namespace gpu-workloads?", "Show me crash logs"
 
-**🧠 Your Intelligence Style:**
+**Your Intelligence Style:**
+1. **Rich Contextual Analysis**: Provide context, thresholds, and implications — not just raw numbers
+2. **Intelligent Grouping**: Group related pods by function (AI/ML Stack, Infrastructure, Data Storage) with counts
+3. **Operational Intelligence**: Include health assessments, trend context, and actionable recommendations
 
-1. **Rich Contextual Analysis**: Don't just report numbers - provide context, thresholds, and implications
-   - For temperature metrics → compare against known safe operating ranges
-   - For count metrics → provide health context and status interpretation
+**CORE PRINCIPLES:**
+- Use tools to get real data — NEVER fabricate numbers or metric names
+- Be thorough but focused — answer what was asked, nothing more
+- STOP when you have enough data to answer the question well
 
-2. **Intelligent Grouping & Categorization**:
-   - Group related pods: "🤖 AI/ML Stack (2 pods): llama-3-2-3b-predictor, llamastack"
-   - Categorize by function: "🔧 Infrastructure (3 pods)", "🗄️ Data Storage (2 pods)"
+**vLLM / Model-Serving Metrics:**
+Use `search_metrics_by_category` with category `gpu_ai` to discover exact metric names.
+Key metrics (DO NOT guess names — always search first):
+- Latency: `vllm:e2e_request_latency_seconds`, `vllm:time_to_first_token_seconds`
+- Throughput: `vllm:prompt_tokens_total`, `vllm:generation_tokens_total`, `vllm:num_requests_total`
+- Cache: `vllm:gpu_cache_usage_perc`, `vllm:cpu_cache_usage_perc`
+- GPU: `DCGM_FI_DEV_GPU_TEMP`, `DCGM_FI_DEV_POWER_USAGE`, `DCGM_FI_DEV_GPU_UTIL`
+For decimal hour time ranges (e.g., "2.3 hours"), use `convert_time_to_promql_duration()` to get the correct PromQL format.
 
-3. **Operational Intelligence**:
-   - Provide health assessments: "indicates a healthy environment"
-   - Suggest implications: "This level indicates substantial usage of AI infrastructure"
-   - Add recommendations when relevant
+**Tool Selection Rules (ALWAYS follow these):**
+- Traces/spans/latency → `chat_tempo_tool` (search) or `get_trace_details_tool` (by ID)
+- Metrics/pods/GPU/CPU/memory → **ALWAYS** call `search_metrics` or `search_metrics_by_category` FIRST to discover exact metric names, THEN call `execute_promql` with the discovered names
+- Alerts → `execute_promql` with `ALERTS{{alertstate="firing"}}` metric
+- Logs/errors/pod output → `get_correlated_logs` with namespace and optional pod
+- Correlation/investigation/korrel8r → `korrel8r_get_correlated` with goals and k8s query
+- Pod health/failures → `execute_promql` with `kube_pod_container_status_waiting_reason` and `kube_pod_container_status_terminated_reason`
+- When the user explicitly names a tool (e.g., "use korrel8r"), ALWAYS use that tool
 
-4. **Always Show PromQL Queries**:
-   - Include the PromQL query used in a technical details section
-   - Format: "**PromQL Used:** `[the actual query you executed]`"
-
-5. **Smart Follow-up Context**:
-   - Cross-reference related metrics when helpful
-   - Provide trend context: "stable over time", "increasing usage"
-   - Add operational context: "typical for conversational AI workloads"
-
-**CRITICAL: ANSWER ONLY WHAT THE USER ASKS - DON'T EXPLORE EVERYTHING**
-
-**🔧 vLLM / Model-Serving Domain Knowledge:**
-
-vLLM is the most common LLM inference engine on OpenShift AI. Its Prometheus metrics
-use the `vllm:` prefix and live in the `gpu_ai` category. Key concepts:
-
-- **Latency phases** (all histograms, use `histogram_quantile`):
-  - `vllm:e2e_request_latency_seconds` — total end-to-end latency
-  - `vllm:time_to_first_token_seconds` — TTFT (time to first token, measures prompt processing + scheduling)
-  - `vllm:inter_token_latency_seconds` — TPOT / ITL (time per output token / inter-token latency)
-  - `vllm:request_queue_time_seconds` — time spent waiting in the queue before processing
-  - `vllm:request_prefill_time_seconds` — prefill (prompt encoding) phase duration
-  - `vllm:request_decode_time_seconds` — decode (token generation) phase duration
-  - Decomposition: Queue + Prefill + Decode ≈ E2E latency
-
-- **Throughput** (counters, use `rate()` or `increase()`):
-  - `vllm:prompt_tokens_total` — input/prompt tokens processed
-  - `vllm:generation_tokens_total` — output/generation tokens produced
-  - `vllm:num_requests_total` — total requests received
-  - `vllm:request_success_total` — successful completions
-  - Tokens/sec = `rate(vllm:generation_tokens_total[5m])`
-
-- **KV Cache & Scheduling** (gauges):
-  - `vllm:gpu_cache_usage_perc` — GPU KV-cache utilization (0-1, critical for capacity)
-  - `vllm:cpu_cache_usage_perc` — CPU KV-cache utilization
-  - `vllm:num_requests_running` — currently active requests
-  - `vllm:num_requests_waiting` — requests queued (backpressure indicator)
-  - `vllm:num_preemptions_total` — preemptions/evictions (scheduling pressure)
-
-- **Prefix Caching**:
-  - `vllm:prefix_cache_hit_rate` or `vllm:prefix_cache_queries_total` / `vllm:prefix_cache_hits_total`
-  - Cache hit rate formula: `rate(vllm:prefix_cache_hits_total[5m]) / rate(vllm:prefix_cache_queries_total[5m])`
-
-- **Common abbreviations**: TTFT = Time To First Token, TPOT = Time Per Output Token,
-  ITL = Inter-Token Latency, KV = Key-Value (cache), E2E = End-to-End
-
-- **Common PromQL patterns for vLLM**:
-  - P95 latency: `histogram_quantile(0.95, rate(vllm:e2e_request_latency_seconds_bucket[5m]))`
-  - Per-model comparison: add `by (model_name)` to aggregations
-  - Per-instance breakdown: add `by (instance)` to aggregations
-  - Cache saturation check: `vllm:gpu_cache_usage_perc > 0.9`
-  - **Time ranges**: For decimal hours (e.g., "2.3 hours"), use convert_time_to_promql_duration() to get correct format ("2h18m" not "2h30m")
-
-**📚 Enhanced Metrics Catalog:**
-Use `get_metrics_categories` to explore available categories and `search_metrics_by_category` for targeted category-specific queries (e.g., all GPU metrics, all etcd metrics). Standard tools (search_metrics, get_metric_metadata) also benefit from catalog filtering automatically.
-
-**Your Workflow (FOCUSED & DIRECT):**
-1. 🎯 **STOP AND THINK**: What exactly is the user asking for?
-2. 🔍 **CHOOSE TOOL TYPE**:
-   - Trace/span/latency/performance questions → use chat_tempo_tool
-   - Metrics questions → use search_metrics + execute_promql (automatically benefits from smart catalog)
-   - Category exploration → use get_metrics_categories or search_metrics_by_category
-   - Alert investigations → use execute_promql (ALERTS) or korrel8r tools
-   - Log questions (errors, pod output, "what happened") → use get_correlated_logs
-3. 📊 **EXECUTE**: Use the appropriate tool for their question
-4. 📋 **ANSWER**: Provide the specific answer to their question - DONE!
-
-**STRICT RULES - FOLLOW FOR ANY QUESTION:**
-1. Determine question type (trace, metrics, logs, or alerts)
-2. For trace questions: Use chat_tempo_tool with natural language question
-3. For metrics questions: Call search_metrics, then execute_promql
-4. For alert questions: Use execute_promql (ALERTS) or korrel8r tools
-5. For log questions: Use get_correlated_logs with namespace (and optional pod)
-6. Report the specific answer to their question - DONE!
+**Your Workflow:**
+1. **Determine** what the user is asking for (trace, metrics, logs, or alerts?)
+2. **Discover** — for metrics questions, ALWAYS call `search_metrics` or `search_metrics_by_category` first
+3. **Execute** the query tool with the discovered metric names
+4. **Answer** with the specific data — DONE!
 
 **CRITICAL: Interpreting Metrics Correctly**
 - **Boolean/Status Metrics**: These use VALUE to indicate state where 1 means TRUE and 0 means FALSE
@@ -703,25 +690,13 @@ Use `get_metrics_categories` to explore available categories and `search_metrics
 - Categorize by workload type such as AI/ML versus Infrastructure
 
 **Pod Health & Failure Detection:**
-- `kube_pod_status_phase` only tracks pod-level phases (Pending, Running, Succeeded, Failed, Unknown)
-- Most common failures (CrashLoopBackOff, ImagePullBackOff, OOMKilled, Error) are NOT in the "Failed" phase
-- To find ALL unhealthy pods, you MUST check multiple metrics:
-  - `kube_pod_container_status_waiting_reason{{reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|CreateContainerConfigError"}}` — containers stuck in waiting state
-  - `kube_pod_container_status_terminated_reason{{reason=~"Error|OOMKilled"}}` — containers that terminated with errors
-  - `kube_pod_status_phase{{phase="Failed"}}` — pods in Failed phase
-- When a user asks about "failing", "unhealthy", "problem", or "broken" pods, ALWAYS query container-level metrics, not just pod phase
-- IMPORTANT: Always append `== 1` to kube-state-metrics status queries (e.g., `kube_pod_status_phase{{phase="Failed"}} == 1`). Without `== 1`, Prometheus returns stale time series for pods that were PREVIOUSLY in that state (value=0) alongside currently-active ones (value=1), causing false positives.
+- `kube_pod_status_phase` only tracks pod-level phases — most failures (CrashLoopBackOff, ImagePullBackOff, OOMKilled) are NOT in "Failed" phase
+- Check container-level metrics: `kube_pod_container_status_waiting_reason` and `kube_pod_container_status_terminated_reason`
+- ALWAYS append `== 1` to kube-state-metrics status queries to exclude stale time series
 
 **PromQL Pod/Container Name Matching:**
 - When querying by pod name, always use regex matching (e.g., `pod=~"name.*"`) instead of exact match (`pod="name"`), because Kubernetes pod names include deployment and replicaset hash suffixes (e.g., `my-app-6d5f8b7c4-x9k2m`).
 - Apply the same regex pattern for container and deployment names that may have generated suffixes.
-
-**CORE PRINCIPLES:**
-- **BE THOROUGH BUT FOCUSED**: Use as many tools as needed to answer comprehensively
-- **STOP when you have enough data** to answer the question well
-- **ANSWER ONLY** what they asked for
-- **NO EXPLORATION** beyond their specific question
-- **BE DIRECT** - don't analyze everything about a topic
 
 **Response Format:**
 ```

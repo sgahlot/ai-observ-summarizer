@@ -342,5 +342,62 @@ class TestTempoQueryToolClass:
         
         import asyncio
         services = asyncio.run(tool.get_available_services())
-        
+
         assert services == []
+
+
+class TestResolveRelativeTime:
+    """Test _resolve_relative_time helper for converting relative time strings."""
+
+    def test_now(self):
+        """'now' resolves to approximately the current UTC time."""
+        from src.mcp_server.tools.tempo_tools import _resolve_relative_time
+        result = _resolve_relative_time("now")
+        assert result.endswith("Z")
+        parsed = datetime.fromisoformat(result.replace("Z", "+00:00"))
+        assert abs((datetime.utcnow() - parsed.replace(tzinfo=None)).total_seconds()) < 5
+
+    def test_now_minus_hours(self):
+        """'now-1h' resolves to roughly 1 hour ago."""
+        from src.mcp_server.tools.tempo_tools import _resolve_relative_time
+        result = _resolve_relative_time("now-1h")
+        assert result.endswith("Z")
+        parsed = datetime.fromisoformat(result.replace("Z", "+00:00"))
+        expected = datetime.utcnow() - timedelta(hours=1)
+        assert abs((expected - parsed.replace(tzinfo=None)).total_seconds()) < 5
+
+    def test_now_minus_minutes(self):
+        """'now-30m' resolves to roughly 30 minutes ago."""
+        from src.mcp_server.tools.tempo_tools import _resolve_relative_time
+        result = _resolve_relative_time("now-30m")
+        parsed = datetime.fromisoformat(result.replace("Z", "+00:00"))
+        expected = datetime.utcnow() - timedelta(minutes=30)
+        assert abs((expected - parsed.replace(tzinfo=None)).total_seconds()) < 5
+
+    def test_now_minus_days(self):
+        """'now-2d' resolves to roughly 2 days ago."""
+        from src.mcp_server.tools.tempo_tools import _resolve_relative_time
+        result = _resolve_relative_time("now-2d")
+        parsed = datetime.fromisoformat(result.replace("Z", "+00:00"))
+        expected = datetime.utcnow() - timedelta(days=2)
+        assert abs((expected - parsed.replace(tzinfo=None)).total_seconds()) < 5
+
+    def test_iso_passthrough(self):
+        """ISO 8601 strings are returned unchanged."""
+        from src.mcp_server.tools.tempo_tools import _resolve_relative_time
+        iso = "2024-06-15T10:30:00Z"
+        assert _resolve_relative_time(iso) == iso
+
+    def test_arbitrary_string_passthrough(self):
+        """Unrecognised strings are returned unchanged."""
+        from src.mcp_server.tools.tempo_tools import _resolve_relative_time
+        assert _resolve_relative_time("yesterday") == "yesterday"
+
+    def test_case_insensitive(self):
+        """Relative time parsing is case-insensitive."""
+        from src.mcp_server.tools.tempo_tools import _resolve_relative_time
+        result = _resolve_relative_time("NOW-1H")
+        assert result.endswith("Z")
+        parsed = datetime.fromisoformat(result.replace("Z", "+00:00"))
+        expected = datetime.utcnow() - timedelta(hours=1)
+        assert abs((expected - parsed.replace(tzinfo=None)).total_seconds()) < 5

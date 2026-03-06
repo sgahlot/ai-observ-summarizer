@@ -36,6 +36,9 @@ class TestGPUVendorDetection:
 
     def test_detect_intel_vendor(self, discovery):
         """Test Intel vendor detection."""
+        assert discovery._detect_vendor("habanalabs_utilization") == GPUVendor.INTEL
+        assert discovery._detect_vendor("habanalabs_temperature_onchip") == GPUVendor.INTEL
+        assert discovery._detect_vendor("habanalabs_memory_used_bytes") == GPUVendor.INTEL
         assert discovery._detect_vendor("habana_hl_utilization") == GPUVendor.INTEL
         assert discovery._detect_vendor("xpu_memory_used") == GPUVendor.INTEL
         assert discovery._detect_vendor("intel_gpu_frequency") == GPUVendor.INTEL
@@ -66,6 +69,8 @@ class TestGPUMetricFiltering:
 
     def test_is_gpu_metric_intel(self, discovery):
         """Test Intel metrics are identified as GPU."""
+        assert discovery._is_gpu_metric("habanalabs_utilization") is True
+        assert discovery._is_gpu_metric("habanalabs_memory_used_bytes") is True
         assert discovery._is_gpu_metric("habana_hl_utilization") is True
         assert discovery._is_gpu_metric("xpu_memory_used") is True
 
@@ -111,6 +116,16 @@ class TestPriorityAssignment:
         assert discovery._is_high_priority("vllm:num_requests_running") is True
         assert discovery._is_high_priority("vllm:num_requests_waiting") is True
 
+    def test_high_priority_intel(self, discovery):
+        """Test Intel Gaudi high priority metrics."""
+        assert discovery._is_high_priority("habanalabs_utilization") is True
+        assert discovery._is_high_priority("habanalabs_energy") is True
+        assert discovery._is_high_priority("habanalabs_power_mW") is True
+        assert discovery._is_high_priority("habanalabs_temperature_onboard") is True
+        assert discovery._is_high_priority("habanalabs_temperature_onchip") is True
+        assert discovery._is_high_priority("habanalabs_memory_used_bytes") is True
+        assert discovery._is_high_priority("habanalabs_memory_free_bytes") is True
+
     def test_medium_priority(self, discovery):
         """Test medium priority metrics (don't match high patterns)."""
         assert discovery._is_high_priority("DCGM_FI_DEV_NVLINK_BANDWIDTH") is False
@@ -134,6 +149,76 @@ class TestKeywordGeneration:
         assert "gpu temperature" in keywords
         assert "temp" in keywords
 
+    def test_curated_keywords_nvidia_high_priority(self, discovery):
+        """Test curated keywords for all NVIDIA high-priority DCGM metrics."""
+        keywords = discovery._generate_keywords(
+            "DCGM_FI_DEV_MEM_COPY_UTIL",
+            "Memory copy utilization",
+            GPUVendor.NVIDIA
+        )
+        assert "memory copy utilization" in keywords
+        assert "memory bandwidth" in keywords
+
+        keywords = discovery._generate_keywords(
+            "DCGM_FI_DEV_SM_CLOCK",
+            "SM clock frequency",
+            GPUVendor.NVIDIA
+        )
+        assert "sm clock" in keywords
+        assert "gpu clock" in keywords
+
+        keywords = discovery._generate_keywords(
+            "DCGM_FI_DEV_ENC_UTIL",
+            "Encoder utilization",
+            GPUVendor.NVIDIA
+        )
+        assert "encoder utilization" in keywords
+        assert "nvenc" in keywords
+
+    def test_curated_keywords_nvidia_medium_priority(self, discovery):
+        """Test curated keywords for key NVIDIA medium-priority DCGM metrics."""
+        keywords = discovery._generate_keywords(
+            "DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION",
+            "Total energy consumption",
+            GPUVendor.NVIDIA
+        )
+        assert "energy consumption" in keywords
+        assert "total energy" in keywords
+
+        keywords = discovery._generate_keywords(
+            "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE",
+            "Tensor pipe active ratio",
+            GPUVendor.NVIDIA
+        )
+        assert "tensor core active" in keywords
+        assert "tensor utilization" in keywords
+
+    def test_curated_keywords_intel(self, discovery):
+        """Test curated keywords for Intel Gaudi metrics."""
+        keywords = discovery._generate_keywords(
+            "habanalabs_utilization",
+            "Device utilization",
+            GPUVendor.INTEL
+        )
+        assert "gaudi utilization" in keywords
+        assert "hpu utilization" in keywords
+
+        keywords = discovery._generate_keywords(
+            "habanalabs_temperature_onchip",
+            "Temperature on the ASIC in Celsius",
+            GPUVendor.INTEL
+        )
+        assert "chip temperature" in keywords
+        assert "gaudi temp" in keywords
+
+        keywords = discovery._generate_keywords(
+            "habanalabs_memory_used_bytes",
+            "Current used bytes of memory",
+            GPUVendor.INTEL
+        )
+        assert "gaudi memory" in keywords
+        assert "memory usage" in keywords
+
     def test_vendor_keywords(self, discovery):
         """Test vendor keywords are included."""
         nvidia_keywords = discovery._generate_keywords(
@@ -145,8 +230,8 @@ class TestKeywordGeneration:
         assert "gpu" in nvidia_keywords
 
         intel_keywords = discovery._generate_keywords(
-            "habana_hl_utilization",
-            "Habana utilization",
+            "habanalabs_utilization",
+            "Device utilization",
             GPUVendor.INTEL
         )
         assert "intel" in intel_keywords

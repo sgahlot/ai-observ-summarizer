@@ -17,7 +17,7 @@ def korrel8r_query_objects(query: str) -> List[Dict[str, Any]]:
 
     Example query strings (see docs [korrel8r#_query_8](https://korrel8r.github.io/korrel8r/#_query_8)):
       - alert:alert:{"alertname":"PodDisruptionBudgetAtLimit"}
-      - k8s:Pod:{"namespace", "llm-serving", "name":"vllm-inference-*"}
+      - k8s:Pod:{"namespace":"llm-serving", "name":"vllm-inference-*"}
       - loki:log:{"kubernetes.namespace_name":"llm-serving","kubernetes.pod_name":"p-abc"}
       - trace:span:{".k8s.namespace.name":"llm-serving"}
     """
@@ -39,13 +39,33 @@ def korrel8r_query_objects(query: str) -> List[Dict[str, Any]]:
         return err.to_mcp_response()
 
 
+def _extract_pod_from_query(query: str) -> tuple:
+    """Extract namespace and pod name from a k8s:Pod query string.
+
+    Returns (namespace, pod_name) if the query is a k8s:Pod query with both
+    fields, otherwise (None, None).
+    """
+    if not query.startswith("k8s:Pod:"):
+        return None, None
+    try:
+        selector_str = query[len("k8s:Pod:"):]
+        selector = json.loads(selector_str)
+        return selector.get("namespace"), selector.get("name")
+    except (json.JSONDecodeError, AttributeError):
+        return None, None
+
+
 def korrel8r_get_correlated(goals: List[str], query: str) -> List[Dict[str, Any]]:
     """Return correlated objects for a query by leveraging listGoals + query_objects.
 
     Args:
-        goals: Korrel8r goal classes to correlate. Use ['trace:span','log:application','log:infrastructure'] unless users ask for specific domain.
-        query: A single Korrel8r domain query string (same format as query_objects),
-               e.g., "alert:alert:{\"alertname\":\"PodDisruptionBudgetAtLimit\"}"
+        goals: Korrel8r goal classes to correlate.
+            Valid goals: 'alert:alert', 'log:application', 'log:infrastructure', 'trace:span', 'metric:metric'.
+            Default: ['alert:alert','trace:span','log:application','log:infrastructure'].
+        query: A Korrel8r domain query string. Use the domain matching the starting resource:
+            - Pod investigation: "k8s:Pod:{\"namespace\":\"NS\",\"name\":\"POD_NAME\"}"
+            - Alert investigation: "alert:alert:{\"alertname\":\"ALERT_NAME\"}"
+            - Namespace-wide: "k8s:Namespace:{\"name\":\"NS\"}"
     """
     try:
         if not isinstance(goals, list) or not all(isinstance(g, str) for g in goals):
@@ -68,12 +88,35 @@ def korrel8r_get_correlated(goals: List[str], query: str) -> List[Dict[str, Any]
             return err.to_mcp_response()
 
         aggregated = fetch_goal_query_objects(goals, query)
-        # aggregated is now a dict with 'logs' and 'traces' keys
+
+        # Retry with resolved pod names if no results found
+        has_results = any(v for v in aggregated.values() if v)
+        if not has_results:
+            ns, pod_name = _extract_pod_from_query(query)
+            if ns and pod_name:
+                pattern = pod_name if "*" in pod_name else pod_name + "*"
+                resolved_pods = _resolve_pod_names(ns, pattern)
+                seen = {key: set(json.dumps(v, sort_keys=True) for v in vals)
+                       for key, vals in aggregated.items() if vals}
+                for exact_pod in resolved_pods:
+                    selector = json.dumps({"namespace": ns, "name": exact_pod})
+                    retry_query = f"k8s:Pod:{selector}"
+                    logger.info("korrel8r_get_correlated: retrying with resolved pod: %s", exact_pod)
+                    retry_result = fetch_goal_query_objects(goals, retry_query)
+                    for key in retry_result:
+                        if retry_result[key]:
+                            key_seen = seen.setdefault(key, set())
+                            for item in retry_result[key]:
+                                item_json = json.dumps(item, sort_keys=True)
+                                if item_json not in key_seen:
+                                    key_seen.add(item_json)
+                                    aggregated.setdefault(key, []).append(item)
+
         return make_mcp_text_response(json.dumps(aggregated))
     except Exception as e:
-        logger.error("korrel8r_list_goals failed: goals=%s, query=%s, error=%s", goals, query, e)
+        logger.error("korrel8r_get_correlated failed: goals=%s, query=%s, error=%s", goals, query, e)
         err = MCPException(
-            message=f"Korrel8r list goals failed: {str(e)}",
+            message=f"Korrel8r get correlated failed: {str(e)}",
             error_code=MCPErrorCode.RESOURCE_UNAVAILABLE,
             recovery_suggestion="Verify Korrel8r URL, token and service health.",
         )

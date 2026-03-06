@@ -182,19 +182,15 @@ Assigns each metric to one of 17 categories using regex patterns and assigns pri
 
 **Class:** `MetricsOptimizer`
 
-Generates search keywords for each metric using a 5-tier priority system:
+Generates search keywords for each metric via `generate_keywords_for_metric()` (`scripts/metrics/cli.py`, line 279) using a 5-tier priority system. Each metric gets up to 12 keywords. Stopwords and unit terms are filtered out.
 
-| Tier | Source | Example |
-|------|--------|---------|
-| 1 (highest) | Curated keywords for ~18 well-known metrics | `DCGM_FI_DEV_GPU_UTIL` -> `["gpu utilization", "gpu usage", "nvidia utilization"]` |
-| 2 | Type-based keywords | Counter -> `["total", "count", "rate"]` |
-| 3 | Pattern-based expansions (~30 patterns) | `_bytes` -> `["size", "storage"]`; `cpu` -> `["cpu", "processor", "compute"]` |
-| 4 | Keywords extracted from metric name | `etcd_server_leader_changes` -> `["etcd", "server", "leader", "changes"]` |
-| 5 (lowest) | Keywords from help text | Filtered for noise, used as fallback |
+1. **Tier 1 (highest) — Curated keywords** for ~18 well-known metrics. Hardcoded dictionary mapping exact metric names to hand-written keyword lists. E.g., `DCGM_FI_DEV_GPU_UTIL` -> `["gpu utilization", "gpu usage", "nvidia utilization"]`
+2. **Tier 2 — Type-based keywords**: counter -> `["total", "count", "rate"]`, gauge -> `["current", "value"]`, histogram -> `["distribution", "percentile", "p95", "p99"]`
+3. **Tier 3 — Pattern-based expansions** (~30 regex patterns). E.g., anything matching `r"(latency|duration|time)"` gets `["latency", "duration", "slow", "delay", "response time"]`; `_bytes` -> `["size", "storage"]`; `cpu` -> `["cpu", "processor", "compute"]`
+4. **Tier 4 — Name-based extraction**: splits metric name on `_` and `:`, drops short words. E.g., `etcd_server_leader_changes` -> `["etcd", "server", "leader", "changes"]`
+5. **Tier 5 (lowest) — Help text extraction**: extracts words from the metric's Prometheus `HELP` text, filtered for noise, used as fallback
 
-Each metric gets up to 12 keywords. Stopwords and unit terms are filtered out.
-
-When `--exclude-gpu` is used, all GPU-related metrics (`DCGM_*`, `nvidia_*`, `vllm:*`, `habana_*`, `amdgpu_*`, `rocm_*`, etc.) are excluded from the output, producing a base catalog for hybrid mode.
+When `--exclude-gpu` is used, all GPU-related metrics (`DCGM_*`, `nvidia_*`, `vllm:*`, `habanalabs_*`, `habana_*`, `amdgpu_*`, `rocm_*`, etc.) are excluded from the output, producing a base catalog for hybrid mode.
 
 **Output:** `src/mcp_server/data/openshift-metrics-optimized.json`
 
@@ -234,9 +230,33 @@ GPU_METRICS_PREFIX_NVIDIA="my_custom_gpu_,nvidia_smi_"
    - Intel: Habana utilization, memory, temperature, power
    - AMD: GPU busy %, VRAM, temperature
    - vLLM: Latency (e2e, TTFT, ITL), throughput, cache utilization, preemptions
-5. **Generate keywords** for each metric using curated keywords (144 entries) + name-based extraction
+5. **Generate keywords** for each metric (up to 12 per metric) via `_generate_keywords()` (line 266) by combining 4 sources in priority order. When the 12-keyword limit is reached, lower-priority sources are dropped first — curated keywords are always preserved:
+
+   1. **Curated keywords** (59 metric entries, 210 total keywords) — exact metric name -> hand-written keyword list. E.g., `vllm:time_to_first_token_seconds` -> `["ttft", "time to first token", "first token latency"]`. Also handles histogram variants by stripping `_bucket`/`_count`/`_sum` suffixes before lookup.
+   2. **Vendor keywords** — GPU vendor names added based on detected vendor. E.g., NVIDIA -> `["nvidia", "dcgm"]`
+   3. **Name-based extraction** — splits metric name on `_` and `:`, drops short words (<3 chars) and known prefixes (`dcgm`, `fi`, `dev`, `vllm`, etc.). E.g., `DCGM_FI_DEV_GPU_TEMP` -> `["gpu", "temp"]`
+   4. **Help text extraction** — pulls 4+ letter words from the metric's Prometheus `HELP` text via regex, filters 10 stopwords, takes first 10 words. E.g., `"Temperature of the GPU"` -> `["temperature"]`
+
 6. **Fetch metadata** from Prometheus (`/api/v1/metadata`) for type and help text
 7. **Return** `GPUDiscoveryResult` with High and Medium priority lists
+
+### Keyword generation: runtime vs static catalog
+
+The system has two separate keyword generation implementations. Both are deterministic string manipulation — regex matching, name splitting, stopword filtering, and hardcoded dictionaries. No NLP, ML, or semantic understanding is involved.
+
+| Aspect | Runtime GPU Discovery | Static Catalog (Step 3) |
+|--------|----------------------|------------------------|
+| **Module** | `src/core/gpu_metrics_discovery.py` | `scripts/metrics/cli.py` |
+| **Function** | `_generate_keywords()` (line 266) | `generate_keywords_for_metric()` (line 279) |
+| **Curated entries** | 59 metrics / 210 keywords (GPU-focused) | ~18 (well-known Kubernetes/infra metrics) |
+| **Type-based tier** | No | Yes (counter/gauge/histogram -> keywords) |
+| **Pattern expansions** | No | Yes (~30 regex patterns) |
+| **Vendor keywords** | Yes (per detected GPU vendor) | No |
+| **Name-based extraction** | Yes | Yes |
+| **Help text extraction** | Yes (4+ letter words, 10 stopwords) | Yes (filtered for noise, used as fallback) |
+| **Max keywords per metric** | 12 | 12 |
+
+The description/help text is one input but not the primary one. The curated keyword dictionaries and pattern expansions do most of the heavy lifting. A metric with an unusual name or sparse help text will get poor keywords unless someone manually adds it to the curated list.
 
 ### Integration with catalog
 
@@ -254,6 +274,20 @@ If discovery fails or times out (10s default), the catalog continues without GPU
 - `DCGM_FI_DEV_GPU_TEMP` -- GPU temperature
 - `DCGM_FI_DEV_POWER_USAGE` -- Power consumption (watts)
 - `DCGM_FI_DEV_FB_USED` / `FB_FREE` -- Framebuffer (VRAM) usage
+- `DCGM_FI_DEV_MEM_COPY_UTIL` -- Memory copy utilization / bandwidth
+- `DCGM_FI_DEV_ENC_UTIL` / `DEC_UTIL` -- Encoder / decoder utilization (NVENC/NVDEC)
+- `DCGM_FI_DEV_SM_CLOCK` / `MEM_CLOCK` -- SM and memory clock frequencies
+- `DCGM_FI_DEV_MEMORY_TEMP` -- HBM / memory temperature
+
+**Intel Gaudi (High Priority):**
+- `habanalabs_utilization` -- HPU / device utilization %
+- `habanalabs_energy` -- Device energy consumption
+- `habanalabs_power_mW` / `power_default_limit_mW` -- Power usage and cap (milliwatts)
+- `habanalabs_temperature_onchip` / `onboard` -- ASIC and board temperatures
+- `habanalabs_temperature_threshold_gpu` / `threshold_memory` -- Thermal thresholds
+- `habanalabs_memory_used_bytes` / `free_bytes` / `total_bytes` -- HBM usage
+- `habanalabs_pcie_receive_throughput` / `transmit_throughput` -- PCIe bandwidth
+- `habanalabs_pcie_replay_count` -- PCIe errors / retransmits
 
 **vLLM Inference (High Priority):**
 - `vllm:e2e_request_latency_seconds` -- End-to-end request latency (histogram)
