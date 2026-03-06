@@ -318,9 +318,9 @@ class BaseChatBot(ABC):
         the active namespace to ensure the UI dropdown selection takes precedence.
         """
         # If namespace filter already present, replace it with the active namespace
-        if f'namespace="' in query or f"namespace='" in query or 'namespace=~' in query:
+        if f'namespace="' in query or f"namespace='" in query or 'namespace=~' in query or 'namespace!' in query:
             modified = re.sub(
-                r'namespace\s*=~?\s*["\'][^"\']*["\']',
+                r'namespace\s*!?=~?\s*["\'][^"\']*["\']',
                 f'namespace="{namespace}"',
                 query
             )
@@ -503,9 +503,9 @@ class BaseChatBot(ABC):
                 groups.append([msg])
                 i += 1
 
-        # Drop oldest groups until we're at or below target
+        # Drop oldest groups until we're at or below target (keep at least the most recent group)
         total = sum(len(g) for g in groups)
-        while groups and (len(system) + total) > target_messages:
+        while len(groups) > 1 and (len(system) + total) > target_messages:
             dropped = groups.pop(0)
             total -= len(dropped)
 

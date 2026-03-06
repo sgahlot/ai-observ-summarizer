@@ -127,7 +127,7 @@ class GoogleChatBot(BaseChatBot):
             try:
                 # Try to convert to list
                 return [self._convert_proto_to_native(item) for item in value]
-            except:
+            except Exception:
                 pass
 
         # Handle proto message types
@@ -136,7 +136,7 @@ class GoogleChatBot(BaseChatBot):
                 # Convert proto message to dict
                 from google.protobuf.json_format import MessageToDict
                 return MessageToDict(value)
-            except:
+            except Exception:
                 pass
 
         # Handle dictionaries recursively
@@ -391,6 +391,9 @@ class GoogleChatBot(BaseChatBot):
                                             func_call = part.function_call
                                             tool_name = func_call.name
                                             tool_args = self._convert_proto_to_native(dict(func_call.args))
+
+                                            if self._check_tool_loop(tool_name, consecutive_tool_tracker):
+                                                break
 
                                             if progress_callback:
                                                 progress_callback(f"🔧 Using tool: {tool_name}")

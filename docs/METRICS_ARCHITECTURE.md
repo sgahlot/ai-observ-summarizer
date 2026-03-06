@@ -190,7 +190,7 @@ Generates search keywords for each metric via `generate_keywords_for_metric()` (
 4. **Tier 4 — Name-based extraction**: splits metric name on `_` and `:`, drops short words. E.g., `etcd_server_leader_changes` -> `["etcd", "server", "leader", "changes"]`
 5. **Tier 5 (lowest) — Help text extraction**: extracts words from the metric's Prometheus `HELP` text, filtered for noise, used as fallback
 
-When `--exclude-gpu` is used, all GPU-related metrics (`DCGM_*`, `nvidia_*`, `vllm:*`, `habana_*`, `amdgpu_*`, `rocm_*`, etc.) are excluded from the output, producing a base catalog for hybrid mode.
+When `--exclude-gpu` is used, all GPU-related metrics (`DCGM_*`, `nvidia_*`, `vllm:*`, `habanalabs_*`, `habana_*`, `amdgpu_*`, `rocm_*`, etc.) are excluded from the output, producing a base catalog for hybrid mode.
 
 **Output:** `src/mcp_server/data/openshift-metrics-optimized.json`
 

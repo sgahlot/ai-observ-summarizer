@@ -96,6 +96,8 @@ def korrel8r_get_correlated(goals: List[str], query: str) -> List[Dict[str, Any]
             if ns and pod_name:
                 pattern = pod_name if "*" in pod_name else pod_name + "*"
                 resolved_pods = _resolve_pod_names(ns, pattern)
+                seen = {key: set(json.dumps(v, sort_keys=True) for v in vals)
+                       for key, vals in aggregated.items() if vals}
                 for exact_pod in resolved_pods:
                     selector = json.dumps({"namespace": ns, "name": exact_pod})
                     retry_query = f"k8s:Pod:{selector}"
@@ -103,13 +105,18 @@ def korrel8r_get_correlated(goals: List[str], query: str) -> List[Dict[str, Any]
                     retry_result = fetch_goal_query_objects(goals, retry_query)
                     for key in retry_result:
                         if retry_result[key]:
-                            aggregated.setdefault(key, []).extend(retry_result[key])
+                            key_seen = seen.setdefault(key, set())
+                            for item in retry_result[key]:
+                                item_json = json.dumps(item, sort_keys=True)
+                                if item_json not in key_seen:
+                                    key_seen.add(item_json)
+                                    aggregated.setdefault(key, []).append(item)
 
         return make_mcp_text_response(json.dumps(aggregated))
     except Exception as e:
-        logger.error("korrel8r_list_goals failed: goals=%s, query=%s, error=%s", goals, query, e)
+        logger.error("korrel8r_get_correlated failed: goals=%s, query=%s, error=%s", goals, query, e)
         err = MCPException(
-            message=f"Korrel8r list goals failed: {str(e)}",
+            message=f"Korrel8r get correlated failed: {str(e)}",
             error_code=MCPErrorCode.RESOURCE_UNAVAILABLE,
             recovery_suggestion="Verify Korrel8r URL, token and service health.",
         )

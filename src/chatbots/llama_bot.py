@@ -8,9 +8,11 @@ import json
 import re
 from typing import Optional, List, Dict, Any, Callable
 
+from openai import OpenAI
+
 from .base import BaseChatBot
 from chatbots.tool_executor import ToolExecutor
-from core.config import LLAMA_STACK_URL, LLM_API_TOKEN
+from core.config import LLAMA_STACK_URL, LLM_API_TOKEN, LLM_TIMEOUT_SECONDS
 from common.pylogger import get_python_logger
 
 logger = get_python_logger()
@@ -75,16 +77,10 @@ class LlamaChatBot(BaseChatBot):
     ):
         super().__init__(model_name, api_key, tool_executor)
 
-        # Import OpenAI SDK (LlamaStack is OpenAI-compatible)
-        try:
-            from openai import OpenAI
-            self.client = OpenAI(
-                base_url=f"{LLAMA_STACK_URL}/chat/completions".replace("/chat/completions", ""),
-                api_key=LLM_API_TOKEN or "dummy"
-            )
-        except ImportError:
-            logger.error("OpenAI SDK not installed. Install with: pip install openai")
-            self.client = None
+        self.client = OpenAI(
+            base_url=LLAMA_STACK_URL.removesuffix("/chat/completions"),
+            api_key=LLM_API_TOKEN or "dummy"
+        )
 
     def _get_model_specific_instructions(self) -> str:
         """No separate model-specific block — merged into _get_base_prompt."""
@@ -195,6 +191,8 @@ class LlamaChatBot(BaseChatBot):
                 if namespace:
                     resolved_hint = resolved_hint.replace('<namespace>', namespace)
                 else:
+                    # Remove namespace filter clauses entirely when no namespace is set
+                    resolved_hint = re.sub(r'namespace="<namespace>",?\s*', '', resolved_hint)
                     resolved_hint = resolved_hint.replace('<namespace>', '')
                 logger.info("Smart nudge matched category: tool=%s", tool_name)
                 nudge_text = (
@@ -212,7 +210,7 @@ class LlamaChatBot(BaseChatBot):
 
     # Patterns to extract namespace and pod from user queries for direct tool execution
     _NS_RE = re.compile(
-        r'(?:in|namespace|ns)[:\s]+([a-z0-9][-a-z0-9]*)',
+        r'(?:in\s+(?:namespace|ns)|namespace|ns)[:\s]+([a-z0-9][-a-z0-9]*)',
         re.IGNORECASE
     )
     _POD_RE = re.compile(
@@ -302,6 +300,7 @@ class LlamaChatBot(BaseChatBot):
                 tools=openai_tools,
                 tool_choice="none",
                 temperature=0,
+                timeout=LLM_TIMEOUT_SECONDS,
             )
             summary = summary_response.choices[0].message.content or ''
             if summary.strip():
@@ -367,9 +366,6 @@ class LlamaChatBot(BaseChatBot):
         conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """Chat with Llama using LlamaStack OpenAI-compatible API."""
-        if not self.client:
-            return "Error: OpenAI SDK not installed. Please install it with: pip install openai"
-
         try:
             # Create system prompt
             system_prompt = self._create_system_prompt(namespace)
@@ -398,6 +394,7 @@ class LlamaChatBot(BaseChatBot):
             max_iterations = 30
             iteration = 0
             nudge_retried = False
+            has_called_tools = False
             tool_choice = "auto"
             consecutive_tool_tracker = {"name": None, "count": 0}
 
@@ -414,7 +411,8 @@ class LlamaChatBot(BaseChatBot):
                     messages=messages,
                     tools=openai_tools,
                     tool_choice=tool_choice,
-                    temperature=0
+                    temperature=0,
+                    timeout=LLM_TIMEOUT_SECONDS,
                 )
 
                 # Reset to auto after each call so forced tool calls don't persist
@@ -458,6 +456,7 @@ class LlamaChatBot(BaseChatBot):
                 # LlamaStack may return finish_reason='stop' even with tool calls
                 # when tool_choice forces a specific function.
                 if message.tool_calls:
+                    has_called_tools = True
                     logger.info(f"🤖 LlamaStack requesting {len(message.tool_calls)} tool(s)")
 
                     tool_results = []
@@ -508,14 +507,15 @@ class LlamaChatBot(BaseChatBot):
                     final_response = message.content or ''
 
                     if not nudge_retried:
-                        # Guard 1: Fabrication — model returned stop on iteration 1
-                        # without ever calling tools (likely fabricated response)
-                        if iteration == 1:
+                        # Guard 1: Fabrication — model returned text without
+                        # ever calling tools (likely fabricated response)
+                        if not has_called_tools:
                             nudge_text, matched_tool = self._get_nudge_for_query(user_question, namespace)
                             logger.warning(
-                                "Llama returned finish_reason=stop on iteration 1 "
-                                "without calling any tools — possible fabrication. "
-                                "Nudging model with category-specific hint."
+                                "Llama returned text without calling any tools "
+                                "(iteration %d) — possible fabrication. "
+                                "Nudging model with category-specific hint.",
+                                iteration
                             )
                             nudge_retried = True
                             tool_choice = "required"
