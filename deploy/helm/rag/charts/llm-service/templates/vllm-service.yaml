@@ -1,0 +1,21 @@
+{{- $models := include "llm-service.mergeModels" . | fromJson }}
+{{- range $key, $model := $models }}
+{{- if and $model.enabled (not $model.url) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $key }}-vllm
+  labels:
+    app: {{ $key }}-vllm
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: isvc.{{ $key }}-predictor
+{{- end }}
+{{- end }}
