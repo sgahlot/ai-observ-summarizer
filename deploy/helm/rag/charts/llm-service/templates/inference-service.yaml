@@ -1,0 +1,112 @@
+{{- $root := . }}
+{{- $models := include "llm-service.mergeModels" . | fromJson }}
+{{- range $key, $model := $models }}
+{{- if and $model.enabled (not $model.url) }}
+{{- $modelDevice := $model.device | default $root.Values.device }}
+{{- $deviceConfig := index $root.Values.deviceConfigs $modelDevice }}
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: {{ $key }}
+  annotations:
+    openshift.io/display-name: {{ $key }}
+    serving.knative.openshift.io/enablePassthrough: "true"
+    sidecar.istio.io/inject: "true"
+    sidecar.istio.io/rewriteAppHTTPProbers: "true"
+    {{- if $root.Values.rawDeploymentMode }}
+    serving.kserve.io/deploymentMode: RawDeployment
+    {{- end }}
+  labels:
+    opendatahub.io/dashboard: "true"
+    networking.knative.dev/visibility: "cluster-local"
+    device: {{ $modelDevice }}
+spec:
+  predictor:
+    maxReplicas: {{ $model.maxReplicas | default 1 }}
+    minReplicas: {{ $model.minReplicas | default 1 }}
+    model:
+      modelFormat:
+        name: vLLM
+      name: ""
+      {{- if hasKey $model "resources" }}
+      resources:
+        {{- if or (eq $modelDevice "gpu") (eq $modelDevice "hpu") (eq $modelDevice "gpu-amd") }}
+          {{- $acceleratorType := $deviceConfig.acceleratorType }}
+          {{- $acceleratorCount := $model.accelerators | default "1" }}
+          {{- $customResources := $model.resources | deepCopy }}
+          {{- if $acceleratorType }}
+            {{- if not (hasKey $customResources.limits $acceleratorType) }}
+              {{- $_ := set $customResources.limits $acceleratorType $acceleratorCount }}
+            {{- end }}
+            {{- if not (hasKey $customResources.requests $acceleratorType) }}
+              {{- $_ := set $customResources.requests $acceleratorType $acceleratorCount }}
+            {{- end }}
+          {{- end }}
+          {{- toYaml $customResources | nindent 8 }}
+        {{- else }}
+          {{- toYaml $model.resources | nindent 8 }}
+        {{- end }}
+      {{- else if or (eq $modelDevice "gpu") (eq $modelDevice "hpu") (eq $modelDevice "gpu-amd") }}
+      resources:
+        {{- $acceleratorType := $deviceConfig.acceleratorType }}
+        {{- $acceleratorCount := $model.accelerators | default "1" }}
+        limits:
+          cpu: "2"
+          memory: 8Gi
+          {{- if $acceleratorType }}
+          {{ $acceleratorType }}: {{ $acceleratorCount | quote }}
+          {{- end }}
+          {{- if $model.storageSize }}
+          ephemeral-storage: {{ $model.storageSize | default "50Gi" }}
+          {{- end }}
+        requests:
+          cpu: "1"
+          memory: 4Gi
+          {{- if $acceleratorType }}
+          {{ $acceleratorType }}: {{ $acceleratorCount | quote }}
+          {{- end }}
+          {{- if $model.storageSize }}
+          ephemeral-storage: {{ $model.storageSize | default "50Gi" }}
+          {{- end }}
+      {{- else }}
+      resources:
+        limits:
+          cpu: "2"
+          memory: 8Gi
+          {{- if $model.storageSize }}
+          ephemeral-storage: {{ $model.storageSize | default "50Gi" }}
+          {{- end }}
+        requests:
+          cpu: "1"
+          memory: 4Gi
+          {{- if $model.storageSize }}
+          ephemeral-storage: {{ $model.storageSize | default "50Gi" }}
+          {{- end }}
+      {{- end }}
+      runtime: {{ $root.Values.servingRuntime.name }}-{{ $modelDevice }}
+      args:
+      - --model
+      - {{ $model.id }}
+      - --served-model-name
+      - {{ $model.id }}
+      {{- with $model.args }}
+        {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with $model.env }}
+      env:
+        {{- toYaml . | nindent 6 }}
+      {{- end }}
+    {{- $tolerations := list }}
+    {{- if hasKey $model "tolerations" }}
+      {{- $tolerations = $model.tolerations }}
+    {{- else if $deviceConfig.tolerations }}
+      {{- $tolerations = $deviceConfig.tolerations }}
+    {{- end }}
+    {{- if $tolerations }}
+    tolerations:
+    {{- toYaml $tolerations | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}
+

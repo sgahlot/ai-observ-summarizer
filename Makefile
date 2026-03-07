@@ -516,7 +516,7 @@ install-rag: namespace
 
 	@echo "Installing $(RAG_CHART) helm chart (backend services only)"
 	@cd deploy/helm && helm -n $(NAMESPACE) upgrade --install $(RAG_CHART) $(RAG_CHART) \
-	--atomic --timeout 25m \
+	--timeout 60m \
 	$(LLM_SERVICE_ARGS) \
 	$(LLAMA_STACK_ARGS) \
 	$(PGVECTOR_ARGS)
