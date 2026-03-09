@@ -40,7 +40,15 @@ class Llama70BChatBot(BaseChatBot):
         return None
 
     def _extract_model_name(self) -> str:
-        """LlamaStack expects the full model name including provider prefix."""
+        """Resolve the model name registered in LlamaStack.
+
+        LlamaStack 0.5.x registers models with a provider-prefixed ID
+        (e.g., ``provider-key/meta-llama/Llama-3.3-70B-Instruct``).
+        Query ``/v1/models`` once and cache the resolved name so the
+        OpenAI SDK sends the correct model ID on each request.
+        """
+        if self._resolved_model_name is not None:
+            return self._resolved_model_name
         return self.model_name
 
     def __init__(
@@ -51,10 +59,47 @@ class Llama70BChatBot(BaseChatBot):
     ):
         super().__init__(model_name, api_key, tool_executor)
 
+        self._resolved_model_name: Optional[str] = None
+        base_url = LLAMA_STACK_URL.removesuffix("/chat/completions")
         self.client = OpenAI(
-            base_url=LLAMA_STACK_URL.removesuffix("/chat/completions"),
+            base_url=base_url,
             api_key=LLM_API_TOKEN or "dummy"
         )
+
+        # Resolve provider-prefixed model name from LlamaStack
+        self._resolve_model_name(base_url)
+
+    def _resolve_model_name(self, base_url: str) -> None:
+        """Query LlamaStack /v1/models to find the provider-prefixed model ID.
+
+        LlamaStack 0.5.x registers models as ``<provider-key>/<model-id>``
+        (e.g., ``llama-3-3-70b-instruct-quantization-fp8/meta-llama/Llama-3.3-70B-Instruct``).
+        This method finds the registered ID that contains ``self.model_name``
+        and caches it for use in API calls.
+        """
+        try:
+            import requests as req
+            models_url = f"{base_url.rstrip('/')}/models"
+            resp = req.get(models_url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json().get("data", [])
+                for model in data:
+                    model_id = model.get("id", "")
+                    if self.model_name in model_id:
+                        self._resolved_model_name = model_id
+                        logger.info(
+                            "Resolved model name: %s -> %s",
+                            self.model_name, model_id,
+                        )
+                        return
+                logger.warning(
+                    "Model '%s' not found in LlamaStack /v1/models. "
+                    "Available: %s",
+                    self.model_name,
+                    [m.get("id") for m in data],
+                )
+        except Exception as e:
+            logger.warning("Failed to resolve model name from LlamaStack: %s", e)
 
     def _get_model_specific_instructions(self) -> str:
         """70B-specific tool-calling and response format instructions."""

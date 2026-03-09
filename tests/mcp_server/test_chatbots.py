@@ -117,8 +117,9 @@ def test_factory_creates_llama_bot(mock_mcp_tools):
     assert bot.model_name == LLAMA_3_1_8B
 
 
+@patch("chatbots.llama70b_bot.Llama70BChatBot._resolve_model_name")
 @patch("chatbots.factory.RAG_AVAILABLE", True)
-def test_factory_creates_llama_70b_bot(mock_mcp_tools):
+def test_factory_creates_llama_70b_bot(_mock_resolve, mock_mcp_tools):
     """Test that factory creates Llama70BChatBot for Llama 70B models."""
     from chatbots import create_chatbot
     from chatbots.llama70b_bot import Llama70BChatBot
@@ -288,7 +289,8 @@ class TestToolResultTruncation:
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         assert bot._get_max_tool_result_length() == 8000
 
-    def test_llama_70b_bot_max_length(self, mock_mcp_tools):
+    @patch("chatbots.llama70b_bot.Llama70BChatBot._resolve_model_name")
+    def test_llama_70b_bot_max_length(self, _mock_resolve, mock_mcp_tools):
         """Test Llama70BChatBot has correct max length (10K)."""
         from chatbots.llama70b_bot import Llama70BChatBot
 
@@ -771,7 +773,8 @@ class TestKorrel8rToolIntegration:
         assert normalized == 'alert:alert:{"alertname":"Test"}'
 
 
-    def test_normalization_available_to_all_bots(self, mock_mcp_tools):
+    @patch("chatbots.llama70b_bot.Llama70BChatBot._resolve_model_name")
+    def test_normalization_available_to_all_bots(self, _mock_resolve, mock_mcp_tools):
         """Test that normalization method is available to all bot types."""
         from chatbots import (
             LlamaChatBot,
@@ -1397,24 +1400,25 @@ class TestToolLoopDetection:
         assert bot._MAX_CONSECUTIVE_SAME_TOOL == 5
 
 
+@patch("chatbots.llama70b_bot.Llama70BChatBot._resolve_model_name")
 class TestLlama70BChatBot:
     """Test Llama70BChatBot configuration and behavior."""
 
-    def test_max_tool_result_length(self, mock_mcp_tools):
+    def test_max_tool_result_length(self, _mock_resolve, mock_mcp_tools):
         """Test Llama70BChatBot has correct max length (10K)."""
         from chatbots.llama70b_bot import Llama70BChatBot
 
         bot = Llama70BChatBot(LLAMA_3_3_70B, tool_executor=mock_mcp_tools)
         assert bot._get_max_tool_result_length() == 10000
 
-    def test_tool_allowlist_is_none(self, mock_mcp_tools):
+    def test_tool_allowlist_is_none(self, _mock_resolve, mock_mcp_tools):
         """Test Llama70BChatBot gets all tools (no restriction)."""
         from chatbots.llama70b_bot import Llama70BChatBot
 
         bot = Llama70BChatBot(LLAMA_3_3_70B, tool_executor=mock_mcp_tools)
         assert bot._get_tool_allowlist() is None
 
-    def test_model_specific_instructions(self, mock_mcp_tools):
+    def test_model_specific_instructions(self, _mock_resolve, mock_mcp_tools):
         """Test Llama70BChatBot has correct model-specific instructions."""
         from chatbots.llama70b_bot import Llama70BChatBot
 
@@ -1427,14 +1431,14 @@ class TestLlama70BChatBot:
         assert "search_metrics_by_category" in instructions
         assert "function calling API" in instructions
 
-    def test_extract_model_name_returns_full_name(self, mock_mcp_tools):
+    def test_extract_model_name_returns_full_name(self, _mock_resolve, mock_mcp_tools):
         """Test Llama70BChatBot returns full model name (LlamaStack needs prefix)."""
         from chatbots.llama70b_bot import Llama70BChatBot
 
         bot = Llama70BChatBot(LLAMA_3_3_70B, tool_executor=mock_mcp_tools)
         assert bot._extract_model_name() == LLAMA_3_3_70B
 
-    def test_api_key_returns_none(self, mock_mcp_tools):
+    def test_api_key_returns_none(self, _mock_resolve, mock_mcp_tools):
         """Test Llama70BChatBot returns None for API key (local model)."""
         from chatbots.llama70b_bot import Llama70BChatBot
 
@@ -1442,7 +1446,7 @@ class TestLlama70BChatBot:
         assert bot._get_api_key() is None
         assert bot.api_key is None
 
-    def test_uses_full_base_class_prompt(self, mock_mcp_tools):
+    def test_uses_full_base_class_prompt(self, _mock_resolve, mock_mcp_tools):
         """Test Llama70BChatBot uses the full base class prompt (not compact)."""
         from chatbots.llama70b_bot import Llama70BChatBot
 
@@ -1455,7 +1459,7 @@ class TestLlama70BChatBot:
         assert "Response Format" in prompt
         assert "Tool Selection Rules" in prompt
 
-    def test_detect_text_tool_calls_json_pattern(self, mock_mcp_tools):
+    def test_detect_text_tool_calls_json_pattern(self, _mock_resolve, mock_mcp_tools):
         """Test that JSON-style tool call detection works."""
         from chatbots.llama70b_bot import Llama70BChatBot
 
@@ -1465,7 +1469,7 @@ class TestLlama70BChatBot:
 
         assert bot._detect_text_tool_calls(text, tool_names) is True
 
-    def test_detect_text_tool_calls_no_false_positive(self, mock_mcp_tools):
+    def test_detect_text_tool_calls_no_false_positive(self, _mock_resolve, mock_mcp_tools):
         """Test that mentioning a tool name in prose does NOT trigger detection."""
         from chatbots.llama70b_bot import Llama70BChatBot
 
@@ -1523,8 +1527,9 @@ class TestLlamaModelSizeDetection:
         assert isinstance(bot, LlamaChatBot)
         assert bot.model_name == LLAMA_3_1_8B
 
+    @patch("chatbots.llama70b_bot.Llama70BChatBot._resolve_model_name")
     @patch("chatbots.factory.RAG_AVAILABLE", True)
-    def test_factory_routes_70b_to_llama70b_chatbot(self, mock_mcp_tools):
+    def test_factory_routes_70b_to_llama70b_chatbot(self, _mock_resolve, mock_mcp_tools):
         """Test that factory creates Llama70BChatBot for 70B models."""
         from chatbots import create_chatbot
         from chatbots.llama70b_bot import Llama70BChatBot
