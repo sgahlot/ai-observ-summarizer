@@ -23,6 +23,7 @@ Architecture:
     - OpenAIChatBot: OpenAI GPT implementation
     - GoogleChatBot: Google Gemini implementation
     - LlamaChatBot: Local Llama models via LlamaStack
+    - Llama70BChatBot: 70B Llama models with clean chat loop
     - DeterministicChatBot: Fallback for small models
     - create_chatbot(): Factory function to create appropriate bot
 """
@@ -47,6 +48,9 @@ def __getattr__(name):
     elif name == 'LlamaChatBot':
         from .llama_bot import LlamaChatBot
         return LlamaChatBot
+    elif name == 'Llama70BChatBot':
+        from .llama70b_bot import Llama70BChatBot
+        return Llama70BChatBot
     elif name == 'DeterministicChatBot':
         from .deterministic_bot import DeterministicChatBot
         return DeterministicChatBot
@@ -65,6 +69,7 @@ __all__ = [
     'OpenAIChatBot',
     'GoogleChatBot',
     'LlamaChatBot',
+    'Llama70BChatBot',
     'DeterministicChatBot',
 
     # Factory function (recommended)

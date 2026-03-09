@@ -13,6 +13,7 @@ from .anthropic_bot import AnthropicChatBot
 from .openai_bot import OpenAIChatBot
 from .google_bot import GoogleChatBot
 from .llama_bot import LlamaChatBot
+from .llama70b_bot import Llama70BChatBot
 from .deterministic_bot import DeterministicChatBot
 from common.pylogger import get_python_logger
 from core.config import RAG_AVAILABLE
@@ -74,15 +75,18 @@ def create_chatbot(
         │            │          │                          │
     ┌───▼─────┐  ┌───▼───┐  ┌───▼───┐         ┌────────────┼────────┐
     │Anthropic│  │OpenAI │  │Google │         │            │        │
-    │ChatBot  │  │ChatBot│  │ChatBot│     ┌───▼───┐  ┌───▼───┐  ┌───▼───┐
-    └─────────┘  └───────┘  └───────┘     │Llama  │  │Llama  │  │Unknown│
-                                          │3.1/3.3│  │3.2    │  │Model  │
-                                          └───┬───┘  └───┬───┘  └───┬───┘
-                                              │          │          │
-                                          ┌───▼───┐  ┌───▼───┐  ┌───▼───┐
-                                          │Llama  │  │Determ │  │Determ │
-                                          │ChatBot│  │ChatBot│  │ChatBot│
-                                          └───────┘  └───────┘  └───────┘
+    │ChatBot  │  │ChatBot│  │ChatBot│         │            │        │
+    └─────────┘  └───────┘  └───────┘     ┌───▼────────┐  │3.2  │  │Unknown│
+                                          │Llama 3.1/3.3│ └──┬──┘  └───┬───┘
+                                          └───┬────────┘    │          │
+                                      ┌───────┴──────┐  ┌───▼───┐  ┌───▼───┐
+                                      │              │  │Determ │  │Determ │
+                                  ┌───▼────┐  ┌──────▼┐ │ChatBot│  │ChatBot│
+                                  │Llama   │  │Llama  │ └───────┘  └───────┘
+                                  │70BChat │  │Chat   │
+                                  │Bot     │  │Bot    │
+                                  │(70B)   │  │(8B)   │
+                                  └────────┘  └───────┘
 
     Model Name Patterns:
         External Providers:
@@ -91,7 +95,8 @@ def create_chatbot(
             - Google: "google/", "gemini"
 
         Local Models (Llama):
-            - Llama 3.1/3.3: Uses LlamaChatBot (tool calling capable)
+            - Llama 3.1/3.3 70B: Uses Llama70BChatBot (clean loop, no guardrails)
+            - Llama 3.1 8B: Uses LlamaChatBot (tool calling with guardrails)
             - Llama 3.2: Uses DeterministicChatBot (67% accuracy, deterministic parsing)
             - Unknown: Uses DeterministicChatBot (fallback for safety)
     """
@@ -147,19 +152,26 @@ def create_chatbot(
         
         # Local models - detect Llama version and create appropriate bot
         LLAMA_MODEL_PATTERNS = {
-            "llama.3.1": (LlamaChatBot, "tool calling capable", ["8b", "70b"]),
-            "llama.3.3": (LlamaChatBot, "tool calling capable", ["70b"]),
-            "llama.3.2": (DeterministicChatBot, "67% tool calling accuracy - using deterministic parsing", None),
+            "llama.3.1": [
+                (Llama70BChatBot, "70B optimized (clean loop)", ["70b"]),
+                (LlamaChatBot, "8B tool calling capable", ["8b"]),
+            ],
+            "llama.3.3": [
+                (Llama70BChatBot, "70B optimized (clean loop)", ["70b"]),
+            ],
+            "llama.3.2": [
+                (DeterministicChatBot, "67% tool calling accuracy - using deterministic parsing", None),
+            ],
         }
         # Local models - check if they support reliable tool calling
         model_lower = model_name.lower().replace("-", ".")  # Replace "-" with "."
 
-        for model, patterns in LLAMA_MODEL_PATTERNS.items():
-            bot_class, model_capability, sizes = patterns
-            if model in model_lower:
-                if sizes is None or any(size in model_lower for size in sizes):
-                    logger.info(f"Creating {bot_class.__name__} for {model_name} ({model_capability})")
-                    return bot_class(model_name, api_key, tool_executor)
+        for model_family, entries in LLAMA_MODEL_PATTERNS.items():
+            if model_family in model_lower:
+                for bot_class, model_capability, sizes in entries:
+                    if sizes is None or any(size in model_lower for size in sizes):
+                        logger.info(f"Creating {bot_class.__name__} for {model_name} ({model_capability})")
+                        return bot_class(model_name, api_key, tool_executor)
 
         # Unknown local models - use deterministic parsing for safety
         logger.info(f"Creating DeterministicChatBot for {model_name} (unknown capability - using deterministic parsing)")
