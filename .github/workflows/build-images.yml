@@ -63,7 +63,7 @@ jobs:
         if: ${{ matrix.needs_build == true && matrix.build_target == 'plugin' }}
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'yarn'
           cache-dependency-path: openshift-plugin/yarn.lock
 
