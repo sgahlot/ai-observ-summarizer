@@ -20,6 +20,7 @@ import {
   PlusCircleIcon,
   CogIcon,
   ListIcon,
+  InfoCircleIcon,
 } from '@patternfly/react-icons';
 
 import { AIModelState } from './types/models';
@@ -30,6 +31,7 @@ import { APIKeysTab } from './tabs/APIKeysTab';
 import { AddModelTab } from './tabs/AddModelTab';
 import { ChatSettingsTab } from './tabs/ChatSettingsTab';
 import { MetricsSettingsTab } from './tabs/MetricsSettingsTab';
+import { AboutTab } from './tabs/AboutTab';
 import { isDevMode } from '../../services/devCredentials';
 import { useChatSettings } from '../../hooks/useChatSettings';
 
@@ -271,6 +273,8 @@ export const AIModelSettings: React.FC<AIModelSettingsProps> = ({
         );
       case 'metrics':
         return <MetricsSettingsTab />;
+      case 'about':
+        return <AboutTab />;
       default:
         return null;
     }
@@ -472,6 +476,19 @@ export const AIModelSettings: React.FC<AIModelSettingsProps> = ({
             aria-label="Metrics"
           >
             {state.activeTab === 'metrics' && renderTabContent()}
+          </Tab>
+
+          <Tab
+            eventKey="about"
+            title={
+              <TabTitleText>
+                <InfoCircleIcon style={{ marginRight: '8px' }} />
+                About
+              </TabTitleText>
+            }
+            aria-label="About"
+          >
+            {state.activeTab === 'about' && renderTabContent()}
           </Tab>
         </Tabs>
       </div>
