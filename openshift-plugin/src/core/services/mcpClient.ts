@@ -323,35 +323,6 @@ export interface AlertInfo {
   labels?: Record<string, string>;
 }
 
-// ============ Version Info ============
-
-export interface VersionInfo {
-  mcp_server: string;
-}
-
-/**
- * Fetch version info from the MCP server
- */
-export async function fetchVersionInfo(): Promise<VersionInfo | null> {
-  try {
-    const versionUrl = MCP_SERVER_URL.replace(/\/mcp$/, '/version');
-    const response = await fetch(versionUrl, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-    });
-
-    if (!response.ok) {
-      console.warn('Version endpoint failed:', response.status);
-      return null;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Failed to fetch version info:', error);
-    return null;
-  }
-}
-
 /**
  * Health check for MCP server
  */

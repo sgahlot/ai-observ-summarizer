@@ -84,17 +84,6 @@ async def get_config():
     )
 
 
-@app.get("/version")
-async def get_version():
-    """Return deployed component versions."""
-    return JSONResponse(
-        status_code=200,
-        content={
-            "mcp_server": settings.APP_VERSION,
-        },
-    )
-
-
 # === REPORT ENDPOINTS (moved from metrics-api) ===
 
 @app.get("/download_report/{report_id}")

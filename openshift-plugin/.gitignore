@@ -27,9 +27,6 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# Generated files
-src/generated/
-
 # Test coverage
 coverage/
 

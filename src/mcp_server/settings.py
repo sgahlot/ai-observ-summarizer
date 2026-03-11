@@ -8,7 +8,6 @@ class Settings(BaseSettings):
     MCP_HOST: str = Field(default="0.0.0.0")
     MCP_PORT: int = Field(default=8085)
     PYTHON_LOG_LEVEL: str = Field(default="INFO")
-    APP_VERSION: str = Field(default="dev")
 
     # Transport and SSL - use "http" for simple JSON-RPC over HTTP
     MCP_TRANSPORT_PROTOCOL: str = Field(default="http")  # "http" | "sse" | "streamable-http"

@@ -328,10 +328,6 @@ build-mcp-server:
 .PHONY: build-console-plugin
 build-console-plugin:
 	@echo "🔨 Building OpenShift Console Plugin..."
-	@echo "  → Generating build version ($(VERSION))..."
-	@mkdir -p openshift-plugin/src/generated
-	@echo "// Auto-generated at build time by Makefile. Do not edit manually." > openshift-plugin/src/generated/buildVersion.ts
-	@echo "export const UI_BUILD_VERSION = '$(VERSION)';" >> openshift-plugin/src/generated/buildVersion.ts
 	@echo "  → Installing yarn dependencies..."
 	@cd openshift-plugin && yarn install --frozen-lockfile
 	@echo "  → Building plugin assets..."
@@ -346,10 +342,6 @@ build-console-plugin:
 .PHONY: build-react-ui
 build-react-ui:
 	@echo "🔨 Building React UI standalone application..."
-	@echo "  → Generating build version ($(VERSION))..."
-	@mkdir -p openshift-plugin/src/generated
-	@echo "// Auto-generated at build time by Makefile. Do not edit manually." > openshift-plugin/src/generated/buildVersion.ts
-	@echo "export const UI_BUILD_VERSION = '$(VERSION)';" >> openshift-plugin/src/generated/buildVersion.ts
 	@echo "  → Installing yarn dependencies..."
 	@cd openshift-plugin && yarn install --frozen-lockfile
 	@echo "  → Building React UI assets..."
@@ -692,10 +684,6 @@ clean:
 	fi; \
 	if ! $(BUILD_TOOL) rmi $(MCP_SERVER_IMAGE):$(VERSION) 2>/dev/null; then \
 		echo "⚠️  Could not remove $(MCP_SERVER_IMAGE):$(VERSION) (may not exist)"; \
-		ERRORS=$$((ERRORS + 1)); \
-	fi; \
-	if ! $(BUILD_TOOL) rmi $(REACT_UI_IMAGE):$(VERSION) 2>/dev/null; then \
-		echo "⚠️  Could not remove $(REACT_UI_IMAGE):$(VERSION) (may not exist)"; \
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	if ! $(BUILD_TOOL) rmi $(CONSOLE_PLUGIN_IMAGE):$(VERSION) 2>/dev/null; then \

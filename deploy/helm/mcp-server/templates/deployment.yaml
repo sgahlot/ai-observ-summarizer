@@ -37,8 +37,6 @@ spec:
               value: "{{ .Values.env.PYTHON_LOG_LEVEL }}"
             - name: DEV_MODE
               value: "{{ .Values.env.DEV_MODE }}"
-            - name: APP_VERSION
-              value: "{{ .Values.image.tag }}"
             {{- if .Values.tls.enabled }}
             - name: MCP_SSL_KEYFILE
               value: "/run/secrets/tls/tls.key"

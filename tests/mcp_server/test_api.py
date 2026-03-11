@@ -107,36 +107,6 @@ def test_report_endpoints_in_health():
     assert "GET /download_report/{report_id}" in report_endpoints
 
 
-def test_version_endpoint_returns_app_version():
-    api = _reload_api_with_mocks()
-    client = TestClient(api.app)
-
-    resp = client.get("/version")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "mcp_server" in data
-    assert resp.headers["content-type"].startswith("application/json")
-
-
-def test_version_endpoint_default_is_dev():
-    api = _reload_api_with_mocks()
-    client = TestClient(api.app)
-
-    resp = client.get("/version")
-    assert resp.status_code == 200
-    assert resp.json()["mcp_server"] == "dev"
-
-
-def test_version_endpoint_reflects_setting():
-    api = _reload_api_with_mocks()
-    client = TestClient(api.app)
-
-    with patch.object(api.settings, "APP_VERSION", "1.5.0"):
-        resp = client.get("/version")
-        assert resp.status_code == 200
-        assert resp.json()["mcp_server"] == "1.5.0"
-
-
 def test_api_module_imports():
     """Test that the api module can import report functions correctly"""
     try:
