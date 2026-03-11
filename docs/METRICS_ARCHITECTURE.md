@@ -759,6 +759,7 @@ make install-mcp-server NAMESPACE=my-ns GPU_PREFIX_NVIDIA="my_custom_gpu_"
 | `GPU_METRICS_PREFIX_INTEL` | Additional Intel metric prefixes (comma-separated) | (empty) |
 | `GPU_METRICS_PREFIX_AMD` | Additional AMD metric prefixes (comma-separated) | (empty) |
 | `DISCOVERY_TIMEOUT_SECONDS` | Timeout for GPU discovery and catalog validation (seconds) | `10.0` |
+| `APP_VERSION` | Deployed MCP server version (exposed via `/version` endpoint) | `dev` |
 
 ### MetricsCatalog initialization parameters
 
