@@ -34,6 +34,7 @@ class OpenAIChatBot(BaseChatBot):
         super().__init__(model_name, api_key, tool_executor)
 
         # Import OpenAI SDK
+        self._sdk_import_failed = False
         try:
             from openai import OpenAI
             # Only create client if API key is provided
@@ -44,6 +45,7 @@ class OpenAIChatBot(BaseChatBot):
                 self.client = None
         except ImportError:
             logger.error("OpenAI SDK not installed. Install with: pip install openai")
+            self._sdk_import_failed = True
             self.client = None
 
     def _get_model_specific_instructions(self) -> str:
@@ -52,13 +54,20 @@ class OpenAIChatBot(BaseChatBot):
 
 **GPT-SPECIFIC INSTRUCTIONS:**
 
-**Your Strengths:**
-- Strong general-purpose performance
-- Reliable tool calling with function API
-- Good balance of speed and accuracy
+**MANDATORY — Metric Discovery Before Queries:**
+You MUST call `search_metrics` or `search_metrics_by_category` BEFORE calling
+`execute_promql`. NEVER guess metric names — they are non-obvious
+(e.g., `vllm:gpu_cache_usage_perc` not `vllm:kv_cache_usage_percentage`,
+`DCGM_FI_DEV_GPU_TEMP` not `DCGM_FI_DEV_TEMP`).
+
+Correct flow:
+1. `search_metrics("GPU temperature")` → discover `DCGM_FI_DEV_GPU_TEMP`
+2. `execute_promql("avg(DCGM_FI_DEV_GPU_TEMP) by (pod)")` → get data
+
+Wrong flow:
+1. `execute_promql("avg(DCGM_FI_DEV_TEMP)")` → no data (wrong name)
 
 **Best Practices:**
-- Use clear, structured queries with proper grouping
 - Provide detailed breakdowns by pod and namespace
 - Balance comprehensiveness with conciseness"""
 
@@ -77,13 +86,19 @@ class OpenAIChatBot(BaseChatBot):
             })
         return openai_tools
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(
+        self,
+        user_question: str,
+        namespace: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
         """Chat with OpenAI GPT using tool calling."""
         if not self.client:
-            return "Error: OpenAI SDK not installed. Please install it with: pip install openai"
-
-        if not self.api_key:
-            return f"API key required for OpenAI model {self.model_name}. Please provide an API key."
+            if self._sdk_import_failed:
+                return "Error: OpenAI SDK not installed. Please install it with: pip install openai"
+            else:
+                return f"Error: API key required for OpenAI model {self.model_name}. Please configure an API key in Settings."
 
         logger.info(f"🎯 OpenAIChatBot.chat() - Using OpenAI API with model: {self.model_name}")
 
@@ -94,11 +109,16 @@ class OpenAIChatBot(BaseChatBot):
             # Get model name suitable for OpenAI API
             model_name = self._extract_model_name()
 
-            # Prepare messages
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_question}
-            ]
+            # Prepare messages - start with system prompt
+            messages = [{"role": "system", "content": system_prompt}]
+
+            # Add conversation history if provided
+            if conversation_history:
+                logger.info(f"📜 Adding {len(conversation_history)} messages from conversation history")
+                messages.extend(conversation_history)
+
+            # Add current user question
+            messages.append({"role": "user", "content": user_question})
 
             # Convert tools to OpenAI format
             openai_tools = self._convert_tools_to_openai_format()
@@ -106,6 +126,7 @@ class OpenAIChatBot(BaseChatBot):
             # Iterative tool calling loop
             max_iterations = 30
             iteration = 0
+            consecutive_tool_tracker = {"name": None, "count": 0}
 
             while iteration < max_iterations:
                 iteration += 1
@@ -154,6 +175,7 @@ class OpenAIChatBot(BaseChatBot):
                     logger.info(f"🤖 OpenAI requesting {len(message.tool_calls)} tool(s)")
 
                     tool_results = []
+                    tool_loop_detected = False
                     for tool_call in message.tool_calls:
                         tool_name = tool_call.function.name
                         tool_args_str = tool_call.function.arguments
@@ -165,11 +187,15 @@ class OpenAIChatBot(BaseChatBot):
                         except json.JSONDecodeError:
                             tool_args = {}
 
+                        if self._check_tool_loop(tool_name, consecutive_tool_tracker):
+                            tool_loop_detected = True
+                            break
+
                         if progress_callback:
                             progress_callback(f"🔧 Using tool: {tool_name}")
 
                         # Get tool result with automatic truncation (logging handled in base class)
-                        tool_result = self._get_tool_result(tool_name, tool_args)
+                        tool_result = self._get_tool_result(tool_name, tool_args, namespace=namespace)
 
                         tool_results.append({
                             "role": "tool",
@@ -177,12 +203,17 @@ class OpenAIChatBot(BaseChatBot):
                             "content": tool_result
                         })
 
+                    if tool_loop_detected:
+                        return (
+                            "I got stuck in a loop calling the same tool repeatedly. "
+                            "Please try rephrasing your question or being more specific."
+                        )
+
                     # Add tool results to conversation
                     messages.extend(tool_results)
 
-                    # Limit conversation history
-                    if len(messages) > 10:
-                        messages = [messages[0]] + messages[-8:]
+                    # Truncate conversation safely (preserves tool-call/result pairs)
+                    messages = self._truncate_messages(messages, keep_system_prompt=True)
 
                     # Continue loop
                     continue

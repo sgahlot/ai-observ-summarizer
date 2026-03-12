@@ -30,6 +30,7 @@ class ObservabilityMCPServer:
             list_vllm_namespaces,
             get_model_config,
             get_vllm_metrics_tool,
+            fetch_vllm_metrics_data,
             analyze_vllm,
             calculate_metrics,
             list_summarization_models,
@@ -39,6 +40,7 @@ class ObservabilityMCPServer:
         )
         from .tools.observability_openshift_tools import (
             analyze_openshift,
+            fetch_openshift_metrics_data,
             list_openshift_namespaces,
             list_openshift_metric_groups,
             list_openshift_namespace_metric_groups,
@@ -46,7 +48,7 @@ class ObservabilityMCPServer:
         )
         from .tools.prometheus_tools import (
             search_metrics,                    # Search metrics by pattern
-            get_metric_metadata,              # Get metric metadata  
+            get_metric_metadata,              # Get metric metadata
             get_label_values,                 # Get label values
             execute_promql,                   # Execute PromQL queries
             explain_results,                  # Explain query results
@@ -54,6 +56,10 @@ class ObservabilityMCPServer:
             select_best_metric,               # Select best metric
             find_best_metric_with_metadata_v2,  # Smart metric selection v2
             find_best_metric_with_metadata,   # Smart metric selection v1
+            get_metrics_categories,           # Get metric categories (NEW)
+            search_metrics_by_category,       # Search by category (NEW)
+            get_category_metrics_detail,      # Get category catalog JSON for UI
+            convert_time_to_promql_duration,  # Time conversion helper
         )
         from .tools.tempo_tools import (
             query_tempo_tool,
@@ -61,14 +67,18 @@ class ObservabilityMCPServer:
             chat_tempo_tool
         )
         from .tools.chat_tool import chat
-
-        from core.config import KORREL8R_ENABLED
+        from .tools.credentials_tools import validate_api_key, save_api_key, check_provider_secret, delete_provider_secret
+        from .tools.model_config_tools import (
+            list_provider_models,
+            add_model_to_config,
+        )
 
         # Register vLLM tools
         self.mcp.tool()(list_models)
         self.mcp.tool()(list_vllm_namespaces)
         self.mcp.tool()(get_model_config)
         self.mcp.tool()(get_vllm_metrics_tool)
+        self.mcp.tool()(fetch_vllm_metrics_data)
         self.mcp.tool()(analyze_vllm)
         self.mcp.tool()(calculate_metrics)
         self.mcp.tool()(list_summarization_models)
@@ -78,6 +88,7 @@ class ObservabilityMCPServer:
 
         # Register OpenShift tools
         self.mcp.tool()(analyze_openshift)
+        self.mcp.tool()(fetch_openshift_metrics_data)
         self.mcp.tool()(list_openshift_namespaces)
         self.mcp.tool()(list_openshift_metric_groups)
         self.mcp.tool()(list_openshift_namespace_metric_groups)
@@ -93,19 +104,32 @@ class ObservabilityMCPServer:
         self.mcp.tool()(select_best_metric)               # Select best metric
         self.mcp.tool()(find_best_metric_with_metadata_v2)  # Smart metric selection v2
         self.mcp.tool()(find_best_metric_with_metadata)   # Smart metric selection v1
+        self.mcp.tool()(get_metrics_categories)           # Get metric categories (NEW)
+        self.mcp.tool()(search_metrics_by_category)       # Search by category (NEW)
+        self.mcp.tool()(get_category_metrics_detail)      # Get category catalog JSON for UI
+        self.mcp.tool()(convert_time_to_promql_duration)  # Time conversion helper
 
         # Register Tempo query tools
         self.mcp.tool()(query_tempo_tool)
         self.mcp.tool()(get_trace_details_tool)
         self.mcp.tool()(chat_tempo_tool)
 
-        # Register Korrel8r tools (only when enabled)
-        if KORREL8R_ENABLED:
-            from .tools.korrel8r_tools import (
-                korrel8r_query_objects,
-                korrel8r_get_correlated,
-            )
-            self.mcp.tool()(korrel8r_query_objects)
-            self.mcp.tool()(korrel8r_get_correlated)
+        # Register Korrel8r tools
+        from .tools.korrel8r_tools import (
+            korrel8r_query_objects,
+            korrel8r_get_correlated,
+            get_correlated_logs,
+        )
+        self.mcp.tool()(korrel8r_query_objects)
+        self.mcp.tool()(korrel8r_get_correlated)
+        self.mcp.tool()(get_correlated_logs)
 
         self.mcp.tool()(chat)
+        self.mcp.tool()(validate_api_key)
+        self.mcp.tool()(save_api_key)
+        self.mcp.tool()(check_provider_secret)
+        self.mcp.tool()(delete_provider_secret)
+
+        # Register model config tools
+        self.mcp.tool()(list_provider_models)
+        self.mcp.tool()(add_model_to_config)

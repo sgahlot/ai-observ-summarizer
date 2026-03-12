@@ -13,6 +13,12 @@ from core.metrics import (
     chat_openshift_metrics,
     NAMESPACE_SCOPED,
     CLUSTER_WIDE,
+    calculate_histogram_quantile_optimal_lookback,
+)
+from core.api_key_manager import (
+    detect_provider_from_model_id,
+    fetch_api_key_from_secret,
+    resolve_api_key,
 )
 from common.pylogger import get_python_logger
 from mcp_server.exceptions import (
@@ -39,11 +45,54 @@ def _classify_requests_error(e: Exception) -> str:
         text = f"{url} {str(e)}".lower()
         if "/api/v1/query" in text or "/api/v1/query_range" in text:
             return "prom"
-        if "/v1/openai" in text or "/completions" in text or "llamastack" in text or "openai" in text:
+        if "/v1/openai" in text or "/completions" in text or "llamastack" in text or "openai" in text or "/responses" in text:
             return "llm"
         return "unknown"
     except Exception:
         return "unknown"
+
+
+def _extract_llm_error_message(e: requests.exceptions.HTTPError) -> str:
+    """Extract detailed error message from LLM API HTTP error response."""
+    try:
+        resp = getattr(e, "response", None)
+        if resp is None:
+            return "Cannot reach LLM service."
+
+        # Try to parse JSON error response (OpenAI, Anthropic, etc.)
+        try:
+            error_data = resp.json()
+            # OpenAI format: {"error": {"message": "...", "type": "...", "code": "..."}}
+            if "error" in error_data and isinstance(error_data["error"], dict):
+                error_obj = error_data["error"]
+                message = error_obj.get("message", "")
+                error_type = error_obj.get("type", "")
+                error_code = error_obj.get("code", "")
+
+                if message:
+                    # Include error type and code if available for better context
+                    if error_type or error_code:
+                        details = []
+                        if error_type:
+                            details.append(f"type: {error_type}")
+                        if error_code:
+                            details.append(f"code: {error_code}")
+                        return f"{message} ({', '.join(details)})"
+                    return message
+
+            # Fallback: try to find any "message" field
+            if "message" in error_data:
+                return error_data["message"]
+        except Exception:
+            pass
+
+        # Fallback to response text if JSON parsing fails
+        if resp.text:
+            return f"LLM service error (HTTP {resp.status_code}): {resp.text[:200]}"
+
+        return f"LLM service returned HTTP {resp.status_code}"
+    except Exception:
+        return "Cannot reach LLM service."
 
 def analyze_openshift(
     metric_category: str,
@@ -118,7 +167,7 @@ def analyze_openshift(
             start_ts=start_ts,
             end_ts=end_ts,
             summarize_model_id=summarize_model_id or os.getenv("DEFAULT_SUMMARIZE_MODEL", ""),
-            api_key=api_key or os.getenv("LLM_API_TOKEN", ""),
+            api_key=resolve_api_key(api_key=api_key, model_id=summarize_model_id),
         )
 
         # Format the response for MCP consumers
@@ -171,7 +220,8 @@ def analyze_openshift(
     except requests.exceptions.HTTPError as e:
         cls = _classify_requests_error(e)
         if cls == "llm":
-            return LLMServiceError(message="Cannot reach LLM service.").to_mcp_response()
+            error_msg = _extract_llm_error_message(e)
+            return LLMServiceError(message=error_msg).to_mcp_response()
         # Default: treat as Prometheus HTTP error
         prom_err = parse_prometheus_error(getattr(e, 'response', None))
         return prom_err.to_mcp_response()
@@ -197,6 +247,150 @@ def analyze_openshift(
             message=f"Error running analyze_openshift: {str(e)}",
             error_code=MCPErrorCode.INTERNAL_ERROR,
             recovery_suggestion="Please try again. If the problem persists, contact support.",
+        )
+        return error.to_mcp_response()
+
+
+def fetch_openshift_metrics_data(
+    metric_category: str,
+    scope: str = "cluster_wide",
+    namespace: Optional[str] = None,
+    time_range: Optional[str] = None,
+    start_datetime: Optional[str] = None,
+    end_datetime: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch OpenShift metrics data for dashboard visualization (no LLM analysis).
+    
+    Uses parallel instant queries for fast dashboard loading.
+    Returns raw metrics with latest values.
+    """
+    # Validate parameters
+    try:
+        validate_required_params(metric_category=metric_category, scope=scope)
+        if scope not in (CLUSTER_WIDE, NAMESPACE_SCOPED):
+            raise ValidationError(
+                message="Invalid scope. Use 'cluster_wide' or 'namespace_scoped'.",
+                field="scope",
+                value=scope,
+            )
+        if scope == NAMESPACE_SCOPED and not namespace:
+            raise ValidationError(
+                message="Namespace is required when scope is 'namespace_scoped'.",
+                field="namespace",
+                value=namespace,
+            )
+    except ValidationError as e:
+        return e.to_mcp_response()
+
+    # Resolve time range (for metadata, not used in instant queries)
+    try:
+        start_ts, end_ts = resolve_time_range(
+            time_range=time_range,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
+    except Exception as e:
+        error = MCPException(
+            message=f"Time range resolution failed: {str(e)}",
+            error_code=MCPErrorCode.INVALID_INPUT,
+        )
+        return error.to_mcp_response()
+
+    try:
+        # Get the queries for this category
+        openshift_metrics = core_metrics.get_openshift_metrics()
+        category_queries = openshift_metrics.get(metric_category, {})
+        
+        if not category_queries:
+            return make_mcp_text_response(json.dumps({
+                "category": metric_category,
+                "scope": scope,
+                "namespace": namespace,
+                "metrics": {},
+                "error": f"Unknown metric category: {metric_category}"
+            }))
+
+        # Prepare queries with namespace filter if needed
+        prepared_queries: Dict[str, str] = {}
+        for label, query in category_queries.items():
+            final_query = query
+            if scope == NAMESPACE_SCOPED and namespace:
+                if '{' in query:
+                    final_query = query.replace('{', f'{{namespace="{namespace}",')
+                else:
+                    # Add namespace filter to queries without existing filters
+                    final_query = query.replace(')', f'{{namespace="{namespace}"}})')
+            prepared_queries[label] = final_query
+
+        # Calculate time range for dynamic query adjustment
+        duration_seconds = end_ts - start_ts
+        duration_hours = duration_seconds / 3600
+
+        # Format duration for PromQL (e.g., "6h", "30m", "1d")
+        if duration_hours >= 24:
+            duration_str = f"{int(duration_hours / 24)}d"
+        elif duration_hours >= 1:
+            duration_str = f"{int(duration_hours)}h"
+        else:
+            duration_str = f"{int(duration_seconds / 60)}m"
+
+        # Calculate lookback window for rate() queries
+        lookback_window = calculate_histogram_quantile_optimal_lookback(duration_hours)
+
+        # Replace hardcoded [5m] with appropriate time range in queries
+        adjusted_queries = {}
+        for label, query in prepared_queries.items():
+            # For increase() queries: use full duration to show change during time window
+            # For rate()/histogram_quantile(): use lookback window for smooth data
+            if 'increase(' in query:
+                adjusted_query = query.replace('[5m]', f'[{duration_str}]')
+                if '[5m]' in query and query != adjusted_query:
+                    logger.debug(f"Adjusted increase duration for '{label}': [5m] -> [{duration_str}]")
+            else:
+                adjusted_query = query.replace('[5m]', f'[{lookback_window}]')
+                if '[5m]' in query and query != adjusted_query:
+                    logger.debug(f"Adjusted lookback for '{label}': [5m] -> [{lookback_window}]")
+
+            adjusted_queries[label] = adjusted_query
+
+        prepared_queries = adjusted_queries
+
+        # Execute instant queries for current values (fast!)
+        values = core_metrics.execute_instant_queries_parallel(prepared_queries, max_workers=10)
+        
+        # Execute range queries for sparklines (in parallel)
+        time_series_data = core_metrics.execute_range_queries_parallel(
+            prepared_queries,
+            start_ts,
+            end_ts,
+            max_workers=10,
+            max_points=15  # ~15 points for sparklines
+        )
+        
+        # Format results
+        metrics_data: Dict[str, Any] = {}
+        for label, value in values.items():
+            metrics_data[label] = {
+                "latest_value": value,
+                "time_series": time_series_data.get(label, []),
+            }
+
+        result = {
+            "category": metric_category,
+            "scope": scope,
+            "namespace": namespace,
+            "start_ts": start_ts,
+            "end_ts": end_ts,
+            "metrics": metrics_data,
+        }
+        
+        return make_mcp_text_response(json.dumps(result))
+
+    except Exception as e:
+        error = MCPException(
+            message=f"Error fetching OpenShift metrics: {str(e)}",
+            error_code=MCPErrorCode.PROMETHEUS_ERROR,
         )
         return error.to_mcp_response()
 
@@ -312,6 +506,10 @@ def chat_openshift(
 
     # Delegate to core logic and handle provider errors
     try:
+        # Resolve API key with fallback logic (same as analyze_openshift, analyze_vllm, and chat)
+        # Priority: 1) Provided api_key (from UI), 2) Kubernetes secret
+        resolved_api_key = resolve_api_key(api_key=api_key, model_id=summarize_model_id)
+
         result = chat_openshift_metrics(
             metric_category=metric_category,
             question=question,
@@ -320,7 +518,7 @@ def chat_openshift(
             start_ts=start_ts_resolved,
             end_ts=end_ts_resolved,
             summarize_model_id=summarize_model_id or "",
-            api_key=api_key or "",
+            api_key=resolved_api_key,
         )
         payload = {
             "metric_category": metric_category,
@@ -337,7 +535,8 @@ def chat_openshift(
     except requests.exceptions.HTTPError as e:
         cls = _classify_requests_error(e)
         if cls == "llm":
-            return LLMServiceError(message="Cannot reach LLM service.").to_mcp_response()
+            error_msg = _extract_llm_error_message(e)
+            return LLMServiceError(message=error_msg).to_mcp_response()
         prom_err = parse_prometheus_error(getattr(e, 'response', None))
         return prom_err.to_mcp_response()
     except requests.exceptions.ConnectionError as e:

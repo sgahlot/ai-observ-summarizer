@@ -1,46 +1,76 @@
 replicaCount: 1
 
+deployment:
+  name: aiobs-mcp-server  # Fixed name for consistent service selector
+
 image:
   repository: quay.io/ecosystem-appeng/aiobs-mcp-server
-  tag: 1.0.0
+  tag: 1.5.1
   pullPolicy: IfNotPresent
 
 service:
+  name: aiobs-mcp-server-svc  # Fixed name for console plugin proxy
   type: ClusterIP
   port: 8085
   annotations: {}
 
 route:
-  enabled: true
+  name: aiobs-mcp-server-route
+  enabled: true # Allows local testing with MCP server inspector
   host: ""
   tls:
-    termination: edge
+    termination: reencrypt
 
 env:
   MCP_HOST: "0.0.0.0"
   MCP_PORT: 8085
   MCP_TRANSPORT_PROTOCOL: "http"
   PYTHON_LOG_LEVEL: "INFO"
+  DEV_MODE: "false"  # Set to "true" for development mode (browser-cached API keys)
   PROMETHEUS_URL: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
   TEMPO_URL: "https://tempo-tempostack-gateway.observability-hub.svc.cluster.local:8080"
   TEMPO_TENANT_ID: "dev"
   MAX_TIME_RANGE_DAYS: 90
   DEFAULT_TIME_RANGE_DAYS: 7
-  KORREL8R_ENABLED: "true"
   KORREL8R_URL: "https://korrel8r-summarizer.openshift-cluster-observability-operator.svc.cluster.local:9443"
   MAX_NUM_LOG_ROWS: 10
+  MAX_NUM_TRACE_SPANS: 10
+
+  # TRACE_FETCH_SAFETY_FACTOR: Controls how many traces to fetch from Tempo
+  #
+  # The analyzer fetches (MAX_NUM_TRACE_SPANS × TRACE_FETCH_SAFETY_FACTOR) traces,
+  # then filters them to find error traces for analysis. The safety factor accounts
+  # for traces that will be filtered out.
+  #
+  # - Default: 2 (fetch 20 traces when MAX_NUM_TRACE_SPANS=10)
+  # - Higher values: Fetch more traces, better chance of finding errors, but slower
+  # - Lower values: Fetch fewer traces, faster but may miss error traces
+  #
+  # Tune this based on your workload's error rate:
+  # - Low error rate (~1%): Increase to 3-5 to ensure enough error traces
+  # - High error rate (~10%+): Can use 1-2 for faster analysis
+  TRACE_FETCH_SAFETY_FACTOR: 2
+
   KORREL8R_TIMEOUT_SECONDS: 8
+  LLM_TIMEOUT_SECONDS: 180
+  # GPU Metrics Discovery - custom prefix overrides (comma-separated, additive to defaults)
+  GPU_METRICS_PREFIX_NVIDIA: ""
+  GPU_METRICS_PREFIX_INTEL: ""
+  GPU_METRICS_PREFIX_AMD: ""
 
 # Name of the LLM used
 LLM_PREDICTOR: "llama-3-1-8b-instruct-predictor"
 
 tls:
-  enabled: false
-  secretName: mcp-server-tls
+  # If tls is enabled, the Route termination must be set to "reencrypt" or "passthrough".
+  enabled: true
+  secretName: aiobs-mcp-server-tls
   serviceCertAnnotation: service.beta.openshift.io/serving-cert-secret-name
 
 # JSON map of model configs exposed to tools (converted to env MODEL_CONFIG)
-modelConfig: {}
+# If empty/null, reads from model-config.json file in the chart directory
+# Can be overridden via values to add local models dynamically
+modelConfig: null
 
 # Optional LLM endpoint settings (not required by tools, but available)
 llm:
@@ -50,11 +80,14 @@ llm:
 # Mount OpenShift service CA to enable HTTPS verification for in-cluster services
 trustedCA:
   enabled: true
-  configMapName: ""
+  configMapName: "aiobs-mcp-server-trusted-ca-bundle"  # Fixed name
 
 # RBAC setup similar to metrics-api
 rbac:
-  createGrafanaRole: false
+  # Creates a ClusterRole with access to Prometheus and Alertmanager APIs
+  createGrafanaRole: true
+  # Bind to openshift-cluster-monitoring-view if it exists (some clusters may not have it)
+  bindOpenshiftClusterMonitoringView: false
 
 
 resources:
@@ -64,5 +97,4 @@ resources:
   limits:
     cpu: "1"
     memory: "1Gi"
-
 

@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/python-312:latest
+FROM registry.access.redhat.com/ubi9/python-311:latest
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ COPY mcp_server/requirements.txt /app/requirements.txt
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy source code
+# Copy source code (mcp_server/data/ includes the base metrics catalog)
 COPY core /app/core
 COPY common /app/common
 COPY chatbots /app/chatbots

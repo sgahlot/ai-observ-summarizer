@@ -1,12 +1,12 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}-app
+  name: {{ .Values.deployment.name | default "aiobs-mcp-server" }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app: {{ .Release.Name }}-app
+      app: {{ .Values.deployment.name | default "aiobs-mcp-server" }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -15,7 +15,7 @@ spec:
   template:
     metadata:
       labels:
-        app: {{ .Release.Name }}-app
+        app: {{ .Values.deployment.name | default "aiobs-mcp-server" }}
     spec:
       serviceAccountName: mcp-analyzer
       restartPolicy: Always
@@ -35,6 +35,8 @@ spec:
               value: "{{ .Values.env.MCP_TRANSPORT_PROTOCOL }}"
             - name: PYTHON_LOG_LEVEL
               value: "{{ .Values.env.PYTHON_LOG_LEVEL }}"
+            - name: DEV_MODE
+              value: "{{ .Values.env.DEV_MODE }}"
             {{- if .Values.tls.enabled }}
             - name: MCP_SSL_KEYFILE
               value: "/run/secrets/tls/tls.key"
@@ -51,14 +53,18 @@ spec:
               value: "{{ .Values.env.TEMPO_URL }}"
             - name: TEMPO_TENANT_ID
               value: "{{ .Values.env.TEMPO_TENANT_ID }}"
-            - name: KORREL8R_ENABLED
-              value: "{{ .Values.env.KORREL8R_ENABLED }}"
             - name: KORREL8R_URL
               value: "{{ .Values.env.KORREL8R_URL }}"
             - name: KORREL8R_TIMEOUT_SECONDS
               value: "{{ .Values.env.KORREL8R_TIMEOUT_SECONDS }}"
+            - name: LLM_TIMEOUT_SECONDS
+              value: "{{ .Values.env.LLM_TIMEOUT_SECONDS }}"
             - name: MAX_NUM_LOG_ROWS
               value: "{{ .Values.env.MAX_NUM_LOG_ROWS }}"
+            - name: MAX_NUM_TRACE_SPANS
+              value: "{{ .Values.env.MAX_NUM_TRACE_SPANS }}"
+            - name: TRACE_FETCH_SAFETY_FACTOR
+              value: "{{ .Values.env.TRACE_FETCH_SAFETY_FACTOR }}"
             - name: NAMESPACE
               value: "{{ .Release.Namespace }}"
             - name: THANOS_TOKEN
@@ -77,14 +83,35 @@ spec:
             - name: LLAMA_STACK_URL
               value: "http://llamastack.{{ .Release.Namespace }}.svc.cluster.local:8321/v1/openai/v1"
             {{- end }}
+            {{- if .Values.env.GPU_METRICS_PREFIX_NVIDIA }}
+            - name: GPU_METRICS_PREFIX_NVIDIA
+              value: "{{ .Values.env.GPU_METRICS_PREFIX_NVIDIA }}"
+            {{- end }}
+            {{- if .Values.env.GPU_METRICS_PREFIX_INTEL }}
+            - name: GPU_METRICS_PREFIX_INTEL
+              value: "{{ .Values.env.GPU_METRICS_PREFIX_INTEL }}"
+            {{- end }}
+            {{- if .Values.env.GPU_METRICS_PREFIX_AMD }}
+            - name: GPU_METRICS_PREFIX_AMD
+              value: "{{ .Values.env.GPU_METRICS_PREFIX_AMD }}"
+            {{- end }}
             - name: MODEL_CONFIG
+              {{- if .Values.modelConfig }}
               value: '{{ .Values.modelConfig | toJson }}'
+              {{- else }}
+              value: {{ .Files.Get "model-config.json" | fromJson | toJson | squote }}
+              {{- end }}
           livenessProbe:
             exec:
               command:
                 - curl
                 - -f
+                {{- if .Values.tls.enabled }}
+                - -k
+                - https://0.0.0.0:{{ .Values.env.MCP_PORT }}/health
+                {{- else }}
                 - http://0.0.0.0:{{ .Values.env.MCP_PORT }}/health
+                {{- end }}
             initialDelaySeconds: 30
             periodSeconds: 60
             timeoutSeconds: 30
@@ -94,7 +121,12 @@ spec:
               command:
                 - curl
                 - -f
+                {{- if .Values.tls.enabled }}
+                - -k
+                - https://0.0.0.0:{{ .Values.env.MCP_PORT }}/health
+                {{- else }}
                 - http://0.0.0.0:{{ .Values.env.MCP_PORT }}/health
+                {{- end }}
             initialDelaySeconds: 10
             periodSeconds: 20
             timeoutSeconds: 20
@@ -105,6 +137,11 @@ spec:
             - name: thanos-token
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
+            {{- if .Values.tls.enabled }}
+            - name: tls-certs
+              mountPath: /run/secrets/tls
+              readOnly: true
+            {{- end }}
             {{- if .Values.trustedCA.enabled }}
             - name: trusted-ca
               mountPath: /etc/pki/ca-trust/extracted/pem
@@ -115,10 +152,16 @@ spec:
           secret:
             secretName: mcp-analyzer
             defaultMode: 0440
+        {{- if .Values.tls.enabled }}
+        - name: tls-certs
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+            defaultMode: 0440
+        {{- end }}
         {{- if .Values.trustedCA.enabled }}
         - name: trusted-ca
           configMap:
-            name: {{ default (printf "%s-trusted-ca-bundle" .Release.Name) .Values.trustedCA.configMapName }}
+            name: {{ .Values.trustedCA.configMapName | default "aiobs-mcp-server-trusted-ca-bundle" }}
             items:
               - key: service-ca.crt
                 path: ca-bundle.crt

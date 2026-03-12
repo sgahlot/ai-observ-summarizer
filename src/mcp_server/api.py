@@ -29,13 +29,20 @@ except ImportError as e:
 
 server = ObservabilityMCPServer()
 
+# Eagerly initialize metrics catalog so GPU discovery and catalog validation
+# start immediately rather than on first query
+from core.metrics_catalog import get_metrics_catalog
+_catalog = get_metrics_catalog()
+_catalog.is_available()
+
 # Select transport protocol
 if settings.MCP_TRANSPORT_PROTOCOL == "sse":
     from fastmcp.server.http import create_sse_app  # type: ignore
 
     mcp_app = create_sse_app(server.mcp, message_path="/sse/message", sse_path="/sse")
 else:
-    mcp_app = server.mcp.http_app(path="/mcp")
+    # Use stateless_http mode with JSON responses for simple browser access
+    mcp_app = server.mcp.http_app(path="/mcp", stateless_http=True, json_response=True)
 
 # Initialize FastAPI with MCP lifespan
 app = FastAPI(lifespan=mcp_app.lifespan)
@@ -50,7 +57,6 @@ if settings.CORS_ENABLED:
         allow_headers=settings.CORS_HEADERS,
     )
 
-
 @app.get("/health")
 async def health_check():
     return JSONResponse(
@@ -61,6 +67,19 @@ async def health_check():
             "transport_protocol": settings.MCP_TRANSPORT_PROTOCOL,
             "mcp_endpoint": "/mcp",
             "report_endpoints": ["POST /generate_report", "GET /download_report/{report_id}"]
+        },
+    )
+
+
+@app.get("/config")
+async def get_config():
+    """Return runtime configuration for console plugin."""
+    import os
+    dev_mode = os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
+    return JSONResponse(
+        status_code=200,
+        content={
+            "devMode": dev_mode
         },
     )
 

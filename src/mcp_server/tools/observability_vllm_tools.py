@@ -1,22 +1,39 @@
 """Observability tools for OpenShift AI monitoring and analysis (vLLM-focused).
 
-This module provides MCP tools for interacting with observability data:
-- list_models: Get available AI models
-- list_vllm_namespaces: List monitored namespaces
-- get_model_config: Show configured LLM models for summarization
+This module provides MCP tools for vLLM observability:
+
+Model & Namespace Discovery:
+- list_models: Get available AI/vLLM models
+- list_vllm_namespaces: List monitored namespaces with vLLM deployments
+- get_model_config: Get configured LLM models for summarization
+- list_summarization_models: List available summarization models
+
+Metrics:
 - get_vllm_metrics_tool: Get available vLLM metrics with friendly names
-- analyze_vllm: Analyze vLLM metrics and summarize using LLM
+- fetch_vllm_metrics_data: Fetch metrics data with time-series for display
 - calculate_metrics: Calculate statistics for provided metrics data
+
+Analysis:
+- analyze_vllm: Analyze vLLM metrics and summarize using LLM
+- chat_vllm: Chat with AI about vLLM metrics
+
+Infrastructure:
+- get_gpu_info: Get cluster GPU information
+- get_deployment_info: Get model deployment details
 
 OpenShift-specific tools live in observability_openshift_tools.py
 """
 
 import json
+import math
 import os
+import re
+import time
 import pandas as pd
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
+from datetime import datetime
 
-# Import core observability services
+# Core imports
 from core.metrics import (
     get_models_helper,
     get_vllm_namespaces_helper,
@@ -25,40 +42,50 @@ from core.metrics import (
     get_summarization_models,
     get_cluster_gpu_info,
     get_namespace_model_deployment_info,
-    build_korrel8r_log_query_for_vllm,
+    execute_instant_queries_parallel,
+    execute_range_queries_parallel,
+    build_correlated_context_from_metrics,
+    calculate_histogram_quantile_optimal_lookback,
 )
 from core.llm_client import build_prompt, summarize_with_llm, extract_time_range_with_info
-from core.models import AnalyzeRequest
 from core.response_validator import ResponseType
-from core.metrics import NAMESPACE_SCOPED, CLUSTER_WIDE
-from core.metrics import build_correlated_context_from_metrics
-from core.config import PROMETHEUS_URL, THANOS_TOKEN, VERIFY_SSL, DEFAULT_TIME_RANGE_DAYS
-from core.config import KORREL8R_ENABLED
-import requests
-from datetime import datetime, timedelta
-
-# Import structured logger from MCP server utilities
+from core.config import DEFAULT_TIME_RANGE_DAYS
+from core.api_key_manager import resolve_api_key
 from common.pylogger import get_python_logger
 from core.response_utils import make_mcp_text_response
 
-# Import MCP exception handling framework
+# MCP exception handling
 from mcp_server.exceptions import (
-    handle_mcp_exception,
     ValidationError,
     PrometheusError,
     LLMServiceError,
-    ConfigurationError,
     MCPException,
     MCPErrorCode,
     validate_required_params,
     validate_time_range,
     safe_json_loads,
-    parse_prometheus_error,
-    parse_llm_error
 )
 
 # Configure structured logging
 logger = get_python_logger()
+
+
+def check_rag_availability():
+    """Check if RAG infrastructure is available for vLLM operations."""
+    try:
+        from core.config import RAG_AVAILABLE
+        if not RAG_AVAILABLE:
+            error = MCPException(
+                message="vLLM infrastructure not available",
+                error_code=MCPErrorCode.CONFIGURATION_ERROR,
+                recovery_suggestion="RAG infrastructure is not installed or accessible. vLLM metrics require local model deployment. Install with: make install ENABLE_RAG=true"
+            )
+            return error.to_mcp_response()
+        return None
+    except Exception:
+        # If we can't determine availability, allow the operation to continue
+        return None
+
 
 def resolve_time_range(
     time_range: Optional[str] = None,
@@ -125,10 +152,10 @@ def list_models() -> List[Dict[str, Any]]:
 
 def list_vllm_namespaces() -> List[Dict[str, Any]]:
     """Get list of monitored vLLM Kubernetes namespaces.
-    
+
     Retrieves all vLLMnamespaces that have vLLM deployed and observability data available
     in the Prometheus/Thanos monitoring system.
-    
+
     Returns:
         List of vLLM namespace names with monitoring status
     """
@@ -153,12 +180,26 @@ def get_model_config() -> List[Dict[str, Any]]:
     
     Uses the exact same logic as the metrics API's /model_config endpoint:
     - Reads MODEL_CONFIG from environment (JSON string)
+    - Filters out local models when RAG infrastructure is unavailable
     - Parses to dict and sorts with external:false models first
     - Returns a human-readable list formatted for MCP
     """
     try:
         model_config_str = os.getenv("MODEL_CONFIG", "{}")
-        model_config = safe_json_loads(model_config_str, "MODEL_CONFIG environment variable")
+        full_model_config = safe_json_loads(model_config_str, "MODEL_CONFIG environment variable")
+        
+        # Import here to avoid circular imports
+        from core.config import RAG_AVAILABLE
+        
+        # Filter out local models if RAG is not available
+        model_config = {}
+        for name, config in full_model_config.items():
+            is_external = config.get("external", True)
+            if not is_external and not RAG_AVAILABLE:
+                # Skip local models when RAG infrastructure is unavailable
+                continue
+            model_config[name] = config
+        
         model_config = dict(
             sorted(model_config.items(), key=lambda x: x[1].get("external", True))
         )
@@ -167,6 +208,8 @@ def get_model_config() -> List[Dict[str, Any]]:
         model_config = {}
 
     if not model_config:
+        if not RAG_AVAILABLE:
+            return make_mcp_text_response("No LLM models available. RAG infrastructure is not installed or accessible. Please configure external models (Anthropic, OpenAI, Google) with API keys.")
         return make_mcp_text_response("No LLM models configured for summarization.")
 
     response = f"Available Model Config ({len(model_config)} total):\n\n"
@@ -247,6 +290,267 @@ def get_vllm_metrics_tool() -> List[Dict[str, Any]]:
         return error.to_mcp_response()
 
 
+def _inject_labels_into_query(query: str, label_clause: str) -> str:
+    """Inject labels into a Prometheus query at the correct position.
+
+    Handles:
+    - vllm:simple_metric -> vllm:simple_metric{labels}
+    - vllm:metric[5m] -> vllm:metric{labels}[5m]
+    - avg(vllm:metric) -> avg(vllm:metric{labels})
+    - histogram_quantile(0.95, sum(rate(vllm:metric[5m])) by (le))
+
+    Global metrics (DCGM, Habana, cluster-wide) are skipped - they don't have model/namespace labels.
+    Only vLLM metrics support model_name and namespace label filtering.
+
+    Safety: Only injects labels into queries containing vLLM metrics (vllm: prefix).
+    This prevents accidentally adding labels to global cluster metrics.
+    """
+    result = query
+
+    # Skip global GPU/cluster metrics - they don't have model_name/namespace labels
+    # These metrics are shared across the entire cluster or node
+    global_metric_patterns = [
+        'DCGM_',           # NVIDIA DCGM metrics (node-level)
+        'habana',          # Habana Gaudi metrics (node-level)
+        'nvidia_smi_',     # nvidia-smi exporter (node-level)
+        'nvml_',           # NVML metrics (node-level)
+        'kube_',           # Kubernetes metrics (cluster-wide)
+        'node_',           # Node exporter metrics (node-level)
+        'container_',      # cAdvisor metrics (may or may not have namespace)
+    ]
+
+    if any(pattern in query for pattern in global_metric_patterns):
+        return result
+
+    # Only inject labels if query contains vLLM metrics
+    # This ensures we don't accidentally modify non-vLLM queries
+    if 'vllm:' not in query:
+        return result
+    
+    # Pattern 1: vllm:metric_name followed by [ (time range)
+    # e.g., vllm:metric[5m] -> vllm:metric{labels}[5m]
+    result = re.sub(
+        r'(vllm:[\w:]+)(\[)',
+        rf'\1{{{label_clause}}}\2',
+        result
+    )
+    
+    # Pattern 2: vllm:metric_name followed by ) (inside function)
+    # e.g., avg(vllm:metric) -> avg(vllm:metric{labels})
+    result = re.sub(
+        r'(vllm:[\w:]+)(?!\{)(\))',
+        rf'\1{{{label_clause}}}\2',
+        result
+    )
+    
+    # Pattern 3: Bare vllm:metric_name at end of query (no [ or ) after)
+    # e.g., vllm:num_requests_running -> vllm:num_requests_running{labels}
+    # Only if not already labeled and at end of string or followed by space/operator
+    result = re.sub(
+        r'(vllm:[\w:]+)(?!\{|\[|\))(\s|$|[+\-*/])',
+        rf'\1{{{label_clause}}}\2',
+        result
+    )
+    
+    # Merge adjacent label blocks: {a}{b} -> {a,b}
+    result = re.sub(r'\}\{', ',', result)
+    
+    return result
+
+
+def fetch_vllm_metrics_data(
+    model_name: str,
+    time_range: Optional[str] = None,
+    start_datetime: Optional[str] = None,
+    end_datetime: Optional[str] = None,
+    namespace: Optional[str] = None,
+) -> str:
+    """Fetch vLLM metrics data for dashboard display.
+    
+    Returns JSON string with all vLLM and GPU metrics for the specified model.
+    Uses parallel instant queries for fast loading.
+    
+    Args:
+        model_name: Model to fetch metrics for (e.g., "demo3 | meta-llama/Llama-3.2-3B-Instruct")
+        time_range: Time range like "1h", "6h", "24h"
+        namespace: Optional namespace filter
+        
+    Returns:
+        JSON string: {"model_name": "...", "start_ts": ..., "end_ts": ..., "metrics": {...}}
+    """
+    try:
+        # Resolve time range (for metadata)
+        resolved_start, resolved_end = resolve_time_range(
+            time_range=time_range,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
+    except Exception as e:
+        error = MCPException(
+            message=f"Time range resolution failed: {str(e)}",
+            error_code=MCPErrorCode.INVALID_INPUT,
+            recovery_suggestion="Please check the time range parameters."
+        )
+        return error.to_mcp_response()
+
+    try:
+        # Get vLLM metrics queries
+        vllm_metrics = get_vllm_metrics()
+        
+        # Prepare queries with model_name filter
+        prepared_queries: Dict[str, str] = {}
+        for label, query in vllm_metrics.items():
+            final_query = query
+            # Inject model_name label if not "all"
+            if model_name and model_name.lower() != "all":
+                # Parse model_name which may be "namespace | model_name"
+                if "|" in model_name:
+                    ns, actual_model = [s.strip() for s in model_name.split("|", 1)]
+                    label_clause = f'model_name="{actual_model}",namespace="{ns}"'
+                else:
+                    # Model name without namespace prefix
+                    label_clause = f'model_name="{model_name}"'
+                
+                final_query = _inject_labels_into_query(query, label_clause)
+            
+            # Add namespace filter if specified separately
+            if namespace and namespace.lower() != "all" and "namespace=" not in final_query:
+                final_query = _inject_labels_into_query(final_query, f'namespace="{namespace}"')
+
+            prepared_queries[label] = final_query
+
+        # Calculate time range for dynamic query adjustment
+        duration_seconds = resolved_end - resolved_start
+        duration_hours = duration_seconds / 3600
+
+        # Format duration for PromQL (e.g., "6h", "30m", "1d")
+        if duration_hours >= 24:
+            duration_str = f"{int(duration_hours / 24)}d"
+        elif duration_hours >= 1:
+            duration_str = f"{int(duration_hours)}h"
+        else:
+            duration_str = f"{int(duration_seconds / 60)}m"
+
+        # Calculate lookback window for rate() queries
+        lookback_window = calculate_histogram_quantile_optimal_lookback(duration_hours)
+
+        # ========================================================================
+        # Dynamic Time Range Adjustment Logic
+        # ========================================================================
+        # Adjust query time ranges based on metric type to ensure correct semantics
+        # and prevent data quality issues (sparse data, overlapping windows).
+        #
+        # Three types of queries require different time range handling:
+        #
+        # 1. COUNTER metrics with increase():
+        #    Purpose: Show total count during the selected time window
+        #    Time range: Use full selected duration (e.g., [1h] for 1-hour window)
+        #    Example: increase(vllm:request_success_total[1h])
+        #             Returns: 1000 requests during that specific 1-hour period
+        #    Why: Each time point in a range query shows increase over the SAME
+        #         duration window, causing overlaps. For instant queries, we want
+        #         the increase during the user's selected window, not a fixed 5min.
+        #    Note: Sparkline points will overlap (14:00-15:00, 14:04-15:04, etc.)
+        #          but latest_value shows the correct total for the full window.
+        #
+        # 2. SUMMARY/HISTOGRAM metrics with rate():
+        #    Purpose: Show average rate or percentile over time
+        #    Time range: Use calculated lookback window (proportional to duration)
+        #    Example: rate(vllm:request_generation_tokens_sum[5m]) for 1h window
+        #             rate(vllm:request_generation_tokens_sum[30m]) for 6h window
+        #    Why: Prevents sparse data in long time ranges. A 5min lookback over
+        #         24 hours would create gaps. Proportional lookback (e.g., 2h for
+        #         24h window) ensures smooth, continuous data with enough samples.
+        #    Calculation: See calculate_histogram_quantile_optimal_lookback()
+        #
+        # 3. GAUGE metrics (no time range):
+        #    Purpose: Show instantaneous value at query time
+        #    Time range: None (gauges don't have [Xm] suffix in queries)
+        #    Example: vllm:num_requests_running
+        #             Returns: Current number of running requests
+        #    Why: Gauges are point-in-time snapshots, not cumulative.
+        #    Note: .replace('[5m]', ...) is a no-op for these queries.
+        #
+        # Detection method:
+        # - String matching on 'increase(' to identify counter metrics
+        # - All others assumed to be rate()/histogram_quantile() or gauges
+        # - Gauges naturally skip adjustment (no '[5m]' to replace)
+        # ========================================================================
+
+        adjusted_queries = {}
+        for label, query in prepared_queries.items():
+            # Get metric type from registry for validation and logging
+            from core.metrics import get_metric_type
+            metric_type = get_metric_type(label)
+
+            # Validate that query function matches metric type
+            # This helps catch misclassifications early
+            if metric_type == 'COUNTER' and 'increase(' not in query:
+                logger.warning(
+                    f"Metric '{label}' is registered as COUNTER but query doesn't use increase(): {query}"
+                )
+            elif metric_type == 'GAUGE' and ('rate(' in query or 'increase(' in query):
+                logger.warning(
+                    f"Metric '{label}' is registered as GAUGE but query uses rate/increase: {query}"
+                )
+
+            if 'increase(' in query:
+                # COUNTER: Use full selected duration to show total during window
+                adjusted_query = query.replace('[5m]', f'[{duration_str}]')
+                if '[5m]' in query and query != adjusted_query:
+                    logger.debug(f"Adjusted COUNTER '{label}' ({metric_type}): [5m] -> [{duration_str}]")
+            else:
+                # SUMMARY/HISTOGRAM: Use lookback window for smooth data
+                # GAUGE: No-op (no '[5m]' to replace)
+                adjusted_query = query.replace('[5m]', f'[{lookback_window}]')
+                if '[5m]' in query and query != adjusted_query:
+                    logger.debug(f"Adjusted {metric_type} '{label}': [5m] -> [{lookback_window}]")
+
+            adjusted_queries[label] = adjusted_query
+
+        prepared_queries = adjusted_queries
+
+        # Execute instant queries for current values (fast!)
+        values = execute_instant_queries_parallel(prepared_queries, max_workers=10)
+        
+        # Execute range queries for sparklines (in parallel)
+        time_series_data = execute_range_queries_parallel(
+            prepared_queries, 
+            resolved_start, 
+            resolved_end, 
+            max_workers=10,
+            max_points=15  # ~15 points for sparklines
+        )
+        
+        # Format results - convert NaN to null for valid JSON
+        metrics_data = {}
+        for label, value in values.items():
+            # NaN is not valid JSON, convert to None (null)
+            clean_value = None if (isinstance(value, float) and math.isnan(value)) else value
+            metrics_data[label] = {
+                "latest_value": clean_value,
+                "time_series": time_series_data.get(label, [])
+            }
+        
+        # Return as plain JSON string (not wrapped in MCP format)
+        response = {
+            "model_name": model_name,
+            "start_ts": resolved_start,
+            "end_ts": resolved_end,
+            "metrics": metrics_data
+        }
+        
+        return json.dumps(response)
+        
+    except Exception as e:
+        error = MCPException(
+            message=f"Failed to fetch vLLM metrics: {str(e)}",
+            error_code=MCPErrorCode.PROMETHEUS_ERROR,
+            recovery_suggestion="Check Prometheus connectivity and try again."
+        )
+        return error.to_mcp_response()
+
+
 def analyze_vllm(
     model_name: str,
     summarize_model_id: str,
@@ -255,16 +559,32 @@ def analyze_vllm(
     end_datetime: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Analyze vLLM metrics and summarize using LLM. Using the same core functions:
-    - get_vllm_metrics() to discover metrics
-    - fetch_metrics() to fetch time series
-    - build_prompt() to build the analysis prompt
-    - summarize_with_llm() to generate the summary
+    """Analyze vLLM metrics and generate AI summary.
 
-    Returns an MCP-friendly text response containing model, prompt, summary,
-    and a compact metrics preview.
+    Fetches metrics, builds a prompt, and uses LLM to generate analysis.
+
+    Args:
+        model_name: Model to analyze (e.g., "demo3 | meta-llama/Llama-3.2-3B-Instruct")
+        summarize_model_id: LLM model to use for analysis
+        time_range: Time range like "1h", "6h", "24h"
+        api_key: Optional API key for external LLM
+
+    Returns:
+        MCP text response containing JSON: {"model_name": "...", "summary": "...", "time_range": "..."}
     """
+    overall_start = time.perf_counter()
+
+    # Timing accumulators
+    time_validation = 0.0
+    time_time_range_resolution = 0.0
+    time_fetch_metrics = 0.0
+    time_korrel8r_context = 0.0
+    time_build_prompt = 0.0
+    time_api_key_resolution = 0.0
+    time_llm_summarization = 0.0
+
     # Validate required parameters
+    t_start = time.perf_counter()
     try:
         validate_required_params(model_name=model_name, summarize_model_id=summarize_model_id)
     except ValidationError as e:
@@ -276,8 +596,10 @@ def analyze_vllm(
             recovery_suggestion="Please check the input parameters and try again."
         )
         return error.to_mcp_response()
+    time_validation = time.perf_counter() - t_start
 
     # Resolve time range → start_ts/end_ts via common helper
+    t_start = time.perf_counter()
     try:
         resolved_start, resolved_end = resolve_time_range(
             time_range=time_range,
@@ -304,92 +626,116 @@ def analyze_vllm(
             recovery_suggestion="Please check the time range and try again."
         )
         return error.to_mcp_response()
+    time_time_range_resolution = time.perf_counter() - t_start
 
     # Collect metrics and perform analysis
     try:
+        # Fetch metrics from Prometheus
+        t_start = time.perf_counter()
         vllm_metrics = get_vllm_metrics()
         metric_dfs: Dict[str, Any] = {
             label: fetch_metrics(query, model_name, resolved_start, resolved_end)
                 for label, query in vllm_metrics.items()
         }
+        time_fetch_metrics = time.perf_counter() - t_start
+        logger.debug(
+            "analyze_vllm: Fetched %d metrics from Prometheus in %.3fs",
+            len(metric_dfs), time_fetch_metrics
+        )
 
-        # --- Phase 1: Optional Korrel8r enrichment (logs only) ---
+        # --- Phase 1: Korrel8r enrichment (logs and traces) ---
+        t_start = time.perf_counter()
         korrel8r_section: Dict[str, Any] = {}
         korrel8r_prompt_note: str = ""
         log_trace_data: str = ""
-        if KORREL8R_ENABLED:
-            log_trace_data = build_correlated_context_from_metrics(
-                metric_dfs=metric_dfs,
-                model_name=model_name,
-                start_ts=resolved_start,
-                end_ts=resolved_end,
-            )
+        log_trace_data = build_correlated_context_from_metrics(
+            metric_dfs=metric_dfs,
+            model_name=model_name,
+            start_ts=resolved_start,
+            end_ts=resolved_end,
+        )
+        time_korrel8r_context = time.perf_counter() - t_start
+        logger.debug(
+            "analyze_vllm: Built Korrel8r context (logs/traces) in %.3fs",
+            time_korrel8r_context
+        )
 
         # Build prompt base and summarize (Korrel8r enrichment may augment prompt later)
+        t_start = time.perf_counter()
         prompt = build_prompt(metric_dfs, model_name, log_trace_data)
+        time_build_prompt = time.perf_counter() - t_start
+        logger.debug(
+            "analyze_vllm: Built prompt (%d chars) in %.3fs",
+            len(prompt), time_build_prompt
+        )
 
+        # Resolve API key with fallback logic (same as analyze_openshift and chat)
+        # Priority: 1) Provided api_key (from UI), 2) Kubernetes secret
+        t_start = time.perf_counter()
+        resolved_api_key = resolve_api_key(api_key=api_key, model_id=summarize_model_id)
+        time_api_key_resolution = time.perf_counter() - t_start
+
+        # LLM summarization (typically the most time-consuming step)
+        t_start = time.perf_counter()
         summary = summarize_with_llm(
             prompt,
             summarize_model_id,
             ResponseType.VLLM_ANALYSIS,
-            api_key,
+            resolved_api_key,
+        )
+        time_llm_summarization = time.perf_counter() - t_start
+        logger.debug(
+            "analyze_vllm: LLM summarization (%s) completed in %.3fs",
+            summarize_model_id, time_llm_summarization
         )
 
-        # Create a compact metrics preview (latest values)
-        preview_lines: List[str] = []
-        for label, df in metric_dfs.items():
-            try:
-                if df is not None and not df.empty and "value" in df.columns:
-                    latest_value = df["value"].iloc[-1]
-                    preview_lines.append(f"- {label}: {latest_value}")
-                else:
-                    preview_lines.append(f"- {label}: no data")
-            except Exception:
-                preview_lines.append(f"- {label}: error reading data")
+        # Log overall performance summary
+        overall_time = time.perf_counter() - overall_start
+        logger.debug(
+            "analyze_vllm performance: total=%.3fs, breakdown: "
+            "validation=%.3fs, time_range=%.3fs, fetch_metrics=%.3fs, "
+            "korrel8r_context=%.3fs, build_prompt=%.3fs, api_key=%.3fs, "
+            "llm_summarization=%.3fs | model=%s, metrics_count=%d",
+            overall_time,
+            time_validation,
+            time_time_range_resolution,
+            time_fetch_metrics,
+            time_korrel8r_context,
+            time_build_prompt,
+            time_api_key_resolution,
+            time_llm_summarization,
+            model_name,
+            len(metric_dfs)
+        )
 
-        # Convert DataFrame metrics to list format for UI consumption
-        metrics_for_ui = {}
-        for label, df in metric_dfs.items():
-            if df is not None and not df.empty and "timestamp" in df.columns and "value" in df.columns:
-                # Convert DataFrame to list of {timestamp, value} objects
-                data_points = []
-                for _, row in df.iterrows():
-                    try:
-                        # Convert timestamp to ISO format string
-                        timestamp_str = row["timestamp"].isoformat() if hasattr(row["timestamp"], "isoformat") else str(row["timestamp"])
-                        value = float(row["value"]) if pd.notna(row["value"]) else None
-                        if value is not None:
-                            data_points.append({
-                                "timestamp": timestamp_str,
-                                "value": value
-                            })
-                    except (ValueError, TypeError):
-                        continue
-                metrics_for_ui[label] = data_points
-            else:
-                metrics_for_ui[label] = []
-
-        # Create structured response with both summary and metrics data
+        # Return only the AI summary - metrics data comes from fetch_vllm_metrics_data
         structured_response = {
-            "health_prompt": prompt,
-            "llm_summary": summary,
-            "metrics": metrics_for_ui
+            "model_name": model_name,
+            "summary": summary,
+            "time_range": time_range or f"{resolved_start.isoformat()}-{resolved_end.isoformat()}",
         }
 
-        content = (
-            f"Model: {model_name}\n\n"
-            f"Prompt Used:\n{prompt}\n\n"
-            f"Summary:\n{summary}\n\n"
-            f"Metrics Preview (latest values):\n" + "\n".join(preview_lines) +
-            f"\n\nSTRUCTURED_DATA:\n{json.dumps(structured_response)}"
-        )
+        # Return as MCP text response containing JSON
+        return make_mcp_text_response(json.dumps(structured_response))
 
-        return make_mcp_text_response(content)
-        
     except PrometheusError as e:
         return e.to_mcp_response()
     except LLMServiceError as e:
         return e.to_mcp_response()
+    except TimeoutError as e:
+        error = MCPException(
+            message=f"Analysis timed out: {str(e)}",
+            error_code=MCPErrorCode.TIMEOUT_ERROR,
+            recovery_suggestion="The AI analysis took too long. Try using a faster model or reducing the time range."
+        )
+        return error.to_mcp_response()
+    except ConnectionError as e:
+        error = MCPException(
+            message=f"Connection failed: {str(e)}",
+            error_code=MCPErrorCode.CONNECTION_ERROR,
+            recovery_suggestion="Failed to connect to the AI service. Check your network connection and API endpoint."
+        )
+        return error.to_mcp_response()
     except Exception as e:
         error = MCPException(
             message=f"Analysis failed: {str(e)}",
@@ -494,17 +840,43 @@ def calculate_metrics(
 
 
 def list_summarization_models() -> List[Dict[str, Any]]:
-    """List available summarization models, including internal and external models."""
+    """
+    List all configured models from runtime configuration.
+
+    Returns all models with metadata (name, external, requiresApiKey, provider, etc).
+    UI uses this to categorize models correctly.
+    """
     try:
-        models = get_summarization_models()
-        if not models:
-            return make_mcp_text_response("No summarization models configured.")
-        content_lines = [f"• {name}" for name in models]
-        content = f"Available Summarization Models ({len(models)} total):\n\n" + "\n".join(content_lines)
-        return make_mcp_text_response(content)
+        from core.model_config_manager import get_model_config
+
+        config = get_model_config()  # Get full config with metadata
+
+        if not config:
+            return make_mcp_text_response(json.dumps({"models": []}))
+
+        # Build model list with metadata
+        models_list = []
+        for model_name, model_config in config.items():
+            model_entry = {
+                "name": model_name,
+                "external": model_config.get("external", True),
+                "requiresApiKey": model_config.get("requiresApiKey", True),
+                "provider": model_config.get("provider", "unknown"),
+                "modelName": model_config.get("modelName", model_name),
+            }
+            # Add optional fields if present
+            if "serviceName" in model_config:
+                model_entry["serviceName"] = model_config["serviceName"]
+            if "description" in model_config:
+                model_entry["description"] = model_config["description"]
+
+            models_list.append(model_entry)
+
+        result = {"models": models_list}
+        return make_mcp_text_response(json.dumps(result))
     except Exception as e:
         error = MCPException(
-            message=f"Failed to list summarization models: {str(e)}",
+            message=f"Failed to list models: {str(e)}",
             error_code=MCPErrorCode.CONFIGURATION_ERROR,
             recovery_suggestion="Ensure model configuration is valid."
         )
@@ -572,6 +944,7 @@ def chat_vllm(
         ...     summarize_model_id="meta-llama/Llama-3.2-3B-Instruct"
         ... )
     """
+    logger.debug("chat_vllm tool with model_name=%s, prompt_summary=%s, question=%s, summarize_model_id=%s, api_key=<redacted>", model_name, prompt_summary, question, summarize_model_id)
     try:
         # Validate required parameters
         validate_required_params(
@@ -586,19 +959,23 @@ def chat_vllm(
     try:
         # Import here to avoid circular dependencies
         from core.llm_client import build_chat_prompt, _clean_llm_summary_string
-        
+
         # Build the chat prompt
         prompt = build_chat_prompt(
             user_question=question,
             metrics_summary=prompt_summary
         )
-        
+
+        # Resolve API key with fallback logic (same as analyze_vllm, analyze_openshift, and chat)
+        # Priority: 1) Provided api_key (from UI), 2) Kubernetes secret
+        resolved_api_key = resolve_api_key(api_key=api_key, model_id=summarize_model_id)
+
         # Get LLM response
         response = summarize_with_llm(
             prompt,
             summarize_model_id,
             ResponseType.GENERAL_CHAT,
-            api_key,
+            resolved_api_key,
             max_tokens=1500
         )
         

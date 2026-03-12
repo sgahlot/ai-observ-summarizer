@@ -136,7 +136,7 @@ After installation, verify the deployment:
    Expected pods:
    - `llm-service-*` - LLM inference on Intel Gaudi
    - `llama-stack-*` - Backend API
-   - `metric-ui-*` - Streamlit dashboard
+   - `aiobs-plugin-*` or `aiobs-react-ui-*` - UI components
    - `mcp-server-*` - Model Context Protocol server
 
 2. **Verify Intel Gaudi allocation**:
@@ -149,7 +149,7 @@ After installation, verify the deployment:
    oc get route -n your-namespace
    ```
 
-   Navigate to the route URL to access the Streamlit dashboard.
+   Navigate to the route URL to access the application (Console Plugin or React UI).
 
 4. **Check logs for Gaudi initialization**:
    ```bash
@@ -250,6 +250,22 @@ In OpenShift Container Platform, Intel Gaudi metrics are collected through user 
 > **Note**: The Habana AI metric exporter (`habana-ai-metric-exporter-ds`) is deployed as a DaemonSet in the `habana-ai-operator` namespace. It includes its own ServiceMonitor (`metric-exporter`) for metric collection and uses standard Kubernetes labels (`app.kubernetes.io/name=habana-ai`).
 
 **Reference**: [OpenShift Container Platform - Enabling monitoring for user-defined projects](https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/monitoring/configuring-user-workload-monitoring#enabling-monitoring-for-user-defined-projects-uwm_preparing-to-configure-the-monitoring-stack-uwm)
+
+### Automatic Enablement During Installation
+
+The `make install` command automatically enables user workload monitoring during installation. This step happens early in the installation process, right after namespace creation.
+
+**What happens:**
+- Automatically sets `enableUserWorkload: true` in the cluster-monitoring-config ConfigMap
+- The process is idempotent - safe to run multiple times
+- User workload monitoring pods start automatically in the `openshift-user-workload-monitoring` namespace
+
+**To manually enable user workload monitoring without running full installation:**
+```bash
+make enable-user-workload-monitoring
+```
+
+This target is idempotent and safe to run multiple times.
 
 ### Accessing Metrics
 
@@ -467,13 +483,13 @@ If Intel Gaudi metrics are not appearing:
    ```bash
    # Get the exporter pod name
    POD=$(oc get pods -n habana-ai-operator -l app.kubernetes.io/name=habana-ai -o name | head -n 1)
-   
+
    # Port-forward to the exporter (uses port 41611)
    oc port-forward -n habana-ai-operator $POD 41611:41611 &
-   
+
    # Query metrics directly
    curl http://localhost:41611/metrics | grep habanalabs
-   
+
    # Stop port-forward
    pkill -f "port-forward.*41611"
    ```
@@ -491,10 +507,10 @@ If metrics are available but not appearing in the observability stack:
    ```bash
    # Port-forward Thanos Querier
    oc port-forward -n openshift-monitoring svc/thanos-querier 9090:9091 &
-   
+
    # Query for Intel Gaudi metrics
    curl -s "http://localhost:9090/api/v1/label/__name__/values" | grep habanalabs
-   
+
    # Stop port-forward
    pkill -f "port-forward.*thanos-querier"
    ```
@@ -532,4 +548,3 @@ For issues specific to:
 - **Intel Gaudi exporter**: Refer to Intel Gaudi documentation
 - **Observability stack integration**: Create an issue in this repository
 - **Prometheus/Thanos**: Consult respective project documentation
-

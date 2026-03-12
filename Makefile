@@ -3,7 +3,7 @@
 
 # NAMESPACE validation for deployment targets
 ifeq ($(NAMESPACE),)
-ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-ui build-alerting build-mcp-server push push-ui push-alerting push-mcp-server clean config test check-observability-drift install-operators uninstall-operators check-operators install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r,$(MAKECMDGOALS)))
+ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-alerting build-mcp-server build-console-plugin build-react-ui push push-alerting push-mcp-server push-console-plugin push-react-ui clean config test test-python test-react check-observability-drift install-operators uninstall-operators check-operators verify-operators-ready cleanup-loki-clusterroles install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r,$(MAKECMDGOALS)))
 $(error NAMESPACE is not set)
 endif
 endif
@@ -14,18 +14,26 @@ MAKEFLAGS += --no-print-directory
 REGISTRY ?= quay.io
 ORG ?= ecosystem-appeng
 IMAGE_PREFIX ?= aiobs
-VERSION ?= 1.0.0
+VERSION ?= 1.5.1
 PLATFORM ?= linux/amd64
+DEV_MODE ?= false
+
+# GPU Metrics Discovery - custom prefix overrides (comma-separated, additive)
+GPU_PREFIX_NVIDIA ?=
+GPU_PREFIX_INTEL ?=
+GPU_PREFIX_AMD ?=
 
 # Container image names
-METRICS_UI_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-metrics-ui
 METRICS_ALERTING_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-metrics-alerting
 MCP_SERVER_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-mcp-server
+CONSOLE_PLUGIN_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-console-plugin
+REACT_UI_IMAGE = $(REGISTRY)/$(ORG)/$(IMAGE_PREFIX)-react-ui
 
 # Alert example image
 ALERT_EXAMPLE_IMAGE ?= $(REGISTRY)/$(ORG)/alert-example:$(VERSION)
 ALERT_EXAMPLE_CONTEXT ?= tests/alert-example/app
 ALERT_EXAMPLE_K8S_DIR ?= tests/alert-example/k8s
+ALERT_EXAMPLE_CHART_PATH ?= tests/alert-example/helm/alert-example
 
 
 # Build tools
@@ -64,10 +72,14 @@ HF_TOKEN ?= $(shell \
 RAG_CHART := rag
 MINIO_CHART := minio-observability-storage
 MINIO_CHART_PATH := minio
-METRICS_UI_RELEASE_NAME ?= ui
-METRICS_UI_CHART_PATH ?= ui
 MCP_SERVER_RELEASE_NAME ?= mcp-server
 MCP_SERVER_CHART_PATH ?= mcp-server
+# Console plugin chart
+CONSOLE_PLUGIN_RELEASE_NAME ?= aiobs-plugin
+CONSOLE_PLUGIN_CHART_PATH ?= openshift-console-plugin
+# React UI chart
+REACT_UI_RELEASE_NAME ?= aiobs-react-ui
+REACT_UI_CHART_PATH ?= react-ui-app
 # Korrel8r chart
 KORREL8R_RELEASE_NAME ?= korrel8r-summarizer
 KORREL8R_CHART_PATH ?= observability/korrel8r
@@ -176,23 +188,28 @@ help:
 	@echo ""
 	@echo "Build & Push:"
 	@echo "  build              - Build all container images"
-	@echo "  build-ui           - Build Streamlit UI (metric-ui)"
 	@echo "  build-alerting     - Build Alerting Service (metric-alerting)"
 	@echo "  build-mcp-server   - Build MCP Server (mcp-server)"
+	@echo "  build-console-plugin - Build OpenShift Console Plugin"
+	@echo "  build-react-ui     - Build React UI standalone application"
 	@echo "  push               - Push all container images to registry"
-	@echo "  push-ui            - Push metric-ui image"
 	@echo "  push-alerting      - Push metric-alerting image"
 	@echo "  push-mcp-server    - Push mcp-server image"
+	@echo "  push-console-plugin - Push console-plugin image"
+	@echo "  push-react-ui      - Push react-ui image"
 	@echo "  build-alert-example - Build alert-example test image"
 	@echo "  push-alert-example  - Push alert-example test image"
 	@echo ""
 	@echo "Deployment:"
-	@echo "  install            - Deploy to OpenShift using Helm"
+	@echo "  install            - Deploy to OpenShift using Helm (DEV_MODE=false: Console Plugin only, DEV_MODE=true: React UI only)"
 	@echo "  install-with-alerts - Deploy with alerting enabled"
 	@echo "  install-local      - Set up local development environment"
 	@echo "  install-rag        - Install RAG backend services only"
-	@echo "  install-metric-ui  - Install UI only"
 	@echo "  install-mcp-server - Install MCP server only"
+	@echo "  install-console-plugin - Install OpenShift Console Plugin"
+	@echo "  uninstall-console-plugin - Uninstall OpenShift Console Plugin"
+	@echo "  install-react-ui   - Install React UI standalone application"
+	@echo "  uninstall-react-ui - Uninstall React UI standalone application"
 	@echo "  uninstall          - Uninstall from OpenShift"
 	@echo "  status             - Check deployment status"
 	@echo "  list-models        - List available models"
@@ -201,8 +218,8 @@ help:
 	@echo "  install-korrel8r   - Install Korrel8r via UIPlugin then patch resources"
 	@echo ""
 	@echo "Observability Stack:"
-	@echo "  install-observability-stack - Install complete observability stack (MinIO + TempoStack + LokiStack + OTEL + tracing + logging + drift check)"
-	@echo "  uninstall-observability-stack - Uninstall complete observability stack (tracing + logging + TempoStack + LokiStack + OTEL + MinIO)"
+	@echo "  install-observability-stack - Install complete observability stack (MinIO + TempoStack + LokiStack + OTEL + Korrel8r + tracing + logging + drift check)"
+	@echo "  uninstall-observability-stack - Uninstall complete observability stack (tracing + logging + Korrel8r + TempoStack + LokiStack + OTEL + MinIO)"
 	@echo ""
 	@echo "Operators:"
 	@echo "  install-operators - Install all mandatory operators (observability, otel, tempo, logging, loki)"
@@ -225,6 +242,7 @@ help:
 	@echo "  uninstall-observability - Uninstall TempoStack, LokiStack and OTEL Collector only"
 	@echo "  upgrade-observability - Force upgrade observability components (even if already installed)"
 	@echo "  check-observability-drift - Check for configuration drift in observability-hub"
+	@echo "  enable-user-workload-monitoring - Enable cluster-level user workload monitoring"
 	@echo "  setup-tracing - Enable auto-instrumentation for tracing in target namespace (idempotent)"
 	@echo "  remove-tracing - Disable auto-instrumentation for tracing in target namespace"
 	@echo "  enable-tracing-ui - Enable 'Observe → Traces' menu in OpenShift Console"
@@ -254,7 +272,9 @@ help:
 	@echo "  config             - Show current configuration"
 	@echo ""
 	@echo "Tests:"
-	@echo "  test               - Run unit tests with coverage"
+	@echo "  test               - Run all tests (Python + React)"
+	@echo "  test-python        - Run Python tests only"
+	@echo "  test-react         - Run React tests only"
 	@echo ""
 	@echo "Configuration (set via environment variables):"
 	@echo "  REGISTRY           - Container registry (default: quay.io)"
@@ -264,11 +284,13 @@ help:
 	@echo "  PLATFORM           - Target platform (default: linux/amd64)"
 	@echo "  BUILD_TOOL         - Build tool: docker or podman (auto-detected)"
 	@echo "  NAMESPACE          - OpenShift namespace for deployment"
+	@echo "  DEV_MODE           - Set to 'true' to deploy React UI only, 'false' for Console Plugin only (default: false)"
 	@echo "  HF_TOKEN           - Hugging Face Token (will prompt if not provided and LLM_URL not set)"
 	@echo "  DEVICE             - Deploy models on cpu or gpu (default)"
 	@echo "  LLM                - Model id (eg. llama-3-1-8b-instruct)"
 	@echo "  LLM_URL            - Use existing model URL (auto-adds :8080/v1 if no port specified)"
 	@echo "  SAFETY             - Safety model id"
+	@echo "  ENABLE_RAG         - Set to 'false' to skip RAG backend services (default: true)"
 	@echo "  ALERTS             - Set to TRUE to install alerting with main deployment"
 	@echo "  SLACK_WEBHOOK_URL  - Slack Webhook URL for alerting (will prompt if not provided)"
 	@echo "  MINIO_USER         - MinIO username for observability storage (default: admin)"
@@ -276,20 +298,14 @@ help:
 	@echo "  MINIO_BUCKETS      - Comma-separated list of MinIO buckets to create (default: tempo,loki)"
 	@echo "  UNINSTALL_OBSERVABILITY - Set to 'true' to uninstall observability stack during uninstall"
 	@echo "  UNINSTALL_OPERATORS     - Set to 'true' to uninstall operators during uninstall"
+	@echo "  GPU_PREFIX_NVIDIA  - Extra NVIDIA metric prefixes (comma-separated, additive to defaults)"
+	@echo "  GPU_PREFIX_INTEL   - Extra Intel metric prefixes (comma-separated, additive to defaults)"
+	@echo "  GPU_PREFIX_AMD     - Extra AMD metric prefixes (comma-separated, additive to defaults)"
 	@echo ""
 
 .PHONY: build
-build: build-ui build-alerting build-mcp-server
+build: build-alerting build-mcp-server build-console-plugin build-react-ui
 	@echo "✅ All container images built successfully"
-
-.PHONY: build-ui
-build-ui:
-	@echo "🔨 Building Streamlit UI (metric-ui)..."
-	@$(BUILD_TOOL) buildx build --platform $(PLATFORM) \
-		-f src/ui/Dockerfile \
-		-t $(METRICS_UI_IMAGE):$(VERSION) \
-		src
-	@echo "✅ metrics-ui image built: $(METRICS_UI_IMAGE):$(VERSION)"
 
 .PHONY: build-alerting
 build-alerting:
@@ -309,15 +325,37 @@ build-mcp-server:
 		src
 	@echo "✅ mcp-server image built: $(MCP_SERVER_IMAGE):$(VERSION)"
 
-.PHONY: push
-push: push-ui push-alerting push-mcp-server
-	@echo "✅ All container images pushed successfully"
+.PHONY: build-console-plugin
+build-console-plugin:
+	@echo "🔨 Building OpenShift Console Plugin..."
+	@echo "  → Installing yarn dependencies..."
+	@cd openshift-plugin && yarn install --frozen-lockfile
+	@echo "  → Building plugin assets..."
+	@cd openshift-plugin && yarn build
+	@echo "  → Building container image..."
+	@$(BUILD_TOOL) buildx build --platform $(PLATFORM) \
+		-f openshift-plugin/Dockerfile.plugin \
+		-t $(CONSOLE_PLUGIN_IMAGE):$(VERSION) \
+		openshift-plugin
+	@echo "✅ console-plugin image built: $(CONSOLE_PLUGIN_IMAGE):$(VERSION)"
 
-.PHONY: push-ui
-push-ui:
-	@echo "📤 Pushing metric-ui image..."
-	@$(BUILD_TOOL) push $(METRICS_UI_IMAGE):$(VERSION)
-	@echo "✅ metric-ui image pushed"
+.PHONY: build-react-ui
+build-react-ui:
+	@echo "🔨 Building React UI standalone application..."
+	@echo "  → Installing yarn dependencies..."
+	@cd openshift-plugin && yarn install --frozen-lockfile
+	@echo "  → Building React UI assets..."
+	@cd openshift-plugin && yarn build:react-ui
+	@echo "  → Building container image..."
+	@$(BUILD_TOOL) buildx build --platform $(PLATFORM) \
+		-f openshift-plugin/Dockerfile.react-ui \
+		-t $(REACT_UI_IMAGE):$(VERSION) \
+		openshift-plugin
+	@echo "✅ react-ui image built: $(REACT_UI_IMAGE):$(VERSION)"
+
+.PHONY: push
+push: push-alerting push-mcp-server push-console-plugin push-react-ui
+	@echo "✅ All container images pushed successfully"
 
 .PHONY: push-alerting
 push-alerting:
@@ -331,6 +369,17 @@ push-mcp-server:
 	@$(BUILD_TOOL) push $(MCP_SERVER_IMAGE):$(VERSION)
 	@echo "✅ mcp-server image pushed"
 
+.PHONY: push-console-plugin
+push-console-plugin:
+	@echo "📤 Pushing console-plugin image..."
+	@$(BUILD_TOOL) push $(CONSOLE_PLUGIN_IMAGE):$(VERSION)
+	@echo "✅ console-plugin image pushed"
+
+.PHONY: push-react-ui
+push-react-ui:
+	@echo "📤 Pushing react-ui image..."
+	@$(BUILD_TOOL) push $(REACT_UI_IMAGE):$(VERSION)
+	@echo "✅ react-ui image pushed"
 
 
 # Create namespace and deploy
@@ -356,13 +405,6 @@ depend:
 	@cd deploy/helm && helm dependency update $(MINIO_CHART_PATH) || exit 1
 
 
-.PHONY: install-metric-ui
-install-metric-ui: namespace
-	@echo "Deploying Metric UI"
-	@cd deploy/helm && helm upgrade --install $(METRICS_UI_RELEASE_NAME) $(METRICS_UI_CHART_PATH) -n $(NAMESPACE) \
-		--set image.repository=$(METRICS_UI_IMAGE) \
-		--set image.tag=$(VERSION)
-
 .PHONY: install-mcp-server
 install-mcp-server: namespace
 	@echo "Deploying MCP Server"
@@ -377,8 +419,12 @@ install-mcp-server: namespace
 			--set image.tag=$(VERSION) \
 			--set rbac.createGrafanaRole=false \
 			--set LLM_PREDICTOR=$(LLM)-predictor \
+			--set env.DEV_MODE=$(DEV_MODE) \
 			$(if $(MCP_SERVER_ROUTE_HOST),--set route.host='$(MCP_SERVER_ROUTE_HOST)',) \
 			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',) \
+			$(if $(GPU_PREFIX_NVIDIA),--set env.GPU_METRICS_PREFIX_NVIDIA='$(GPU_PREFIX_NVIDIA)',) \
+			$(if $(GPU_PREFIX_INTEL),--set env.GPU_METRICS_PREFIX_INTEL='$(GPU_PREFIX_INTEL)',) \
+			$(if $(GPU_PREFIX_AMD),--set env.GPU_METRICS_PREFIX_AMD='$(GPU_PREFIX_AMD)',) \
 			-f $(GEN_MODEL_CONFIG_PREFIX)-for_helm.yaml; \
 	else \
 		echo "ClusterRole does not exist. Deploying and creating Grafana role..."; \
@@ -387,10 +433,80 @@ install-mcp-server: namespace
 			--set image.tag=$(VERSION) \
 			--set rbac.createGrafanaRole=true \
 			--set LLM_PREDICTOR=$(LLM)-predictor \
+			--set env.DEV_MODE=$(DEV_MODE) \
 			$(if $(MCP_SERVER_ROUTE_HOST),--set route.host='$(MCP_SERVER_ROUTE_HOST)',) \
 			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',) \
+			$(if $(GPU_PREFIX_NVIDIA),--set env.GPU_METRICS_PREFIX_NVIDIA='$(GPU_PREFIX_NVIDIA)',) \
+			$(if $(GPU_PREFIX_INTEL),--set env.GPU_METRICS_PREFIX_INTEL='$(GPU_PREFIX_INTEL)',) \
+			$(if $(GPU_PREFIX_AMD),--set env.GPU_METRICS_PREFIX_AMD='$(GPU_PREFIX_AMD)',) \
 			-f $(GEN_MODEL_CONFIG_PREFIX)-for_helm.yaml; \
 	fi
+
+.PHONY: check-console-plugin-namespace
+check-console-plugin-namespace:
+	@PLUGIN_NAME=aiobs-console-plugin; \
+	existing_ns=$$(oc get consoleplugin $$PLUGIN_NAME -o jsonpath='{.spec.backend.service.namespace}' 2>/dev/null); \
+	if [ -n "$$existing_ns" ] && [ "$$existing_ns" != "$(NAMESPACE)" ]; then \
+		echo "⚠️  ConsolePlugin $$PLUGIN_NAME already points to namespace $$existing_ns (requested $(NAMESPACE))"; \
+		echo "   Consider uninstalling the old release or set NAMESPACE=$$existing_ns"; \
+	fi
+
+.PHONY: install-console-plugin
+install-console-plugin: namespace check-console-plugin-namespace
+	@echo "Deploying OpenShift Console Plugin"
+	@cd deploy/helm && helm upgrade --install $(CONSOLE_PLUGIN_RELEASE_NAME) $(CONSOLE_PLUGIN_CHART_PATH) -n $(NAMESPACE) \
+		--set plugin.image.repository=$(CONSOLE_PLUGIN_IMAGE) \
+		--set plugin.image.tag=$(VERSION) \
+		--set mcpServer.serviceName=aiobs-mcp-server-svc \
+		$(if $(PLUGIN_AUTO_ENABLE),--set plugin.autoEnable=$(PLUGIN_AUTO_ENABLE),)
+	@echo "✅ Console plugin deployed"
+	@echo "→ Enabling plugin in OpenShift Console..."
+	-@if oc get console.operator.openshift.io cluster -o jsonpath='{.spec.plugins}' 2>/dev/null | grep -q "openshift-ai-observability"; then \
+		echo "  → Plugin 'openshift-ai-observability' already enabled"; \
+	else \
+		oc patch console.operator.openshift.io cluster --type=json -p='[{\"op\": \"add\", \"path\": \"/spec/plugins/-\", \"value\": \"openshift-ai-observability\"}]' 1>/dev/null; \
+		echo "  → Plugin 'openshift-ai-observability' enabled"; \
+	fi
+
+.PHONY: uninstall-console-plugin
+uninstall-console-plugin:
+	@echo "Uninstalling OpenShift Console Plugin"
+	@echo "→ Disabling plugin in OpenShift Console..."
+	-@if oc get console.operator.openshift.io cluster -o jsonpath='{.spec.plugins}' 2>/dev/null | grep -q "openshift-ai-observability"; then \
+		PLUGIN_INDEX=$$(oc get console.operator.openshift.io cluster -o json | jq '.spec.plugins | to_entries | .[] | select(.value=="openshift-ai-observability") | .key'); \
+		if [ -n "$$PLUGIN_INDEX" ]; then \
+			oc patch console.operator.openshift.io cluster --type=json -p="[{\"op\": \"remove\", \"path\": \"/spec/plugins/$$PLUGIN_INDEX\"}]" 2>/dev/null; \
+			echo "  → Plugin disabled from console"; \
+		fi \
+	else \
+		echo "  → Plugin was not enabled in console"; \
+	fi
+	@echo "→ Uninstalling Helm release..."
+	-@helm -n $(NAMESPACE) uninstall $(CONSOLE_PLUGIN_RELEASE_NAME) --ignore-not-found
+	@echo "✅ Console plugin uninstalled"
+
+.PHONY: install-react-ui
+install-react-ui: namespace
+	@echo "Deploying React UI standalone application"
+	@cd deploy/helm && helm upgrade --install $(REACT_UI_RELEASE_NAME) $(REACT_UI_CHART_PATH) -n $(NAMESPACE) \
+		--set app.image.repository=$(REACT_UI_IMAGE) \
+		--set app.image.tag=$(VERSION) \
+		--set mcpServer.serviceName=aiobs-mcp-server-svc
+	@echo "✅ React UI deployed"
+	@echo "→ Getting Route URL..."
+	-@ROUTE_HOST=$$(oc get route aiobs-react-ui -n $(NAMESPACE) -o jsonpath='{.spec.host}' 2>/dev/null); \
+	if [ -n "$$ROUTE_HOST" ]; then \
+		echo "  → React UI accessible at: https://$$ROUTE_HOST"; \
+	else \
+		echo "  → Route not found. Check deployment status with: oc get route -n $(NAMESPACE)"; \
+	fi
+
+.PHONY: uninstall-react-ui
+uninstall-react-ui:
+	@echo "Uninstalling React UI standalone application"
+	@echo "→ Uninstalling Helm release..."
+	-@helm -n $(NAMESPACE) uninstall $(REACT_UI_RELEASE_NAME) --ignore-not-found
+	@echo "✅ React UI uninstalled"
 
 .PHONY: install-rag
 install-rag: namespace
@@ -410,7 +526,19 @@ install-rag: namespace
 
 
 .PHONY: install
-install: namespace depend validate-llm install-operators install-observability-stack install-rag install-metric-ui install-mcp-server install-korrel8r delete-jobs
+install: namespace enable-user-workload-monitoring depend validate-llm install-operators install-observability-stack install-mcp-server delete-jobs
+	@echo "DEV_MODE is set to: $(DEV_MODE)"
+	@if [ "$(DEV_MODE)" = "true" ]; then \
+		echo "→ DEV_MODE=true: Installing React UI standalone application only"; \
+		$(MAKE) install-react-ui NAMESPACE=$(NAMESPACE); \
+	else \
+		echo "→ DEV_MODE=false: Installing OpenShift Console Plugin only"; \
+		$(MAKE) install-console-plugin NAMESPACE=$(NAMESPACE); \
+	fi
+	@if [ "$(ENABLE_RAG)" != "false" ]; then \
+		echo "Installing RAG backend services (set ENABLE_RAG=false to skip)..."; \
+		$(MAKE) install-rag NAMESPACE=$(NAMESPACE); \
+	fi
 	@if [ "$(ALERTS)" = "TRUE" ]; then \
 		echo "ALERTS flag is set to TRUE. Installing alerting..."; \
 		$(MAKE) install-alerts NAMESPACE=$(NAMESPACE); \
@@ -425,7 +553,7 @@ install-with-alerts:
 		exit 1; \
 	fi
 	@echo "🚀 Deploying to OpenShift namespace: $(NAMESPACE) with alerting"
-	@$(MAKE) namespace depend validate-llm install-observability-stack install-rag install-metric-ui install-mcp-server delete-jobs install-alerts NAMESPACE=$(NAMESPACE)
+	@$(MAKE) namespace depend validate-llm install-observability-stack install-rag install-mcp-server delete-jobs install-alerts NAMESPACE=$(NAMESPACE)
 	@echo "✅ Deployment with alerting completed"
 
 # Delete all jobs in the namespace
@@ -480,12 +608,11 @@ uninstall:
 		$(MAKE) uninstall-alerts NAMESPACE=$(NAMESPACE); \
 	fi
 
-	@echo "Uninstalling $(METRICS_UI_RELEASE_NAME) helm chart"
-	- @helm -n $(NAMESPACE) uninstall $(METRICS_UI_RELEASE_NAME) --ignore-not-found
 	@echo "Uninstalling $(MCP_SERVER_RELEASE_NAME) helm chart (if installed)"
 	- @helm -n $(NAMESPACE) uninstall $(MCP_SERVER_RELEASE_NAME) --ignore-not-found
-	@echo "Uninstalling Korrel8r helm-managed resources (if installed)"
-	@$(MAKE) uninstall-korrel8r || true
+	@echo "Uninstalling UI components (both Console Plugin and React UI if they exist)"
+	@$(MAKE) uninstall-console-plugin NAMESPACE=$(NAMESPACE) || true
+	@$(MAKE) uninstall-react-ui NAMESPACE=$(NAMESPACE) || true
 
 	@echo ""
 	@echo "Checking if observability stack should be uninstalled..."
@@ -551,10 +678,6 @@ install-local:
 clean:
 	@echo "🧹 Cleaning up local images..."
 	@ERRORS=0; \
-	if ! $(BUILD_TOOL) rmi $(METRICS_UI_IMAGE):$(VERSION) 2>/dev/null; then \
-		echo "⚠️  Could not remove $(METRICS_UI_IMAGE):$(VERSION) (may not exist)"; \
-		ERRORS=$$((ERRORS + 1)); \
-	fi; \
 	if ! $(BUILD_TOOL) rmi $(METRICS_ALERTING_IMAGE):$(VERSION) 2>/dev/null; then \
 		echo "⚠️  Could not remove $(METRICS_ALERTING_IMAGE):$(VERSION) (may not exist)"; \
 		ERRORS=$$((ERRORS + 1)); \
@@ -563,18 +686,39 @@ clean:
 		echo "⚠️  Could not remove $(MCP_SERVER_IMAGE):$(VERSION) (may not exist)"; \
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
+	if ! $(BUILD_TOOL) rmi $(CONSOLE_PLUGIN_IMAGE):$(VERSION) 2>/dev/null; then \
+		echo "⚠️  Could not remove $(CONSOLE_PLUGIN_IMAGE):$(VERSION) (may not exist)"; \
+		ERRORS=$$((ERRORS + 1)); \
+	fi; \
 	if [ $$ERRORS -eq 0 ]; then \
 		echo "✅ All images cleaned successfully"; \
 	else \
 		echo "⚠️  Cleanup completed with $$ERRORS warning(s)"; \
 	fi
 
-# Run tests
+# Run all tests (Python + React)
 .PHONY: test
-test:
-	@echo "🧪 Running tests with coverage..."
+test: test-python test-react
+	@echo "✅ All tests completed successfully"
+
+# Run Python tests only
+.PHONY: test-python
+test-python:
+	@echo "🧪 Running Python tests with coverage..."
 	@uv sync --group test
 	@uv run pytest -v --cov=src --cov-report=html --cov-report=term
+
+# Run React tests only
+.PHONY: test-react
+test-react:
+	@echo "🧪 Running React tests..."
+	@cd openshift-plugin && yarn install
+	@echo "🏗️  Building console plugin (validates TypeScript)..."
+	@cd openshift-plugin && yarn build:plugin
+	@echo "🏗️  Building React UI (validates TypeScript)..."
+	@cd openshift-plugin && yarn build:react-ui
+	@echo "🧪 Running Jest tests..."
+	@cd openshift-plugin && yarn test --ci
 
 # Convenience targets for common workflows
 .PHONY: build-and-push
@@ -588,6 +732,10 @@ build-deploy: build push install
 .PHONY: build-deploy-mcp-server
 build-deploy-mcp-server: build-mcp-server push-mcp-server install-mcp-server
 	@echo "✅ Build, push, and deploy mcp-server completed"
+
+.PHONY: build-deploy-console-plugin
+build-deploy-console-plugin: build-console-plugin push-console-plugin install-console-plugin
+	@echo "✅ Build, push, and deploy console-plugin completed"
 
 .PHONY: build-deploy-alerts
 build-deploy-alerts: build push install-with-alerts
@@ -603,9 +751,9 @@ config:
 	@echo "  Version: $(VERSION)"
 	@echo "  Platform: $(PLATFORM)"
 	@echo "  Build Tool: $(BUILD_TOOL)"
-	@echo "  Metric UI Image: $(METRICS_UI_IMAGE):$(VERSION)"
 	@echo "  Metric Alerting Image: $(METRICS_ALERTING_IMAGE):$(VERSION)"
 	@echo "  MCP Server Image: $(MCP_SERVER_IMAGE):$(VERSION)"
+	@echo "  Console Plugin Image: $(CONSOLE_PLUGIN_IMAGE):$(VERSION)"
 
 # -- Alerting targets --
 
@@ -720,6 +868,12 @@ validate-llm:
 		exit 1; \
 	fi
 
+# Enable cluster-level user workload monitoring
+.PHONY: enable-user-workload-monitoring
+enable-user-workload-monitoring:
+	@echo ""
+	@bash scripts/enable-user-workload-monitoring.sh
+
 .PHONY: install-observability
 install-observability:
 	@echo "→ Checking if OpenTelemetry Collector, Tempo, and Loki already exist in namespace $(OBSERVABILITY_NAMESPACE)"
@@ -759,6 +913,7 @@ install-observability-stack:
 	@$(MAKE) install-observability
 	@$(MAKE) check-observability-drift
 	@$(MAKE) enable-tracing-ui
+	@$(MAKE) install-korrel8r
 
 .PHONY: setup-tracing
 setup-tracing: namespace
@@ -855,11 +1010,12 @@ uninstall-observability:
 .PHONY: uninstall-observability-stack
 uninstall-observability-stack:
 	@if [ "$(UNINSTALL_OBSERVABILITY)" = "true" ]; then \
-		echo "🗑️  Uninstalling observability stack (includes tracing, logging, and MinIO)"; \
+		echo "🗑️  Uninstalling observability stack (includes tracing, logging, Korrel8r, and MinIO)"; \
 		echo ""; \
 		echo "⚠️  WARNING: This will remove the following components:"; \
 		echo "  → Auto-instrumentation for tracing in namespace $(NAMESPACE)"; \
 		echo "  → TempoStack, LokiStack, and OTEL Collector in namespace $(OBSERVABILITY_NAMESPACE)"; \
+		echo "  → Korrel8r in namespace $(KORREL8R_NAMESPACE)"; \
 		echo "  → MinIO observability storage in namespace $(MINIO_NAMESPACE)"; \
 		echo "  → Distributed Tracing Console Plugin (Observe → Traces menu)"; \
 		echo "  → Logging Console Plugin (Observe → Logs menu)"; \
@@ -867,6 +1023,7 @@ uninstall-observability-stack:
 		echo "This infrastructure is shared by multiple applications."; \
 		echo ""; \
 		$(MAKE) remove-tracing NAMESPACE=$(NAMESPACE); \
+		$(MAKE) uninstall-korrel8r; \
 		$(MAKE) uninstall-observability; \
 		$(MAKE) uninstall-minio; \
 		$(MAKE) disable-tracing-ui; \
@@ -876,7 +1033,7 @@ uninstall-observability-stack:
 	else \
 		echo "❌ WARNING: UNINSTALL_OBSERVABILITY is not set to 'true'"; \
 		echo "   Skipping removal of shared observability infrastructure to protect other teams."; \
-		echo "   This infrastructure (TempoStack, LokiStack, OTel Collector) is shared by multiple applications."; \
+		echo "   This infrastructure (TempoStack, LokiStack, OTel Collector, Korrel8r) is shared by multiple applications."; \
 		echo ""; \
 		echo "   To remove observability infrastructure, run:"; \
 		echo "     → make uninstall NAMESPACE=$(NAMESPACE) UNINSTALL_OBSERVABILITY=true"; \
@@ -929,19 +1086,14 @@ push-alert-example:
 
 .PHONY: install-alert-example
 install-alert-example: namespace
-	@echo "→ Applying PrometheusRule for alert-example"
-	oc apply -n $(NAMESPACE) -f $(ALERT_EXAMPLE_K8S_DIR)/prometheusrule.yaml
-	@echo "→ Deploying alert-example resources to namespace $(NAMESPACE)"
-	oc apply -n $(NAMESPACE) -f $(ALERT_EXAMPLE_K8S_DIR)/configmap.yaml
-	oc apply -n $(NAMESPACE) -f $(ALERT_EXAMPLE_K8S_DIR)/deployment.yaml
-	oc set image -n $(NAMESPACE) deployment/alert-example app=$(ALERT_EXAMPLE_IMAGE)
-	oc apply -n $(NAMESPACE) -f $(ALERT_EXAMPLE_K8S_DIR)/service.yaml
-	oc rollout status -n $(NAMESPACE) deployment/alert-example
-	@echo "→ Patching ConfigMap to trigger crash behavior"
-	oc apply -n $(NAMESPACE) -f $(ALERT_EXAMPLE_K8S_DIR)/configmap_patch.yaml
-	@echo "→ Restarting deployment to pick up patched config"
-	oc rollout restart deployment/alert-example -n $(NAMESPACE)
-	@echo "→ Waiting for pod to enter CrashLoopBackOff"
+	@echo "→ Installing/Upgrading alert-example helm chart (deploys alert-example and trace-example)"
+	@helm upgrade --install alert-example $(ALERT_EXAMPLE_CHART_PATH) -n $(NAMESPACE) \
+		--create-namespace \
+		--set image.repository=$(shell echo $(ALERT_EXAMPLE_IMAGE) | sed 's/:.*//') \
+		--set image.tag=$(shell echo $(ALERT_EXAMPLE_IMAGE) | sed 's/.*://')
+	@echo "→ Waiting for deployment/alert-example initial rollout"
+	@oc rollout status -n $(NAMESPACE) deployment/alert-example || true
+	@echo "→ Waiting for alert-example pod to enter CrashLoopBackOff (due to 'Crash' message)"
 	@retries=60; \
 	while [ $$retries -gt 0 ]; do \
 	  reason=$$(oc get pods -n $(NAMESPACE) -l app=alert-example -o jsonpath='{range .items[*]}{.status.containerStatuses[0].state.waiting.reason}{"\n"}{end}' 2>/dev/null | head -n1); \
@@ -953,18 +1105,49 @@ install-alert-example: namespace
 	  exit 1; \
 	else \
 	  echo "✅ alert-example deployed successfully and pod is in CrashLoopBackOff"; \
-	  echo "ℹ You can verify in Prometheus that alert 'AlertExampleDown' is firing."; \
+	  echo "ℹ You can verify in Prometheus that alert 'Alert_exampleDown' is firing."; \
+	fi
+	@echo "→ Waiting for my-app-example Pod to be Ready"
+	@retries=60; \
+	while [ $$retries -gt 0 ]; do \
+	  if [ -n "$$(oc get pods -n $(NAMESPACE) -l app=my-app-example -o name 2>/dev/null | head -n1)" ]; then \
+	    break; \
+	  fi; \
+	  sleep 2; retries=$$((retries-1)); \
+	done; \
+	if [ $$retries -eq 0 ]; then \
+	  echo "✖ Timed out waiting for my-app-example pod creation"; \
+	  exit 1; \
+	fi
+	@oc wait -n $(NAMESPACE) --for=condition=Ready pod -l app=my-app-example --timeout=2m || true
+	@echo "→ Invoking /config on my-app-example route to trigger error span and termination"
+	@host=$$(oc get route my-app-example -n $(NAMESPACE) -o jsonpath='{.spec.host}'); \
+	if [ -z "$$host" ]; then \
+	  echo "✖ Could not determine route host for my-app-example"; \
+	  exit 1; \
+	else \
+	  echo "   Route host: $$host"; \
+	  curl -sS -m 15 "http://$$host/config" || true; \
+	fi
+	@echo "→ Waiting for my-app-example Pod phase to become Failed"
+	@retries=60; \
+	while [ $$retries -gt 0 ]; do \
+	  phase=$$(oc get pods -n $(NAMESPACE) -l app=my-app-example -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null | head -n1); \
+	  if [ "$$phase" = "Failed" ]; then echo "✔ my-app-example pod phase=Failed"; break; fi; \
+	  sleep 5; retries=$$((retries-1)); \
+	done; \
+	if [ $$retries -eq 0 ]; then \
+	  echo "✖ Timed out waiting for my-app-example pod to reach Failed phase"; \
+	  exit 1; \
+	else \
+	  echo "✅ my-app-example executed /config, emitted error span, and pod is now Failed"; \
 	fi
 
 .PHONY: uninstall-alert-example
 uninstall-alert-example: namespace
-	@echo "→ Uninstalling alert-example resources from namespace $(NAMESPACE)"
-	- oc delete -n $(NAMESPACE) -f $(ALERT_EXAMPLE_K8S_DIR)/prometheusrule.yaml --ignore-not-found
-	- oc delete deployment alert-example -n $(NAMESPACE) --ignore-not-found
-	- oc delete service alert-example -n $(NAMESPACE) --ignore-not-found
-	- oc delete route alert-example -n $(NAMESPACE) --ignore-not-found
-	- oc delete configmap alert-example-config -n $(NAMESPACE) --ignore-not-found
-	@echo "✅ alert-example resources removed (skipped any that were not found)"
+	@echo "→ Uninstalling Helm release 'alert-example' from namespace $(NAMESPACE) (removes alert-example and trace-example)"
+	- helm uninstall alert-example -n $(NAMESPACE) --ignore-not-found
+	@echo "✅ Helm release uninstalled  resources cleaned"
 
 
 .PHONY: install-minio
@@ -989,30 +1172,17 @@ install-minio:
 	@echo "  → Broken upstream routes cleaned up"
 
 
-# Korrel8r installation via UIPlugin then patch
+# Korrel8r installation via Helm
 .PHONY: install-korrel8r
 install-korrel8r:
-	@bash -c '\
-		MCS_NS="$${NAMESPACE:-$$(oc project -q 2>/dev/null)}"; \
-		echo "→ Checking KORREL8R_ENABLED in Helm release $(MCP_SERVER_RELEASE_NAME) (namespace=$$MCS_NS)"; \
-		if ! helm list -n "$$MCS_NS" -q 2>/dev/null | grep -q "^$(MCP_SERVER_RELEASE_NAME)$$"; then \
-		  echo "  → $(MCP_SERVER_RELEASE_NAME) not found in $$MCS_NS; skipping Korrel8r install"; \
-		  exit 0; \
-		fi; \
-		ENABLED=$$(helm get values $(MCP_SERVER_RELEASE_NAME) -n "$$MCS_NS" --all -o json 2>/dev/null | jq -r ".env.KORREL8R_ENABLED // \"\"" | tr "[:upper:]" "[:lower:]"); \
-		if [ "$$ENABLED" != "true" ]; then \
-		  echo "  → KORREL8R_ENABLED=$$ENABLED; skipping Korrel8r install"; \
-		  exit 0; \
-		fi; \
-		echo "  → KORREL8R_ENABLED=true; deploying Korrel8r directly via Helm"; \
-		cd deploy/helm && helm upgrade --install $(KORREL8R_RELEASE_NAME) $(KORREL8R_CHART_PATH) \
-			--namespace $(KORREL8R_NAMESPACE) \
-			--create-namespace \
-			--set global.namespace=$(KORREL8R_NAMESPACE); \
-		echo "→ Waiting for rollout of deployment/$(KORREL8R_RELEASE_NAME)"; \
-		oc rollout status -n $(KORREL8R_NAMESPACE) deployment/$(KORREL8R_RELEASE_NAME) --timeout=10m || true; \
-		echo "✅ Korrel8r installed successfully" \
-	'
+	@echo "→ Deploying Korrel8r via Helm"
+	@cd deploy/helm && helm upgrade --install $(KORREL8R_RELEASE_NAME) $(KORREL8R_CHART_PATH) \
+		--namespace $(KORREL8R_NAMESPACE) \
+		--create-namespace \
+		--set global.namespace=$(KORREL8R_NAMESPACE)
+	@echo "→ Waiting for rollout of deployment/$(KORREL8R_RELEASE_NAME)"
+	@oc rollout status -n $(KORREL8R_NAMESPACE) deployment/$(KORREL8R_RELEASE_NAME) --timeout=10m || true
+	@echo "✅ Korrel8r installed successfully"
 
 .PHONY: uninstall-korrel8r
 uninstall-korrel8r:
@@ -1080,12 +1250,23 @@ install-loki:
 		echo "  ✅ Cleanup complete"; \
 		echo "→ Installing loki-stack helm chart"; \
 		COLLECTOR_CREATE=$$($(check_collector_sa_and_get_flag)); \
+		DEFAULT_SC=$$(oc get sc -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}' 2>/dev/null); \
+		if [ -z "$$DEFAULT_SC" ]; then \
+			DEFAULT_SC=$$(oc get sc -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.beta\.kubernetes\.io/is-default-class=="true")].metadata.name}' 2>/dev/null); \
+		fi; \
+		if [ -z "$$DEFAULT_SC" ]; then \
+			echo "  ⚠️  Could not detect default StorageClass; falling back to chart default 'gp3'"; \
+			DEFAULT_SC=gp3; \
+		else \
+			echo "  → Detected default StorageClass: $$DEFAULT_SC"; \
+		fi; \
 		cd deploy/helm && helm upgrade --install loki-stack observability/loki \
 			--namespace $(LOKI_NAMESPACE) \
 			--create-namespace \
 			--atomic --timeout 15m \
 			--set global.namespace=$(LOKI_NAMESPACE) \
 			--set rbac.collector.create=$$COLLECTOR_CREATE \
+			--set lokiStack.storageClassName=$$DEFAULT_SC \
 			$(helm_loki_args); \
 		echo "✅ loki-stack installed successfully"; \
 	fi

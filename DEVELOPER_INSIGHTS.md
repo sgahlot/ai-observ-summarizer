@@ -28,6 +28,14 @@ Perfect for AI operations teams, platform engineers, and business stakeholders w
 
 ---
 
+> **Note**: This document provides comprehensive developer documentation. For production deployment and end-user documentation, see **[README.md](README.md)**. For specific topics, see:
+> - **[docs/DEV_GUIDE.md](docs/DEV_GUIDE.md)** - Development workflows and architecture
+> - **[docs/CHATBOTS.md](docs/CHATBOTS.md)** - Chatbot architecture and design decisions
+> - **[docs/OBSERVABILITY_OVERVIEW.md](docs/OBSERVABILITY_OVERVIEW.md)** - Observability stack architecture
+> - **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Common issues and solutions
+
+---
+
 ## Table of Contents
 
 - [Features](#features)
@@ -38,6 +46,7 @@ Perfect for AI operations teams, platform engineers, and business stakeholders w
 - [Build & Deploy](#build--deploy)
 - [Local Development](#local-development-via-port-forwarding)
 - [Running Tests with Pytest](#running-tests-with-pytest)
+- [E2E Test Verification in OpenShift](#e2e-test-verification-in-openshift)
 - [GitHub Actions CI/CD](#github-actions-cicd)
 - [Semantic Versioning](#semantic-versioning)
 - [Helm Charts Documentation](#helm-charts-documentation)
@@ -55,7 +64,7 @@ Perfect for AI operations teams, platform engineers, and business stakeholders w
 - Dynamic DCGM GPU metrics discovery (temperature, power, memory)
 - Real-time performance analysis and anomaly detection
 
-### **2. OpenShift Fleet Monitoring** 
+### **2. OpenShift Fleet Monitoring**
 - Cluster-wide and namespace-scoped metric analysis
 - GPU & Accelerators fleet monitoring with comprehensive DCGM metrics
 - Workloads, Storage, Networking, and Application Services monitoring
@@ -63,8 +72,9 @@ Perfect for AI operations teams, platform engineers, and business stakeholders w
 
 ### **3. AI-Powered Insights**
 - Generate summaries using multiple LLM providers (Anthropic Claude, OpenAI GPT, Google Gemini, Local Llama)
-- Chat with an MLOps assistant based on real metrics
+- Chat with an AI assistant based on real metrics
 - Flexible model selection with support for both internal and external LLM models
+- Multi-provider chatbot architecture in standalone `src/chatbots/` package
 
 ### **4. Report Generation**
 - Export analysis as HTML, PDF, or Markdown reports
@@ -72,7 +82,7 @@ Perfect for AI operations teams, platform engineers, and business stakeholders w
 - Automated metric calculations and trend analysis
 
 ### **5. Alerting & Notifications**
-- Set up alerts for vLLM models and OpenShift metrics  
+- Set up alerts for vLLM models and OpenShift metrics
 - Slack notifications when alerts are triggered
 - Custom alert thresholds and conditions
 
@@ -87,13 +97,13 @@ Perfect for AI operations teams, platform engineers, and business stakeholders w
 - **Real-time data access** - connects directly to Prometheus/Thanos
 - **AI-powered insights** - full LLM integration for intelligent metric analysis
 
-Supports stdio and HTTP (SSE) transports. See `src/mcp_server/README.md` for configuration examples.
+Supports stdio and HTTP (SSE) transports. See [src/mcp_server/README.md](src/mcp_server/README.md) for configuration examples.
 
-📖 **Quick Setup**: 
+📖 **Quick Setup**:
 ```bash
 cd src/mcp_server && python setup_integration.py
 ```
-See [`src/mcp_server/README.md`](src/mcp_server/README.md) for complete documentation.
+See [src/mcp_server/README.md](src/mcp_server/README.md) for complete documentation.
 
 ### **8. 🤖 Chat with Prometheus - AI-Powered Intelligence**
 - **AI-powered interface** with autonomous tool calling and real-time progress visibility (works with all supported LLM providers)
@@ -111,7 +121,7 @@ Ask questions like: *"How many pods are running?"*, *"What's the GPU temperature
 ### **DCGM Metrics Support**
 Automatically discovers and monitors:
 - **Temperature**: GPU core and memory temperature (°C)
-- **Power**: Real-time power consumption (Watts)  
+- **Power**: Real-time power consumption (Watts)
 - **Memory**: GPU memory usage (GB) and utilization (%)
 - **Energy**: Total energy consumption (Joules)
 - **Performance**: GPU utilization, clock speeds (MHz)
@@ -133,14 +143,44 @@ Monitor GPU health across your entire OpenShift cluster:
 - **Prometheus/Thanos**: Metrics collection and long-term storage
 - **vLLM**: Model serving with /metrics endpoint
 - **DCGM**: GPU monitoring and telemetry
-- **Streamlit UI**: Multi-dashboard interface (vLLM, OpenShift, Chat)
+- **UI Options**: Console Plugin (integrated) or React UI (standalone)
 - **MCP Server**: Model Context Protocol server for metrics analysis, report generation, and AI assistant integration
+- **Chatbots**: Multi-provider AI chatbot architecture in `src/chatbots/` package (Anthropic, OpenAI, Google, Local Llama)
 - **LLM Stack**: Llama models for AI-powered insights and summaries
+
+### **UI Deployment Options**
+
+The platform supports two deployment modes from a single codebase, controlled by the `DEV_MODE` variable:
+
+| Mode | Description | Access | Use Case |
+|------|-------------|--------|----------|
+| **Console Plugin** | Integrated into OpenShift Console | OpenShift Console UI | Production (default) |
+| **React UI** | Standalone web application | Dedicated Route | Development/Standalone |
+
+Both share the same MCP server backend and provide identical monitoring capabilities.
+
+**Console Plugin** (default - DEV_MODE=false):
+```bash
+# Deploy Console Plugin only (production mode)
+make install NAMESPACE=your-namespace
+# or explicitly
+make install NAMESPACE=your-namespace DEV_MODE=false
+```
+
+**React UI** (development - DEV_MODE=true):
+```bash
+# Deploy React UI only (development mode)
+make install NAMESPACE=your-namespace DEV_MODE=true
+```
+
+**Note**: The `make install` target deploys only one UI mode at a time based on DEV_MODE. However, `make uninstall` will attempt to clean up both Console Plugin and React UI if they exist, regardless of the current DEV_MODE setting.
+
+See [Build & Deploy](#build--deploy) section for image build commands.
 
 ### **Key Features**
 1. **vLLM Dashboard**: Monitor model performance, GPU usage, latency
 2. **OpenShift Dashboard**: Fleet monitoring with cluster-wide and namespace views
-3. **Chat Interface**: Interactive Q&A with metrics-aware AI assistant
+3. **Chat Interface**: Interactive Q&A with metrics-aware AI assistant (see [docs/CHATBOTS.md](docs/CHATBOTS.md) for architecture)
 4. **MCP Server**: AI assistant integration via Model Context Protocol
 5. **Report Generator**: Automated analysis reports in multiple formats
 
@@ -167,9 +207,15 @@ Monitor GPU health across your entire OpenShift cluster:
 
 Use the included `Makefile` to install everything:
 ```bash
+# Install with Console Plugin (production mode - default)
 make install NAMESPACE=your-namespace
+
+# Install with React UI (development mode)
+make install NAMESPACE=your-namespace DEV_MODE=true
 ```
-This will install the project with the default LLM deployment, `llama-3-1-8b-instruct`.
+This will install the project with:
+- Default LLM deployment: `llama-3-1-8b-instruct`
+- Default UI: Console Plugin (DEV_MODE=false) or React UI (DEV_MODE=true)
 
 ### Using an Existing Model
 
@@ -211,7 +257,7 @@ model: llama-guard-3-8b (meta-llama/Llama-Guard-3-8B)
 ```
 You can use the `LLM` flag during installation to set a model from this list for deployment:
 ```
-make install NAMESPACE=your-namespace LLM=llama-3-2-3b-instruct 
+make install NAMESPACE=your-namespace LLM=llama-3-2-3b-instruct
 ```
 
 ### With GPU tolerations
@@ -273,45 +319,39 @@ make remove-tracing NAMESPACE=your-namespace                 # Auto-instrumentat
 
 ### Accessing the Application
 
-The default configuration deploys:
+The standard installation deploys:
 - **llm-service** - LLM inference
 - **llama-stack** - Backend API
 - **pgvector** - Vector database
-- **metric-ui** - Multi-dashboard Streamlit interface
+- **UI Component** - Either Console Plugin (DEV_MODE=false) or React UI (DEV_MODE=true)
 - **mcp-server** - Model Context Protocol server for metrics analysis, report generation, and AI assistant integration
 - **OpenTelemetry Collector** - Distributed tracing collection
 - **Tempo** - Trace storage and analysis
 - **MinIO** - Object storage for traces
 
-Navigate to your **OpenShift Cluster → Networking → Routes** to find the application URL(s). You can also navigate to **Observe → Traces** in the OpenShift console to view traces.
+**Access Options:**
+- **Console Plugin** (DEV_MODE=false, default): Navigate to **OpenShift Console → OpenShift AI Observability** in the left navigation
+- **React UI** (DEV_MODE=true): Find the Route at **Networking → Routes** or run `oc get route aiobs-react-ui`
+- **Traces**: Navigate to **Observe → Traces** in the OpenShift console
 
-On terminal you can access the route with:
+To get the React UI route (when deployed with DEV_MODE=true):
 
 ```bash
-oc get route
+oc get route aiobs-react-ui
 
-NAME              HOST/PORT                                                               PATH   SERVICES        PORT   TERMINATION     WILDCARD
-metric-ui-route   metric-ui-route-llama-1.apps.tsisodia-spark.2vn8.p1.openshiftapps.com          metric-ui-svc   8501   edge/Redirect   None
+NAME                       HOST/PORT                                                        PATH   SERVICES    PORT   TERMINATION   WILDCARD
+aiobs-react-ui  aiobs-react-ui-your-namespace.apps.cluster.example.com       react-ui    8080   edge          None
 ```
 
-### OpenShift Summarizer Dashboard 
-![UI](docs/images/os.png)
-
-### vLLM Summarizer Dashboard 
-![UI](docs/images/vllm.png)
-
-### Chat with Prometheus 
-![UI](docs/images/chat.png)
-
-### Report Generated 
-![UI](docs/images/report.png)
-
+For UI screenshots and usage examples, see the main [README.md](README.md#usage) documentation.
 
 To uninstall:
 
 ```bash
 make uninstall NAMESPACE=your-namespace
 ```
+
+**Note**: The uninstall command will remove both Console Plugin and React UI if they exist, regardless of the current DEV_MODE setting. This ensures complete cleanup even if DEV_MODE was changed between install and uninstall.
 
 ---
 
@@ -322,7 +362,7 @@ Access via the OpenShift route: `oc get route`
 
 #### **vLLM Metric Summarizer**
 1. Select your AI model and namespace
-2. Choose time range for analysis  
+2. Choose time range for analysis
 3. Click **Analyze Metrics** for AI-powered insights
 4. Download reports in HTML/PDF/Markdown format
 
@@ -339,7 +379,7 @@ Access via the OpenShift route: `oc get route`
 
 #### **Key Monitoring Categories**
 - **Fleet Overview**: Pods, CPU, Memory, GPU temperature
-- **GPU & Accelerators**: Temperature, power, utilization, memory (GB)  
+- **GPU & Accelerators**: Temperature, power, utilization, memory (GB)
 - **Workloads & Pods**: Container metrics, restarts, failures
 - **Storage & Networking**: I/O rates, network throughput
 - **Application Services**: HTTP metrics, endpoints, errors
@@ -375,9 +415,10 @@ make build
 make build VERSION=v1.0.0
 
 # Build individual components
-make build-ui            # Streamlit UI  
-make build-alerting      # Alerting Service
-make build-mcp-server    # MCP Server
+make build-alerting        # Alerting Service
+make build-mcp-server      # MCP Server
+make build-console-plugin  # Console Plugin (OpenShift Console integration)
+make build-react-ui        # React UI (standalone application)
 ```
 
 #### **Push Images to Registry**
@@ -390,9 +431,10 @@ make push
 make push VERSION=v1.0.0
 
 # Push individual components
-make push-ui
 make push-alerting
 make push-mcp-server
+make push-console-plugin
+make push-react-ui
 ```
 
 #### **Complete Build and Push Workflow**
@@ -409,12 +451,29 @@ make build-and-push VERSION=v1.0.0 REGISTRY=your-registry.com/your-org
 
 #### **Basic Deployment**
 
+The `make install` target uses the `DEV_MODE` variable to control which UI is deployed:
+
 ```bash
-# Deploy to OpenShift namespace
-make deploy NAMESPACE=your-namespace
+# Deploy to OpenShift namespace with Console Plugin (production mode - default)
+make install NAMESPACE=your-namespace
+# or explicitly
+make install NAMESPACE=your-namespace DEV_MODE=false
+
+# Deploy to OpenShift namespace with React UI (development mode)
+make install NAMESPACE=your-namespace DEV_MODE=true
 
 # Deploy with alerting enabled
-make deploy-with-alerts NAMESPACE=your-namespace
+make install NAMESPACE=your-namespace ALERTS=TRUE
+```
+
+**Individual UI Deployments** (if needed):
+
+```bash
+# Deploy Console Plugin only
+make install-console-plugin NAMESPACE=your-namespace
+
+# Deploy React UI only
+make install-react-ui NAMESPACE=your-namespace
 ```
 
 #### **Complete Build, Push, and Deploy Workflow**
@@ -433,9 +492,11 @@ make build-deploy-alerts NAMESPACE=your-namespace
 # Check deployment status
 make status NAMESPACE=your-namespace
 
-# Uninstall deployment
+# Uninstall deployment (removes both Console Plugin and React UI if they exist)
 make uninstall NAMESPACE=your-namespace
 ```
+
+**Note**: The `make build-deploy` command uses `make install`, which respects the DEV_MODE setting to deploy either Console Plugin (DEV_MODE=false) or React UI (DEV_MODE=true).
 
 ### Configuration Options
 
@@ -454,6 +515,86 @@ export PLATFORM=linux/amd64
 # Show current configuration
 make config
 ```
+
+### Development Mode (DEV_MODE)
+
+The project supports a **Development Mode** that provides two key benefits:
+
+1. **UI Selection**: Controls which UI is deployed (Console Plugin vs React UI)
+2. **Credential Storage**: Simplifies testing by storing credentials in browser session storage instead of Kubernetes Secrets
+
+#### When to Use DEV_MODE
+
+Use DEV_MODE when:
+- Testing locally or in a development cluster with the standalone React UI
+- Quickly experimenting with different AI model providers without persisting credentials
+- Developing features that involve API key management
+- Avoiding creation of Kubernetes Secrets during development iterations
+
+**Do NOT use DEV_MODE in production environments.**
+
+#### How It Works
+
+**DEV_MODE=false (Production - Default)**:
+- **Deployment**: Installs Console Plugin (integrated into OpenShift Console)
+- **API keys**: Saved to Kubernetes Secrets (`ai-<provider>-credentials`)
+- **Model selection**: Persists across browser sessions (localStorage)
+- **Custom models**: Persists across browser sessions (localStorage)
+
+**DEV_MODE=true (Development)**:
+- **Deployment**: Installs React UI (standalone web application)
+- **API keys**: Cached in browser sessionStorage (cleared on tab close)
+- **Model selection**: Cached in browser sessionStorage (cleared on tab close)
+- **Custom models**: Cached in browser sessionStorage (cleared on tab close)
+- **No Kubernetes Secrets created**
+- **Dev mode banner shown in the UI**
+
+#### Deployment with DEV_MODE
+
+```bash
+# Deploy with Console Plugin (production mode - default)
+make install NAMESPACE=your-namespace
+
+# Deploy with React UI (development mode)
+make install NAMESPACE=your-namespace DEV_MODE=true
+
+# Deploy only MCP Server with DEV_MODE enabled
+make install-mcp-server NAMESPACE=your-namespace DEV_MODE=true
+```
+
+**Note**: When running `make uninstall`, both Console Plugin and React UI will be removed if they exist, regardless of the current DEV_MODE setting. This ensures clean uninstallation even if DEV_MODE was changed between install and uninstall.
+
+The MCP Server exposes the dev mode status via its `/config` endpoint:
+```bash
+curl http://<mcp-server-url>/config
+# Response: {"devMode": true}
+```
+
+The OpenShift Console Plugin automatically fetches this configuration and adjusts its behavior accordingly.
+
+#### User Experience
+
+**In Production Mode**:
+1. User enters API key in Settings page
+2. Frontend calls MCP server's `save_provider_credentials` tool
+3. MCP server creates/updates Kubernetes Secret
+4. API key persists across browser sessions
+5. Model selection persists across browser sessions
+
+**In Dev Mode**:
+1. User enters API key in Settings page
+2. Frontend stores API key in browser sessionStorage
+3. No Kubernetes Secret created
+4. API key automatically injected into MCP tool calls
+5. Close browser tab → All credentials and selections cleared
+6. Dev mode banner displayed in the UI
+
+#### Architecture Details
+
+- **MCP Server**: Controlled by `DEV_MODE` environment variable set via Helm chart
+- **Console Plugin**: Fetches dev mode status from MCP server's `/config` endpoint at startup
+- **Storage Strategy**: Uses `sessionStorage` in dev mode, `localStorage` in production mode
+- **Credential Injection**: Frontend automatically injects cached API keys into MCP tool calls in dev mode
 
 ### Available Models
 
@@ -523,7 +664,7 @@ PYTHON_LOG_LEVEL=WARN ./scripts/local-dev.sh -n <DEFAULT_NAMESPACE>    # Warning
 - ✅ **Port forwards LLM server** (localhost:8321)
 - ✅ **Port forwards Model service** (localhost:8080)
 - ✅ **Starts MCP server** (localhost:8085)
-- ✅ **Starts Streamlit UI** (localhost:8501)
+- ✅ **Starts React UI** (localhost:3000)
 - ✅ **Configures environment** for MCP server development
 - ✅ **Sets configurable logging** (PYTHON_LOG_LEVEL=INFO by default, override with env var)
 
@@ -576,7 +717,7 @@ obs-mcp-server --test-config
 The output should look like this:
 ![Command Output](docs/img/local-dev-expected.png)
 
- 
+
 
 ## Running Tests with Pytest
 
@@ -606,11 +747,158 @@ To view a detailed coverage report after generating, open `htmlcov/index.html`.
 
 ---
 
+## E2E Test Verification in OpenShift
+
+This section describes how to verify that all components of the OpenShift AI Observability Summarizer are working together end-to-end. This test validates the complete observability stack including Tempo (distributed tracing), Loki (logging), Korrel8r (log-trace correlation), MCP server, and the Console Plugin/React UI with external AI model integration.
+
+### Prerequisites
+
+Before running the E2E test, ensure the following components are deployed:
+
+1. **OpenShift AI Observability Summarizer** - Main application with Console Plugin or React UI
+2. **Observability Stack** - MinIO, Tempo, Loki, OpenTelemetry Collector, Korrel8r
+3. **User Workload Monitoring** - Enabled in the cluster to fetch user workload metrics and alerts
+4. **Alert Example Application** - Sample app that generates intentional failures
+5. **Anthropic API Key** - For accessing Claude Haiku 4.5 model
+
+### Step 1: Deploy the Alert Example Application
+
+The alert example app is designed to fail intentionally, generating traces and logs that demonstrate the correlation capabilities of the observability stack.
+
+```bash
+# Build the alert example image
+make build-alert-example
+
+# Push the alert example image to registry
+make push-alert-example
+
+# Deploy the alert example application
+make install-alert-example NAMESPACE=<your-namespace>
+```
+
+The `install-alert-example` target will:
+- Deploy both the `alert-example` app (which crashes intentionally) and the `my-app-example` service
+- Wait for the `alert-example` pod to enter CrashLoopBackOff state (expected behavior)
+- Wait for the `my-app-example` pod to become ready
+- Trigger the `/config` endpoint on `my-app-example` to generate error traces
+- Wait for the `my-app-example` pod to fail (expected behavior)
+
+Both applications will generate traces and logs showing configuration errors that can be correlated.
+
+### Step 2: Configure the UI to Use Anthropic Claude Haiku 4.5
+
+1. **Access the UI**:
+   - **Console Plugin** (production mode): Navigate to **OpenShift Console → OpenShift AI Observability** in the left navigation
+   - **React UI** (dev mode): Access the route via `oc get route aiobs-react-ui`
+
+2. **Configure External Model**:
+   - Navigate to the **Settings** page
+   - Go to the **API Key** tab
+   - Enter your Anthropic API key and save it
+   - Switch to the **Available Models** tab
+   - In the model selection dropdown, choose **Anthropic** as the provider
+   - Select **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) as the model
+   - Save the configuration
+
+### Step 3: Test Alert Investigation via AI Chat
+
+This test verifies that the system can analyze alerts, correlate logs, and analyze distributed traces to identify issues.
+
+#### 3a. Check Alert Status
+
+1. **Navigate to AI Chat**:
+   - Go to the **AI Chat** tab in the UI
+   - Ensure you're using the Anthropic Claude Haiku 4.5 model configured in Step 2
+
+2. **Ask About Alerts**:
+   - In the chat interface, ask: *"Any alerts are firing in jianrong namespace?"*
+
+3. **Expected Result - Alert is Firing**:
+   - The AI assistant should confirm that an alert is firing in the namespace
+   - The response should show alert details including the alert name and severity
+   - **This confirms that user workload monitoring is enabled and the system can fetch user workload data**
+
+   ![Alert Status](docs/images/e2e-test-alert-status.png)
+   *Screenshot showing alert firing in the namespace, confirming user workload monitoring is operational*
+
+#### 3b. Investigate the Alert
+
+4. **Request Alert Investigation**:
+   - Ask a follow-up question: *"Investigate this alert"*
+
+5. **Expected Result - Alert Analysis with Logs**:
+   - The AI assistant should provide detailed analysis of the alert
+   - The analysis should identify the affected deployment and pod
+   - **The response should reference log data retrieved from the pod associated with the alert**
+   - Example expected output includes error signatures, log highlights, and potential causes from the logs
+   - **This confirms that Korrel8r successfully correlated the alert with pod logs**
+
+   ![Alert Investigation](docs/images/e2e-test-alert-investigation.png)
+   *Screenshot showing alert analysis with corresponding pod logs retrieved via Korrel8r*
+
+#### 3c. Analyze Pod Failures
+
+6. **Check for Pod Failures**:
+   - Ask: *"Which pods are failing in jianrong namespace?"*
+
+7. **Expected Result - Pod Failure Analysis**:
+   - The AI assistant should list failing pods in the namespace
+   - The response should identify pods in Failed or CrashLoopBackOff state
+   - The analysis should provide PromQL queries used to fetch the pod status
+
+   ![Pod Failures](docs/images/e2e-test-pod-failures.png)
+   *Screenshot showing pod failure analysis in the namespace*
+
+#### 3d. Deep Dive into Application Failure
+
+8. **Investigate Application Failure**:
+   - Ask: *"Use correlated data to investigate pod failure for my-app-example-sosim"*
+
+9. **Expected Result - Trace and Log Analysis**:
+   - The AI assistant should provide comprehensive failure analysis
+   - **The response should reference both distributed traces and logs retrieved for the application**
+   - The analysis should show:
+     - Configuration errors from trace analysis
+     - Specific error messages from logs
+     - HTTP endpoint errors and status codes
+     - Tags indicating failure (e.g., `sys.exit(1)`, `config.contains_error: true`)
+   - **This confirms that the system can fetch and analyze application traces and logs for failure investigation**
+
+   ![Application Failure Analysis](docs/images/e2e-test-failure-investigation.png)
+   *Screenshot showing comprehensive failure analysis with traces and logs, highlighting configuration errors and error signatures*
+
+### Step 4: Verify E2E Functionality
+
+If the AI Chat conversation above produces the expected results across all steps (3a-3d), this confirms:
+
+- **User Workload Monitoring** - Cluster is configured to fetch user workload metrics and alerts
+- **Alert Detection** - System can query and identify firing alerts in namespaces
+- **Distributed Tracing** - Tempo is collecting and storing trace data from applications
+- **Logging** - Loki is collecting and storing log data from pods
+- **Correlation** - Korrel8r is successfully correlating alerts with logs and traces
+- **MCP Server** - Backend is properly querying observability data sources (Prometheus, Tempo, Loki)
+- **AI Chat Integration** - Console Plugin/React UI is correctly integrating with external AI models
+- **External AI Model** - Anthropic Claude Haiku 4.5 is providing intelligent analysis of observability data
+- **End-to-End Analysis Pipeline** - Complete workflow from alert detection to root cause analysis is functional
+
+### Cleanup
+
+After completing the E2E test, you can remove the alert example application:
+
+```bash
+# Uninstall the alert example app
+make uninstall-alert-example NAMESPACE=<your-namespace>
+```
+
+This will remove both the `alert-example` and `my-app-example` deployments, along with their associated resources (Services, Routes, ConfigMaps, and PrometheusRules).
+
+---
+
 ## GitHub Actions CI/CD
 
 Automated workflows cover testing, building, deploying, and undeploying. Configure OpenShift and registry secrets, and the pipelines will run on PRs and merges.
 
-📖 See [docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md) for full workflow details and setup.
+📖 See **[docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)** for full workflow details and setup.
 
 ---
 
@@ -618,7 +906,7 @@ Automated workflows cover testing, building, deploying, and undeploying. Configu
 
 Semantic versions are derived automatically from PR labels/titles, falling back to commit messages.
 
-📖 See [docs/SEMANTIC_VERSIONING.md](docs/SEMANTIC_VERSIONING.md) for complete rules and examples.
+📖 See **[docs/SEMANTIC_VERSIONING.md](docs/SEMANTIC_VERSIONING.md)** for complete rules and examples.
 
 ---
 
@@ -630,7 +918,7 @@ The project uses Helm charts for OpenShift deployment with centralized image man
 - **Image versions**: Controlled via the `VERSION` variable
 - **Helm overrides**: `--set image.repository=$(IMAGE_NAME)` and `--set image.tag=$(VERSION)`
 
-📖 **[Complete Helm Charts Documentation](docs/HELM_CHARTS.md)** - Detailed information about Helm chart structure, image management, deployment patterns, and customization options.
+📖 See **[docs/HELM_CHARTS.md](docs/HELM_CHARTS.md)** for detailed information about Helm chart structure, image management, deployment patterns, and customization options.
 
 ### Logging
 
@@ -640,9 +928,9 @@ All services use centralized structured logging. Control verbosity via the `PYTH
 
 ## Contributing
 
-We welcome contributions and feedback! Please open issues or submit PRs to improve this dashboard or expand model compatibility.
+We welcome contributions and feedback! Please open issues or submit PRs to improve this platform or expand model compatibility.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for full contribution guidelines.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for full contribution guidelines.
 
 ---
 
@@ -652,7 +940,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full contribution guidelines.
 - [CNCF Landscape](https://landscape.cncf.io/)
 - [OpenShift AI](https://www.redhat.com/en/technologies/cloud-computing/openshift/openshift-ai)
 - [Prometheus](https://prometheus.io/)
-- [Streamlit](https://streamlit.io/)
+- [Tempo](https://grafana.com/oss/tempo/)
+- [Loki](https://grafana.com/oss/loki/)
 
 ---
 

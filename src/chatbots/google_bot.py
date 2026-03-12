@@ -5,6 +5,7 @@ This module provides Google Gemini-specific implementation using the official SD
 """
 
 import os
+import re
 from typing import Optional, List, Dict, Any, Callable
 
 from .base import BaseChatBot
@@ -33,13 +34,20 @@ class GoogleChatBot(BaseChatBot):
         super().__init__(model_name, api_key, tool_executor)
 
         # Import Google SDK and configure
+        # Track SDK import status separately from configuration
+        self._sdk_import_failed = False
         try:
             import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
             self.genai = genai
-            self.configured = True
+            # Only configure if API key is provided
+            if self.api_key:
+                genai.configure(api_key=self.api_key)
+                self.configured = True
+            else:
+                self.configured = False
         except ImportError:
             logger.error("Google Generative AI SDK not installed. Install with: pip install google-generativeai")
+            self._sdk_import_failed = True
             self.genai = None
             self.configured = False
 
@@ -119,7 +127,7 @@ class GoogleChatBot(BaseChatBot):
             try:
                 # Try to convert to list
                 return [self._convert_proto_to_native(item) for item in value]
-            except:
+            except Exception:
                 pass
 
         # Handle proto message types
@@ -128,7 +136,7 @@ class GoogleChatBot(BaseChatBot):
                 # Convert proto message to dict
                 from google.protobuf.json_format import MessageToDict
                 return MessageToDict(value)
-            except:
+            except Exception:
                 pass
 
         # Handle dictionaries recursively
@@ -137,6 +145,33 @@ class GoogleChatBot(BaseChatBot):
 
         # Return as-is for native types
         return value
+
+    def _detect_text_tool_calls(self, text: str, tool_names: List[str]) -> bool:
+        """Detect if the model described a tool call in text instead of using the function calling API.
+
+        Some models (especially Gemini) may output text like:
+            **Tool Call:**
+            ```python
+            get_trace_details_tool(trace_id='...')
+            ```
+        instead of actually invoking the function calling API.
+
+        Returns True if a text-based tool call pattern is detected.
+        """
+        if not text or not tool_names:
+            return False
+
+        # Check for "Tool Call:" header pattern
+        if re.search(r'Tool Call:', text, re.IGNORECASE):
+            return True
+
+        # Check for tool_name( pattern — actual function invocation syntax in text
+        for name in tool_names:
+            pattern = r'\b' + re.escape(name) + r'\s*\('
+            if re.search(pattern, text):
+                return True
+
+        return False
 
     def _convert_tools_to_gemini_format(self) -> List:
         """Convert MCP tools to Google Gemini SDK format."""
@@ -162,13 +197,19 @@ class GoogleChatBot(BaseChatBot):
 
         return sdk_tools
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(
+        self,
+        user_question: str,
+        namespace: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
         """Chat with Google Gemini using tool calling."""
         if not self.configured:
-            return "Error: Google Generative AI SDK not installed. Please install it with: pip install google-generativeai"
-
-        if not self.api_key:
-            return f"API key required for Google model {self.model_name}. Please provide an API key."
+            if self._sdk_import_failed:
+                return "Error: Google Generative AI SDK not installed. Please install it with: pip install google-generativeai"
+            else:
+                return f"Error: API key required for Google model {self.model_name}. Please configure an API key in Settings."
 
         try:
             # Create system prompt
@@ -182,6 +223,10 @@ class GoogleChatBot(BaseChatBot):
             # Convert tools to Gemini format
             gemini_tools = self._convert_tools_to_gemini_format()
 
+            # Extract tool names for text-based tool call detection
+            tool_names = [t.name for t in gemini_tools]
+            text_tool_call_retried = False
+
             # Initialize the model with tools and system instruction
             model = self.genai.GenerativeModel(
                 model_name=model_name,
@@ -189,8 +234,20 @@ class GoogleChatBot(BaseChatBot):
                 system_instruction=system_prompt
             )
 
-            # Start a chat session
-            chat = model.start_chat(enable_automatic_function_calling=False)
+            # Build history for chat session
+            gemini_history = []
+            if conversation_history:
+                logger.info(f"📜 Adding {len(conversation_history)} messages from conversation history")
+                for msg in conversation_history:
+                    # Convert to Gemini format
+                    gemini_role = "user" if msg["role"] == "user" else "model"
+                    gemini_history.append({
+                        "role": gemini_role,
+                        "parts": [msg["content"]]
+                    })
+
+            # Start a chat session with history
+            chat = model.start_chat(history=gemini_history, enable_automatic_function_calling=False)
 
             # Send initial message with just the user question
             initial_message = user_question
@@ -199,6 +256,7 @@ class GoogleChatBot(BaseChatBot):
             max_iterations = 10  # Reduced from 30 to prevent long waits
             iteration = 0
             function_responses = []  # Initialize outside loop
+            consecutive_tool_tracker = {"name": None, "count": 0}
 
             while iteration < max_iterations:
                 iteration += 1
@@ -253,10 +311,16 @@ class GoogleChatBot(BaseChatBot):
 
                     # Build function responses for next iteration
                     function_responses = []  # Clear previous responses
+                    tool_loop_detected = False
                     for part in parts:
                         if hasattr(part, 'function_call') and part.function_call:
                             func_call = part.function_call
                             tool_name = func_call.name
+
+                            if self._check_tool_loop(tool_name, consecutive_tool_tracker):
+                                tool_loop_detected = True
+                                break
+
                             # Convert proto args to native Python types (dict with proto values -> dict with native values)
                             tool_args = self._convert_proto_to_native(dict(func_call.args))
 
@@ -264,7 +328,7 @@ class GoogleChatBot(BaseChatBot):
                                 progress_callback(f"🔧 Using tool: {tool_name}")
 
                             # Get tool result with automatic truncation (logging handled in base class)
-                            tool_result = self._get_tool_result(tool_name, tool_args)
+                            tool_result = self._get_tool_result(tool_name, tool_args, namespace=namespace)
 
                             # Create function response for Gemini SDK
                             function_responses.append(
@@ -275,6 +339,12 @@ class GoogleChatBot(BaseChatBot):
                                     )
                                 )
                             )
+
+                    if tool_loop_detected:
+                        return (
+                            "I got stuck in a loop calling the same tool repeatedly. "
+                            "Please try rephrasing your question or being more specific."
+                        )
 
                     logger.info(f"Prepared {len(function_responses)} function response(s) for next iteration")
                     # Continue loop to send function responses
@@ -291,6 +361,65 @@ class GoogleChatBot(BaseChatBot):
                         logger.warning("Model returned parts but no text content")
                         logger.warning(f"Parts: {parts}")
                         return "Error: Model completed but returned no text response"
+
+                    # Detect text-based tool calls and retry with a nudge (max 1 retry)
+                    if not text_tool_call_retried and self._detect_text_tool_calls(final_response, tool_names):
+                        text_tool_call_retried = True
+                        logger.warning("Detected text-based tool call instead of function calling API. Sending nudge.")
+                        try:
+                            nudge_response = chat.send_message(
+                                "You described a tool call in text instead of actually calling the function. "
+                                "Please use the function calling API to execute the tool. "
+                                "Do not describe the call — invoke it directly.",
+                                generation_config=self.genai.GenerationConfig(temperature=0)
+                            )
+
+                            # Check if the nudge produced proper function calls
+                            if (nudge_response.candidates
+                                    and nudge_response.candidates[0].content
+                                    and nudge_response.candidates[0].content.parts):
+                                nudge_parts = nudge_response.candidates[0].content.parts
+                                has_nudge_function_calls = any(
+                                    hasattr(p, 'function_call') and p.function_call for p in nudge_parts
+                                )
+                                if has_nudge_function_calls:
+                                    # Process function calls from nudge response
+                                    parts = nudge_parts
+                                    function_responses = []
+                                    for part in parts:
+                                        if hasattr(part, 'function_call') and part.function_call:
+                                            func_call = part.function_call
+                                            tool_name = func_call.name
+                                            tool_args = self._convert_proto_to_native(dict(func_call.args))
+
+                                            if self._check_tool_loop(tool_name, consecutive_tool_tracker):
+                                                break
+
+                                            if progress_callback:
+                                                progress_callback(f"🔧 Using tool: {tool_name}")
+
+                                            tool_result = self._get_tool_result(tool_name, tool_args, namespace=namespace)
+
+                                            function_responses.append(
+                                                self.genai.protos.Part(
+                                                    function_response=self.genai.protos.FunctionResponse(
+                                                        name=tool_name,
+                                                        response={"content": tool_result}
+                                                    )
+                                                )
+                                            )
+                                    logger.info(f"Nudge successful: {len(function_responses)} function call(s) recovered")
+                                    continue
+                                else:
+                                    # Nudge didn't produce function calls either — return whatever text it gave
+                                    nudge_text = ""
+                                    for p in nudge_parts:
+                                        if hasattr(p, 'text') and p.text:
+                                            nudge_text += p.text
+                                    if nudge_text:
+                                        final_response = nudge_text
+                        except Exception as e:
+                            logger.warning(f"Nudge retry failed: {e}. Returning original response.")
 
                     logger.info(f"Google Gemini tool calling completed in {iteration} iterations")
                     return final_response

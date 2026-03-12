@@ -14,6 +14,48 @@ from common.pylogger import get_python_logger
 
 logger = get_python_logger()
 
+# PromQL functions, keywords, and common label names that should NOT get
+# namespace injected — only actual metric names should.  Module-level constant
+# to avoid rebuilding on every call.
+_PROMQL_SKIP = frozenset({
+    # Aggregation operators
+    'sum', 'avg', 'min', 'max', 'count', 'stddev', 'stdvar',
+    'topk', 'bottomk', 'quantile', 'count_values',
+    # Rate/counter functions
+    'rate', 'irate', 'increase', 'delta', 'idelta',
+    # Histogram functions
+    'histogram_quantile', 'histogram_count', 'histogram_sum',
+    # Label functions
+    'label_replace', 'label_join',
+    # Math functions
+    'abs', 'ceil', 'floor', 'round', 'clamp', 'clamp_min', 'clamp_max',
+    'exp', 'ln', 'log2', 'log10', 'sqrt',
+    # Sort/utility functions
+    'sort', 'sort_desc', 'time', 'timestamp',
+    'vector', 'scalar', 'sgn',
+    # Range functions
+    'changes', 'resets', 'deriv', 'predict_linear',
+    'absent', 'absent_over_time', 'present_over_time',
+    # Date functions
+    'day_of_month', 'day_of_week', 'days_in_month',
+    'hour', 'minute', 'month', 'year',
+    # Keywords and operators
+    'by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
+    'bool', 'offset', 'and', 'or', 'unless',
+    # Over-time functions
+    'avg_over_time', 'min_over_time', 'max_over_time',
+    'sum_over_time', 'count_over_time', 'stddev_over_time',
+    'last_over_time', 'quantile_over_time',
+    # Common Kubernetes label names (appear in by/without/grouping clauses)
+    'pod', 'namespace', 'container', 'node', 'instance', 'job',
+    'service', 'deployment', 'daemonset', 'statefulset', 'replicaset',
+    'phase', 'reason', 'condition', 'type', 'resource', 'unit',
+    'device', 'interface', 'mode', 'cpu', 'endpoint', 'alertname',
+    'alertstate', 'severity', 'le', 'model_name', 'model',
+    # Numeric literals used in comparisons (won't match our regex, but safe)
+    'inf', 'nan',
+})
+
 
 class BaseChatBot(ABC):
     """Base class for all chat bot implementations with common functionality."""
@@ -30,9 +72,7 @@ class BaseChatBot(ABC):
             model_name: Model identifier (e.g., "gpt-4", "claude-3-5-sonnet")
             api_key: Optional API key for the model
             tool_executor: Tool executor for calling observability tools (REQUIRED)
-                          Pass a ToolExecutor implementation:
-                          - MCPServerAdapter (from MCP server context)
-                          - MCPClientAdapter (from UI context)
+                          Pass MCPServerAdapter instance from the MCP server context.
 
         Raises:
             ValueError: If tool_executor is None
@@ -40,8 +80,8 @@ class BaseChatBot(ABC):
         """
         if tool_executor is None:
             raise ValueError(
-                "tool_executor is required. Pass a ToolExecutor implementation "
-                "(MCPServerAdapter from MCP server or MCPClientAdapter from UI)"
+                "tool_executor is required. Pass a MCPServerAdapter instance "
+                "from the MCP server context"
             )
 
         if not isinstance(tool_executor, ToolExecutor):
@@ -55,6 +95,9 @@ class BaseChatBot(ABC):
 
         # Store tool executor (dependency injection)
         self.tool_executor = tool_executor
+
+        from core.config import NAMESPACE_AWARE_TOOLS
+        self._namespace_aware_tools = NAMESPACE_AWARE_TOOLS
 
         logger.info(f"{self.__class__.__name__} initialized with model: {self.model_name}")
 
@@ -84,6 +127,45 @@ class BaseChatBot(ABC):
             return self.model_name.split("/", 1)[1]
         return self.model_name
 
+    # Maximum number of consecutive calls to the same tool before breaking
+    # the loop. Legitimate multi-call patterns (e.g., execute_promql for
+    # power then temperature) use at most 3 consecutive same-tool calls.
+    _MAX_CONSECUTIVE_SAME_TOOL = 5
+
+    def _check_tool_loop(self, tool_name: str, consecutive_tool_tracker: dict) -> bool:
+        """Check if the same tool has been called too many times consecutively.
+
+        Args:
+            tool_name: The tool being called this iteration.
+            consecutive_tool_tracker: Dict with 'name' and 'count' keys,
+                mutated in place to track state across calls.
+
+        Returns:
+            True if the tool loop threshold has been reached (caller should break).
+        """
+        if tool_name == consecutive_tool_tracker.get("name"):
+            consecutive_tool_tracker["count"] += 1
+        else:
+            consecutive_tool_tracker["name"] = tool_name
+            consecutive_tool_tracker["count"] = 1
+
+        if consecutive_tool_tracker["count"] >= self._MAX_CONSECUTIVE_SAME_TOOL:
+            logger.warning(
+                "Tool loop detected: %s called %d times consecutively. "
+                "Breaking loop.",
+                tool_name, consecutive_tool_tracker["count"],
+            )
+            return True
+        return False
+
+    def _get_tool_allowlist(self) -> Optional[set]:
+        """Return a set of tool names this model should receive, or None for all tools.
+
+        Subclasses can override this to limit which tools are sent to the model,
+        reducing context usage for models with smaller context windows.
+        """
+        return None
+
     def _get_mcp_tools(self) -> List[Dict[str, Any]]:
         """Get available tools via tool executor.
 
@@ -94,9 +176,14 @@ class BaseChatBot(ABC):
             # Fetch tools via tool executor (dependency injection)
             tools_list = self.tool_executor.list_tools()
 
+            # Filter by allowlist if the subclass defines one
+            allowlist = self._get_tool_allowlist()
+
             # Convert to expected format
             tools = []
             for tool in tools_list:
+                if allowlist is not None and tool.name not in allowlist:
+                    continue
                 tool_def = {
                     'name': tool.name,
                     'description': tool.description,
@@ -218,16 +305,98 @@ class BaseChatBot(ABC):
         """
         return 5000
 
-    def _get_tool_result(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+    def _inject_namespace_into_promql(self, query: str, namespace: str) -> str:
+        """Inject a namespace label filter into a PromQL query string.
+
+        Handles common PromQL patterns:
+        - metric_name → metric_name{namespace="ns"}
+        - metric_name{existing="label"} → metric_name{existing="label",namespace="ns"}
+        - sum(metric_name) → sum(metric_name{namespace="ns"})
+        - sum(rate(metric_name[5m])) → sum(rate(metric_name{namespace="ns"}[5m]))
+
+        If the query already contains a namespace filter, it is replaced with
+        the active namespace to ensure the UI dropdown selection takes precedence.
+        """
+        # If namespace filter already present, replace it with the active namespace
+        if f'namespace="' in query or f"namespace='" in query or 'namespace=~' in query or 'namespace!=' in query or 'namespace!~' in query:
+            modified = re.sub(
+                r'namespace\s*(?:!?=~?|!~)\s*["\'][^"\']*["\']',
+                f'namespace="{namespace}"',
+                query
+            )
+            if modified != query:
+                logger.info(f"📌 Replaced namespace in PromQL: {query} → {modified}")
+            return modified
+
+        original = query
+
+        # Pattern: find metric names followed by optional labels and/or range vector
+        # This regex matches: metric_name, metric_name{...}, metric_name[5m], metric_name{...}[5m]
+        # We inject namespace into the label set of each metric selector.
+        def inject_ns(match):
+            metric = match.group(1)
+            labels = match.group(2) or ''   # existing {labels} or empty
+            rest = match.group(3) or ''     # trailing [range] or empty
+
+            # Skip PromQL functions/keywords/label names — they aren't metric selectors
+            if metric.lower() in _PROMQL_SKIP:
+                return match.group(0)
+
+            if labels:
+                # Has existing labels: metric{existing="val"} → metric{existing="val",namespace="ns"}
+                inner = labels[1:-1].strip()  # strip { }
+                if inner:
+                    return f'{metric}{{{inner},namespace="{namespace}"}}{rest}'
+                else:
+                    return f'{metric}{{namespace="{namespace}"}}{rest}'
+            else:
+                # No existing labels: metric → metric{namespace="ns"}
+                return f'{metric}{{namespace="{namespace}"}}{rest}'
+
+        # Match metric selectors: word chars and colons (for namespaced metrics like vllm:xxx)
+        # followed by optional {labels} and optional [range]
+        modified = re.sub(
+            r'([a-zA-Z_:][a-zA-Z0-9_:]*)'   # group 1: metric name
+            r'(\{[^}]*\})?'                   # group 2: optional label matchers
+            r'(\[[^\]]*\])?',                  # group 3: optional range vector
+            inject_ns,
+            query
+        )
+
+        if modified != original:
+            logger.info(f"📌 Injected namespace '{namespace}' into PromQL: {original} → {modified}")
+        return modified
+
+    def _get_tool_result(self, tool_name: str, tool_args: Dict[str, Any], namespace: Optional[str] = None) -> str:
         """Execute tool call and truncate result if needed.
+
+        For execute_promql: injects namespace filter directly into the PromQL
+        query string (since execute_promql doesn't accept a namespace parameter).
+
+        For other namespace-aware tools: injects namespace as an argument.
 
         Args:
             tool_name: Name of the tool to call
             tool_args: Arguments to pass to the tool
+            namespace: Optional namespace to inject into tool args
 
         Returns:
             Tool result, truncated if it exceeds max length
         """
+        # Inject namespace for namespace-scoped queries
+        if namespace and tool_name in self._namespace_aware_tools:
+            if tool_name == 'execute_promql' and 'query' in tool_args:
+                # For execute_promql: modify the PromQL query string itself
+                tool_args = dict(tool_args)
+                tool_args['query'] = self._inject_namespace_into_promql(
+                    tool_args['query'], namespace
+                )
+            elif not tool_args.get('namespace'):
+                # For other tools: inject namespace as an argument
+                tool_args = dict(tool_args)
+                tool_args['namespace'] = namespace
+                logger.info(f"📌 Injected namespace '{namespace}' into {tool_name} args")
+
         # Log tool request with arguments
         logger.info(f"🔧 Requesting tool: {tool_name} with args: {tool_args}")
 
@@ -246,6 +415,110 @@ class BaseChatBot(ABC):
             logger.info(f"📦 Tool result size: {len(str(tool_result))} chars (within limit of {max_length})")
 
         return tool_result
+
+    def _truncate_messages(
+        self,
+        messages: list,
+        keep_system_prompt: bool = True,
+        max_messages: int = 20,
+        target_messages: int = 14,
+    ) -> list:
+        """Truncate messages while keeping tool-call/result pairs atomic.
+
+        Groups assistant messages that contain tool_calls together with their
+        corresponding tool-result messages, so truncation never orphans a
+        tool call from its results (which causes LLMs to hallucinate).
+
+        Supports two message formats:
+        - OpenAI/LlamaStack: tool results are separate {"role": "tool", ...} messages
+        - Anthropic: tool results are a single {"role": "user", "content": [{"type": "tool_result", ...}]} message
+
+        Args:
+            messages: The current message list (mutated in-place style; returns new list).
+            keep_system_prompt: If True, preserves messages[0] as the system prompt.
+            max_messages: Trigger truncation when len(messages) exceeds this.
+            target_messages: Keep this many messages (plus optional system prompt) after truncation.
+
+        Returns:
+            Truncated message list.
+        """
+        if len(messages) <= max_messages:
+            return messages
+
+        # Separate system prompt if needed
+        if keep_system_prompt and messages:
+            system = [messages[0]]
+            body = messages[1:]
+        else:
+            system = []
+            body = list(messages)
+
+        # Build atomic groups from body messages.
+        # A "group" is either:
+        #   1. A standalone message (user or assistant without tool_calls)
+        #   2. An assistant message with tool_calls + all subsequent tool-result messages
+        groups: list[list] = []
+        i = 0
+        while i < len(body):
+            msg = body[i]
+
+            # Detect assistant message with tool_calls (OpenAI/Llama format)
+            has_tool_calls = (
+                isinstance(msg, dict)
+                and msg.get("role") == "assistant"
+                and msg.get("tool_calls")
+            )
+
+            if has_tool_calls:
+                group = [msg]
+                i += 1
+                # Collect subsequent tool-result messages
+                while i < len(body):
+                    next_msg = body[i]
+                    is_tool_result = False
+
+                    # OpenAI format: {"role": "tool", ...}
+                    if isinstance(next_msg, dict) and next_msg.get("role") == "tool":
+                        is_tool_result = True
+
+                    # Anthropic format: {"role": "user", "content": [{"type": "tool_result", ...}]}
+                    if (
+                        isinstance(next_msg, dict)
+                        and next_msg.get("role") == "user"
+                        and isinstance(next_msg.get("content"), list)
+                        and any(
+                            isinstance(c, dict) and c.get("type") == "tool_result"
+                            for c in next_msg["content"]
+                        )
+                    ):
+                        is_tool_result = True
+
+                    if is_tool_result:
+                        group.append(next_msg)
+                        i += 1
+                    else:
+                        break
+                groups.append(group)
+            else:
+                groups.append([msg])
+                i += 1
+
+        # Drop oldest groups until we're at or below target (keep at least the most recent group)
+        total = sum(len(g) for g in groups)
+        while len(groups) > 1 and (len(system) + total) > target_messages:
+            dropped = groups.pop(0)
+            total -= len(dropped)
+
+        # Reconstruct
+        result = system[:]
+        for g in groups:
+            result.extend(g)
+
+        logger.info(
+            f"✂️ Truncated messages from {len(messages)} to {len(result)} "
+            f"({len(groups)} atomic groups preserved)"
+        )
+        return result
 
     def _get_model_specific_instructions(self) -> str:
         """Override this in subclasses for model-specific guidance.
@@ -268,6 +541,31 @@ class BaseChatBot(ABC):
             return f"{base_prompt}\n\n{model_specific}"
         return base_prompt
 
+    def _format_scope_line(self, namespace: Optional[str]) -> str:
+        """Format the Scope line for the system prompt."""
+        if namespace:
+            return (
+                "**NAMESPACE-SCOPED: %s** — ALL queries MUST be filtered "
+                "to this namespace only" % namespace
+            )
+        return "Cluster-wide analysis"
+
+    def _format_namespace_directive(self, namespace: Optional[str]) -> str:
+        """Format the namespace scoping directive for the system prompt."""
+        if not namespace:
+            return ""
+        return (
+            "\n**NAMESPACE SCOPE REQUIREMENT — MANDATORY:**\n"
+            'You are operating in NAMESPACE-SCOPED mode for namespace **"%s"**.\n'
+            "- You MUST call tools (execute_promql, search_metrics, etc.) to get FRESH data for this namespace.\n"
+            "- Do NOT reuse or reference results from previous queries — they may be from a different scope.\n"
+            '- Do NOT add namespace filters to your PromQL queries — the system automatically injects namespace="%s" for you.\n'
+            '- If a previous conversation shows cluster-wide data, IGNORE it and query fresh data for "%s".\n'
+            '- Every answer must reflect data from namespace "%s" ONLY.\n'
+            '- If the user mentions a different namespace in their question, still answer the question but use "%s"'
+            " — the active namespace selected in the UI always takes precedence.\n"
+        ) % (namespace, namespace, namespace, namespace, namespace)
+
     def _get_base_prompt(self, namespace: Optional[str] = None) -> str:
         """Create base system prompt shared by all models."""
         prompt = f"""You are an expert Kubernetes and Prometheus observability assistant.
@@ -278,26 +576,46 @@ You have access to monitoring tools and should provide focused, targeted respons
 
 **Your Environment:**
 - Cluster: OpenShift with AI/ML workloads, GPUs, and comprehensive monitoring
-- Scope: {namespace if namespace else 'Cluster-wide analysis'}
+- Scope: {self._format_scope_line(namespace)}
 - Tools: Direct access to Prometheus/Thanos metrics via MCP tools
+{self._format_namespace_directive(namespace)}
 
 **Available Tools:**
 
 **Core Observability Tools:**
 - search_metrics: Pattern-based metric search - use for broad exploration
 - execute_promql: Execute PromQL queries for actual data
+- convert_time_to_promql_duration: Convert decimal hours to Prometheus format (use before constructing queries with decimal time values)
 - get_metric_metadata: Get detailed information about specific metrics
 - get_label_values: Get available label values
 - suggest_queries: Get PromQL suggestions based on user intent
 - explain_results: Get human-readable explanation of query results
+- **get_metrics_categories**: Get all metric categories with summary (NEW - use for exploring available metrics by category)
+- **search_metrics_by_category**: Search metrics filtered by category and priority (NEW - use for targeted category-specific queries)
+
+**Trace Analysis Tools:**
+- chat_tempo_tool: Conversational trace analysis - use for trace/span/latency/request flow questions
+- query_tempo_tool: Direct tempo queries for specific trace searches
+- get_trace_details_tool: Get detailed information about specific trace IDs
+
+**Log Analysis Tools:**
+- get_correlated_logs: Fetch application and infrastructure logs for a namespace or pod. Use for: "show me logs", "error logs in namespace X", "what's happening in pod Y", crash investigation, log search by severity. Requires namespace; pod is optional.
 
 **Correlation & Advanced Analysis:**
-- korrel8r_query_objects: Query for specific observability objects (alerts, logs, traces, metrics) - available if Korrel8r is configured
-- korrel8r_get_correlated: Get correlated observability data across domains (find logs/traces/metrics related to alerts) - available if Korrel8r is configured
+- korrel8r_get_correlated: Get correlated observability data across domains (find logs/traces/metrics related to alerts) - available if Korrel8r is configured. Preferred over korrel8r_query_objects (for investigation and correlation).
+- korrel8r_query_objects: Query for specific observability objects (alerts, logs, traces, metrics) - available if Korrel8r is configured. Use for direct data access only.
 
 **Note:** Additional specialized tools are available for specific use cases (VLLM metrics, OpenShift analysis, model management, etc.) and will be provided to you automatically via the function calling interface when needed.
 
-**🚨 CRITICAL: Tool Selection for Alert Queries:**
+**🚨 CRITICAL: Tool Selection Guidelines:**
+
+**For Trace-Related Questions (trace, span, latency, request flow, distributed tracing, performance):**
+- Use `chat_tempo_tool` for conversational trace analysis with natural language questions
+- Use `query_tempo_tool` for specific trace queries when you need targeted data
+- Use `get_trace_details_tool` for detailed analysis of specific trace IDs
+- Extract time ranges from natural language ("last 24 hours", "yesterday", "last week")
+
+**For Alert Queries:**
 
 **Smart Two-Phase Approach:**
 - Start with Prometheus (fast, simple) for basic alert data
@@ -319,43 +637,44 @@ You have access to monitoring tools and should provide focused, targeted respons
    - Query specific alerts: `ALERTS{{alertstate="firing", alertname="HighCPU"}}`
    - Examples: "Any alerts firing?", "Show me alerts", "List all critical alerts", "Check alert status"
 
-**🧠 Your Intelligence Style:**
+**For Log Queries (logs, errors, pod output, crash investigation, "what happened"):**
+- Use `get_correlated_logs` for namespace/pod log retrieval — pass the namespace (required) and optionally a pod name
+- Use `korrel8r_get_correlated` when you need to correlate logs with traces and metrics (cross-signal investigation)
+- Examples: "Show me logs for namespace llm-serving", "Error logs from pod vllm-predictor", "What happened in namespace gpu-workloads?", "Show me crash logs"
 
-1. **Rich Contextual Analysis**: Don't just report numbers - provide context, thresholds, and implications
-   - For temperature metrics → compare against known safe operating ranges
-   - For count metrics → provide health context and status interpretation
+**Your Intelligence Style:**
+1. **Rich Contextual Analysis**: Provide context, thresholds, and implications — not just raw numbers
+2. **Intelligent Grouping**: Group related pods by function (AI/ML Stack, Infrastructure, Data Storage) with counts
+3. **Operational Intelligence**: Include health assessments, trend context, and actionable recommendations
 
-2. **Intelligent Grouping & Categorization**:
-   - Group related pods: "🤖 AI/ML Stack (2 pods): llama-3-2-3b-predictor, llamastack"
-   - Categorize by function: "🔧 Infrastructure (3 pods)", "🗄️ Data Storage (2 pods)"
+**CORE PRINCIPLES:**
+- Use tools to get real data — NEVER fabricate numbers or metric names
+- Be thorough but focused — answer what was asked, nothing more
+- STOP when you have enough data to answer the question well
 
-3. **Operational Intelligence**:
-   - Provide health assessments: "indicates a healthy environment"
-   - Suggest implications: "This level indicates substantial usage of AI infrastructure"
-   - Add recommendations when relevant
+**vLLM / Model-Serving Metrics:**
+Use `search_metrics_by_category` with category `gpu_ai` to discover exact metric names.
+Key metrics (DO NOT guess names — always search first):
+- Latency: `vllm:e2e_request_latency_seconds`, `vllm:time_to_first_token_seconds`
+- Throughput: `vllm:prompt_tokens_total`, `vllm:generation_tokens_total`, `vllm:num_requests_total`
+- Cache: `vllm:gpu_cache_usage_perc`, `vllm:cpu_cache_usage_perc`
+- GPU: `DCGM_FI_DEV_GPU_TEMP`, `DCGM_FI_DEV_POWER_USAGE`, `DCGM_FI_DEV_GPU_UTIL`
+For decimal hour time ranges (e.g., "2.3 hours"), use `convert_time_to_promql_duration()` to get the correct PromQL format.
 
-4. **Always Show PromQL Queries**:
-   - Include the PromQL query used in a technical details section
-   - Format: "**PromQL Used:** `[the actual query you executed]`"
+**Tool Selection Rules (ALWAYS follow these):**
+- Traces/spans/latency → `chat_tempo_tool` (search) or `get_trace_details_tool` (by ID)
+- Metrics/pods/GPU/CPU/memory → **ALWAYS** call `search_metrics` or `search_metrics_by_category` FIRST to discover exact metric names, THEN call `execute_promql` with the discovered names
+- Alerts → `execute_promql` with `ALERTS{{alertstate="firing"}}` metric
+- Logs/errors/pod output → `get_correlated_logs` with namespace and optional pod
+- Correlation/investigation/korrel8r → `korrel8r_get_correlated` with goals and k8s query
+- Pod health/failures → `execute_promql` with `kube_pod_container_status_waiting_reason` and `kube_pod_container_status_terminated_reason`
+- When the user explicitly names a tool (e.g., "use korrel8r"), ALWAYS use that tool
 
-5. **Smart Follow-up Context**:
-   - Cross-reference related metrics when helpful
-   - Provide trend context: "stable over time", "increasing usage"
-   - Add operational context: "typical for conversational AI workloads"
-
-**CRITICAL: ANSWER ONLY WHAT THE USER ASKS - DON'T EXPLORE EVERYTHING**
-
-**Your Workflow (FOCUSED & DIRECT):**
-1. 🎯 **STOP AND THINK**: What exactly is the user asking for?
-2. 🔍 **FIND ONCE**: Use search_metrics to find the specific metric
-3. 📊 **QUERY ONCE**: Execute the PromQL query for that specific metric
-4. 📋 **ANSWER**: Provide the specific answer to their question - DONE!
-
-**STRICT RULES - FOLLOW FOR ANY QUESTION:**
-1. Extract key search terms from their question
-2. Call search_metrics with those terms to find relevant metrics
-3. Call execute_promql with the best metric found
-4. Report the specific answer to their question - DONE!
+**Your Workflow:**
+1. **Determine** what the user is asking for (trace, metrics, logs, or alerts?)
+2. **Discover** — for metrics questions, ALWAYS call `search_metrics` or `search_metrics_by_category` first
+3. **Execute** the query tool with the discovered metric names
+4. **Answer** with the specific data — DONE!
 
 **CRITICAL: Interpreting Metrics Correctly**
 - **Boolean/Status Metrics**: These use VALUE to indicate state where 1 means TRUE and 0 means FALSE
@@ -370,12 +689,14 @@ You have access to monitoring tools and should provide focused, targeted respons
 - List top consumers by pod and namespace with actual names
 - Categorize by workload type such as AI/ML versus Infrastructure
 
-**CORE PRINCIPLES:**
-- **BE THOROUGH BUT FOCUSED**: Use as many tools as needed to answer comprehensively
-- **STOP when you have enough data** to answer the question well
-- **ANSWER ONLY** what they asked for
-- **NO EXPLORATION** beyond their specific question
-- **BE DIRECT** - don't analyze everything about a topic
+**Pod Health & Failure Detection:**
+- `kube_pod_status_phase` only tracks pod-level phases — most failures (CrashLoopBackOff, ImagePullBackOff, OOMKilled) are NOT in "Failed" phase
+- Check container-level metrics: `kube_pod_container_status_waiting_reason` and `kube_pod_container_status_terminated_reason`
+- ALWAYS append `== 1` to kube-state-metrics status queries to exclude stale time series
+
+**PromQL Pod/Container Name Matching:**
+- When querying by pod name, always use regex matching (e.g., `pod=~"name.*"`) instead of exact match (`pod="name"`), because Kubernetes pod names include deployment and replicaset hash suffixes (e.g., `my-app-6d5f8b7c4-x9k2m`).
+- Apply the same regex pattern for container and deployment names that may have generated suffixes.
 
 **Response Format:**
 ```
@@ -393,6 +714,8 @@ You have access to monitoring tools and should provide focused, targeted respons
 **Critical Rules:**
 - ALWAYS include the PromQL query in technical details
 - ALWAYS use tools to get real data - never make up numbers
+- ALWAYS use EXACT metric names from tool results - never modify or "normalize" metric names
+- When reporting "Metric Source", copy the exact name returned by the tool
 - Provide operational context and health assessments
 - Use emojis and categorization for clarity
 - Make responses informative and actionable
@@ -403,7 +726,13 @@ Begin by finding the perfect metric for the user's question, then provide compre
         return prompt
 
     @abstractmethod
-    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    def chat(
+        self,
+        user_question: str,
+        namespace: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
         """
         Chat with the model. Must be implemented by subclasses.
 
@@ -411,6 +740,8 @@ Begin by finding the perfect metric for the user's question, then provide compre
             user_question: The user's question
             namespace: Optional namespace filter
             progress_callback: Optional callback for progress updates
+            conversation_history: Optional list of previous messages in format:
+                [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
 
         Returns:
             Model's response as a string

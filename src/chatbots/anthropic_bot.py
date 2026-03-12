@@ -5,7 +5,8 @@ This module provides Anthropic Claude-specific implementation using the official
 """
 
 import os
-from typing import Optional, Callable
+import re
+from typing import Optional, Callable, List, Dict
 
 from .base import BaseChatBot
 from chatbots.tool_executor import ToolExecutor
@@ -32,12 +33,18 @@ class AnthropicChatBot(BaseChatBot):
         tool_executor: ToolExecutor = None):
         super().__init__(model_name, api_key, tool_executor)
 
-        # Import Anthropic SDK
+        # Import Anthropic SDK and track SDK import status
+        self._sdk_import_failed = False
         try:
             import anthropic
-            self.client = anthropic.Anthropic(api_key=self.api_key)
+            # Only create client if API key is provided
+            if self.api_key:
+                self.client = anthropic.Anthropic(api_key=self.api_key)
+            else:
+                self.client = None
         except ImportError:
             logger.error("Anthropic SDK not installed. Install with: pip install anthropic")
+            self._sdk_import_failed = True
             self.client = None
 
     def _get_model_specific_instructions(self) -> str:
@@ -56,13 +63,39 @@ class AnthropicChatBot(BaseChatBot):
 - Provide detailed pod-level and namespace-level breakdowns
 - Use your tool calling reliability for multi-step analysis"""
 
-    def chat(self, user_question: str, namespace: Optional[str] = None, progress_callback: Optional[Callable] = None) -> str:
+    # Regex to strip <function_calls>...</function_calls> XML that the model
+    # sometimes emits as text instead of using the native tool_use API.
+    _FUNCTION_CALLS_RE = re.compile(
+        r'<function_calls>.*?</function_calls>',
+        re.DOTALL,
+    )
+
+    def _strip_xml_tool_calls(self, text: str) -> str:
+        """Remove spurious <function_calls> XML blocks from response text.
+
+        Anthropic models occasionally output tool calls as XML text alongside
+        (or instead of) proper tool_use content blocks. Since Anthropic uses
+        the native tool_use API, any <function_calls> XML in a text block is
+        always artefact noise that should be stripped.
+        """
+        cleaned = self._FUNCTION_CALLS_RE.sub('', text).strip()
+        if cleaned != text.strip():
+            logger.warning("Stripped <function_calls> XML from Anthropic text response")
+        return cleaned
+
+    def chat(
+        self,
+        user_question: str,
+        namespace: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
         """Chat with Anthropic Claude using tool calling."""
         if not self.client:
-            return "Error: Anthropic SDK not installed. Please install it with: pip install anthropic"
-
-        if not self.api_key:
-            return f"API key required for Anthropic model {self.model_name}. Please provide an API key."
+            if self._sdk_import_failed:
+                return "Error: Anthropic SDK not installed. Please install it with: pip install anthropic"
+            else:
+                return f"Error: API key required for Anthropic model {self.model_name}. Please configure an API key in Settings."
 
         try:
             # Create system prompt
@@ -76,12 +109,21 @@ class AnthropicChatBot(BaseChatBot):
             # MCP tools are already in Anthropic format
             claude_tools = self._get_mcp_tools()
 
-            # Initial message
-            messages = [{"role": "user", "content": user_question}]
+            # Build messages array with conversation history
+            messages = []
+
+            # Add conversation history if provided
+            if conversation_history:
+                logger.info(f"📜 Adding {len(conversation_history)} messages from conversation history")
+                messages.extend(conversation_history)
+
+            # Add current user question
+            messages.append({"role": "user", "content": user_question})
 
             # Iterative tool calling loop
             max_iterations = 30
             iteration = 0
+            consecutive_tool_tracker = {"name": None, "count": 0}
 
             while iteration < max_iterations:
                 iteration += 1
@@ -111,9 +153,15 @@ class AnthropicChatBot(BaseChatBot):
                     logger.info(f"🤖 Anthropic requesting {tool_count} tool(s)")
 
                     tool_results = []
+                    tool_loop_detected = False
                     for content_block in response.content:
                         if content_block.type == "tool_use":
                             tool_name = content_block.name
+
+                            if self._check_tool_loop(tool_name, consecutive_tool_tracker):
+                                tool_loop_detected = True
+                                break
+
                             tool_args = content_block.input
                             tool_id = content_block.id
 
@@ -121,7 +169,7 @@ class AnthropicChatBot(BaseChatBot):
                                 progress_callback(f"🔧 Using tool: {tool_name}")
 
                             # Get tool result with automatic truncation (logging handled in base class)
-                            tool_result = self._get_tool_result(tool_name, tool_args)
+                            tool_result = self._get_tool_result(tool_name, tool_args, namespace=namespace)
 
                             tool_results.append({
                                 "type": "tool_result",
@@ -129,15 +177,20 @@ class AnthropicChatBot(BaseChatBot):
                                 "content": tool_result
                             })
 
+                    if tool_loop_detected:
+                        return (
+                            "I got stuck in a loop calling the same tool repeatedly. "
+                            "Please try rephrasing your question or being more specific."
+                        )
+
                     # Add tool results to conversation
                     messages.append({
                         "role": "user",
                         "content": tool_results
                     })
 
-                    # Limit conversation history
-                    if len(messages) > 8:
-                        messages = messages[-8:]
+                    # Truncate conversation safely (preserves tool-call/result pairs)
+                    messages = self._truncate_messages(messages, keep_system_prompt=False)
 
                     # Continue loop
                     continue
@@ -150,7 +203,7 @@ class AnthropicChatBot(BaseChatBot):
                             final_response += content_block.text
 
                     logger.info(f"Anthropic tool calling completed in {iteration} iterations")
-                    return final_response
+                    return self._strip_xml_tool_calls(final_response)
 
             # Hit max iterations
             logger.warning(f"Hit max iterations ({max_iterations})")

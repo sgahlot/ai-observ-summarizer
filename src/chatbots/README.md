@@ -6,12 +6,11 @@ Multi-provider AI chatbot implementations with observability tool integration.
 
 ```python
 from chatbots import create_chatbot
-from ui.mcp_client_adapter import MCPClientAdapter
-from ui.mcp_client_helper import MCPClientHelper
+from mcp_server.mcp_tools_adapter import MCPServerAdapter
+from mcp_server.observability_mcp import _server_instance
 
-# Create MCP client adapter (for UI usage)
-mcp_client = MCPClientHelper()
-tool_executor = MCPClientAdapter(mcp_client)
+# Create MCP server adapter
+tool_executor = MCPServerAdapter(_server_instance)
 
 # Create chatbot (tool_executor is REQUIRED)
 chatbot = create_chatbot(
@@ -27,7 +26,7 @@ print(response)
 
 ## Available Implementations
 
-- **AnthropicChatBot** - Anthropic Claude models (claude-3-5-sonnet, claude-3-5-haiku, etc.)
+- **AnthropicChatBot** - Anthropic Claude models (claude-3-5-sonnet, claude-haiku-4-5, etc.)
 - **OpenAIChatBot** - OpenAI GPT models (gpt-4o, gpt-4o-mini, o1-mini, etc.)
 - **GoogleChatBot** - Google Gemini models (gemini-2.0-flash, etc.)
 - **LlamaChatBot** - Local Llama models (3.1/3.3 with tool calling support)
@@ -42,7 +41,7 @@ from chatbots import create_chatbot
 
 # External models (requires API key)
 chatbot = create_chatbot(
-    model_name="anthropic/claude-3-5-haiku-20241022",
+    model_name="anthropic/claude-haiku-4-5-20251001",
     api_key="sk-ant-...",
     tool_executor=tool_executor
 )
@@ -56,19 +55,7 @@ chatbot = create_chatbot(
 
 ## Tool Executor (Required)
 
-Chatbots use the **ToolExecutor** interface to execute observability tools. You must provide an implementation:
-
-### In UI Process
-
-```python
-from ui.mcp_client_adapter import MCPClientAdapter
-from ui.mcp_client_helper import MCPClientHelper
-
-mcp_client = MCPClientHelper()
-tool_executor = MCPClientAdapter(mcp_client)
-```
-
-### In MCP Server Process
+Chatbots use the **ToolExecutor** interface to execute observability tools. You must provide a `MCPServerAdapter` instance:
 
 ```python
 from mcp_server.mcp_tools_adapter import MCPServerAdapter
@@ -76,6 +63,8 @@ from mcp_server.observability_mcp import _server_instance
 
 tool_executor = MCPServerAdapter(_server_instance)
 ```
+
+**Note**: Chatbots run in the MCP server process. External clients (like the OpenShift Console Plugin) invoke chatbots through the `chat` MCP tool rather than creating chatbot instances directly.
 
 ## Parameters
 
@@ -141,7 +130,7 @@ response = chatbot.chat(
 
 ### External Providers
 
-- **Anthropic**: `anthropic/claude-3-5-sonnet-20241022`, `anthropic/claude-3-5-haiku-20241022`
+- **Anthropic**: `anthropic/claude-3-5-sonnet-20241022`, `anthropic/claude-haiku-4-5-20251001`
 - **OpenAI**: `openai/gpt-4o`, `openai/gpt-4o-mini`, `openai/o1-mini`
 - **Google**: `google/gemini-2.0-flash`, `google/gemini-1.5-pro`
 
@@ -161,8 +150,7 @@ BaseChatBot (abstract)
 └── DeterministicChatBot (Llama 3.2, fallback)
 
 ToolExecutor (interface)
-├── MCPClientAdapter (UI process - HTTP to MCP server)
-└── MCPServerAdapter (MCP server process - direct calls)
+└── MCPServerAdapter (MCP server process - direct tool execution)
 ```
 
 ## Error Handling

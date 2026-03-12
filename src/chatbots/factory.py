@@ -15,6 +15,7 @@ from .google_bot import GoogleChatBot
 from .llama_bot import LlamaChatBot
 from .deterministic_bot import DeterministicChatBot
 from common.pylogger import get_python_logger
+from core.config import RAG_AVAILABLE
 
 logger = get_python_logger()
 
@@ -39,18 +40,14 @@ def create_chatbot(
         ValueError: If tool_executor is None
 
     Examples:
-        # Example 1: Using MCPServerAdapter (in MCP server process)
+        # Example 1: External model with MCPServerAdapter
         >>> from mcp_server.mcp_tools_adapter import MCPServerAdapter
         >>> tool_executor = MCPServerAdapter(mcp_server)
         >>> chatbot = create_chatbot("gpt-4o-mini", api_key="sk-...", tool_executor=tool_executor)
         >>> response = chatbot.chat("What's the CPU usage?")
 
-        # Example 2: Using MCPClientAdapter (in UI process)
-        >>> from ui.mcp_client_helper import MCPClientHelper
-        >>> from ui.mcp_client_adapter import MCPClientAdapter
-        >>> mcp_client = MCPClientHelper()
-        >>> tool_executor = MCPClientAdapter(mcp_client)
-        >>> chatbot = create_chatbot("anthropic/claude-3-5-haiku-20241022", api_key="sk-...", tool_executor=tool_executor)
+        # Example 2: Anthropic model with MCPServerAdapter
+        >>> chatbot = create_chatbot("anthropic/claude-haiku-4-5-20251001", api_key="sk-...", tool_executor=tool_executor)
         >>> response = chatbot.chat("Check memory usage")
 
         # Example 3: Local model with MCPServerAdapter
@@ -100,8 +97,8 @@ def create_chatbot(
     """
     if tool_executor is None:
         raise ValueError(
-            "tool_executor is required. Pass a ToolExecutor implementation "
-            "(MCPServerAdapter from MCP server or MCPClientAdapter from UI)"
+            "tool_executor is required. Pass a MCPServerAdapter instance "
+            "from the MCP server context"
         )
 
     # Detect provider from model name pattern using dict mapping
@@ -139,6 +136,15 @@ def create_chatbot(
             logger.warning(f"Unknown external provider {provider}, using OpenAI as fallback")
             return OpenAIChatBot(model_name, api_key, tool_executor)
     else:
+        # Check if RAG (local models) infrastructure is available
+        if not RAG_AVAILABLE:
+            logger.error(f"Local model {model_name} requested but RAG infrastructure not available")
+            raise ValueError(
+                f"Local model '{model_name}' is not available. "
+                "RAG infrastructure is not installed or not accessible. "
+                "Please use an external model (anthropic/claude, openai/gpt, google/gemini) instead."
+            )
+        
         # Local models - detect Llama version and create appropriate bot
         LLAMA_MODEL_PATTERNS = {
             "llama.3.1": (LlamaChatBot, "tool calling capable", ["8b", "70b"]),

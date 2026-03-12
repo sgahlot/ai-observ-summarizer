@@ -4,7 +4,7 @@ This document provides detailed information about the GitHub Actions workflows u
 
 ## Overview
 
-The project uses 5 GitHub Actions workflows with the following execution order and dependencies:
+The project uses 6 GitHub Actions workflows with the following execution order and dependencies:
 
 ### PR Review Workflows (Run in Parallel)
 1. **Run Tests** (`.github/workflows/run_tests.yml`)
@@ -23,15 +23,18 @@ The project uses 5 GitHub Actions workflows with the following execution order a
 3. **Build and Push** (`.github/workflows/build-and-push.yml`)
    - **Trigger:** PRs merged to `main` or `dev` branches, manual dispatch
    - **Purpose:** Builds and pushes container images with semantic versioning
-   - **Actions:** 
+   - **Actions:**
    - **Analyzes PR labels and title first**, then falls back to commit messages for version bumps
    - Gets current version from Makefile (not git tags)
-   - Builds 3 container images (using `IMAGE_PREFIX`-component naming):
-     - aiobs-metrics-ui
-     - aiobs-metrics-alerting
-     - aiobs-mcp-server
+  - Builds container images (using `IMAGE_PREFIX`-component naming):
+    - aiobs-metrics-alerting
+    - aiobs-mcp-server
+    - aiobs-console-plugin
+    - aiobs-react-ui
      - Updates Helm charts and Makefile with new version (**non-main branches only**)
-   - **Image naming:** Semantic versions (e.g., `0.1.2`, `1.0.0`)
+   - **Image tagging:** Each image is tagged with both:
+     - Semantic version tag (e.g., `0.1.2`, `1.0.0`)
+     - `latest` tag for the most recent build
    - **Version priority:** PR Labels → PR Title → Commit Messages
    - **Version updates:** _Only occur when pushing to non-main branches_
    - **Dependencies:** None - runs after merge
@@ -39,9 +42,13 @@ The project uses 5 GitHub Actions workflows with the following execution order a
 4. **Deploy to OpenShift** (`.github/workflows/deploy.yml`)
    - **Trigger:** Automatic after successful Build workflow, manual dispatch
    - **Purpose:** Deploys application and observability stack to OpenShift cluster
-   - **Default namespace:** `dev`
+   - **Namespace logic:**
+     - Manual dispatch: Uses the `namespace` input if provided
+     - Automatic workflow_run: Deploys to namespace matching the branch name that triggered the workflow
+     - Workflow_dispatch: Deploys to namespace matching the current branch name
+     - Example: PR merged to `feature-x` → deploys to `feature-x` namespace
    - **Components deployed:**
-     - Application components (ui, mcp-server, alerting)
+    - Application components (console-plugin/react-ui, mcp-server, alerting)
      - Observability stack (MinIO + TempoStack + OTEL + tracing)
    - **Dependencies:** ✅ **Requires Build and Push workflow success**
 
@@ -50,6 +57,19 @@ The project uses 5 GitHub Actions workflows with the following execution order a
    - **Purpose:** Removes deployments from OpenShift cluster
    - **Safety:** Requires typing exact confirmation string for manual execution
    - **Dependencies:** None - can be run independently
+
+6. **Cleanup Old Summarizer Container Images** (`.github/workflows/cleanup-old-images.yml`)
+   - **Trigger:** Monthly schedule (1st day of month at midnight UTC) and manual workflow_dispatch
+   - **Purpose:** Deletes old container images from Quay.io to manage storage
+   - **Actions:**
+    - Processes container images: aiobs-metrics-alerting, aiobs-mcp-server, aiobs-console-plugin, aiobs-react-ui
+     - Deletes tags older than retention period (default: 30 days)
+     - Protects `latest` tag and all `v*` tags (official releases, e.g., `v1.0.0`)
+     - Supports custom retention days and protected tags via inputs
+     - Includes dry-run mode for safe testing
+   - **Safety:** Defaults to dry-run mode for manual executions
+   - **Dependencies:** None - can be run independently
+   - **Documentation:** See [SUMMARIZER_QUAY_IMAGE_CLEANUP.md](./SUMMARIZER_QUAY_IMAGE_CLEANUP.md) for detailed usage
 
 ### Workflow Dependency Diagram
 ```
@@ -63,6 +83,9 @@ PR Merged to main/dev
 
 Manual Operations:
 └── Undeploy from OpenShift (manual only) ⚠️
+
+Scheduled Operations:
+└── Cleanup Old Container Images (monthly + manual) 🗑️
 ```
 
 ## OpenShift Service Account Setup
@@ -146,15 +169,26 @@ After running the setup script, configure these secrets in your GitHub repositor
 
 **Deploy Workflow:**
 - **Automatic trigger:** Runs after successful build workflow
-- **Manual trigger:** Can specify custom namespace (default: `dev`)
+- **Manual trigger:** Can specify custom namespace
 - **Force deploy option:** Deploy even if build workflow didn't run
-- **Default namespace:** `dev`
+- **Namespace selection:**
+  - Manual dispatch with input: Uses the specified namespace
+  - Automatic workflow_run: Uses the branch name that triggered the workflow
+  - Workflow_dispatch without input: Uses the current branch name
 
 **Undeploy Workflow:**
 - **Manual trigger only:** No automatic execution
 - **Safety confirmation:** Must type exact confirmation string `DELETE {namespace}`
 - **Namespace required:** Must specify target namespace for undeployment
 - **Safety features:** Prevents accidental deletion through explicit confirmation
+
+**Cleanup Old Container Images Workflow:**
+- **Scheduled:** Runs automatically on 1st day of each month at midnight UTC
+- **Manual trigger:** Also supports workflow_dispatch with custom parameters
+- **Dry run:** Defaults to `true` for manual executions (scheduled runs delete by default)
+- **Retention days:** Number of days to keep images (default: 30)
+- **Protected tags:** Comma-separated list of additional tags to protect (optional)
+- **Safety features:** Always protects `latest` and `v*` tags (official releases), defaults to dry-run mode
 
 ## Manual Workflow Execution
 
@@ -163,6 +197,9 @@ Most workflows run automatically, but some can be triggered manually:
 ### Automatic Workflows (No Manual Trigger)
 - **Run Tests:** Triggered by PR events (opened, synchronize, reopened) and pushes to `main`/`dev`
 - **Rebase Check:** Triggered by PR events (opened, synchronize, reopened)
+
+### Scheduled Workflows (Can Also Run Manually)
+- **Cleanup Old Container Images:** Runs monthly (1st day at midnight UTC), also supports manual trigger
 
 ### Manual Workflows
 1. Go to **Actions** tab in your GitHub repository
@@ -174,20 +211,26 @@ Most workflows run automatically, but some can be triggered manually:
 - No parameters required - runs with default settings
 
 **Deploy to OpenShift:**
-- `namespace`: Target namespace (default: `dev`)
+- `namespace`: Target namespace (optional - defaults to branch name)
 - `force_deploy`: Deploy even if build workflow didn't run (default: `false`)
 - **Note**: The deploy workflow installs the complete observability stack (MinIO + TempoStack + OTEL + tracing) automatically
+- **Note**: If namespace is not specified, deployment will use the current branch name as the namespace
 
 **Undeploy from OpenShift:**
 - `namespace`: Target namespace (required)
 - `confirm_uninstall`: Must type exact confirmation string `DELETE {namespace}` (required)
+
+**Cleanup Old Container Images:**
+- `dry_run`: Dry run mode - show what would be deleted without deleting (default: `true`)
+- `retention_days`: Keep images newer than this many days (default: 30)
+- `protected_tags`: Additional tags to protect from deletion, comma-separated (optional)
 
 ## Workflow Variables
 
 The workflows use these environment variables and inputs:
 
 **Deploy Workflow:**
-- `namespace`: Target OpenShift namespace (default: `dev`)
+- `namespace`: Target OpenShift namespace (optional - defaults to branch name)
 - `force_deploy`: Boolean to force deployment (default: `false`)
 
 **Undeploy Workflow:**
