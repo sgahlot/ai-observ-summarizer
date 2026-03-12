@@ -5,7 +5,7 @@ plugin:
   description: "AI Observability Plugin"
   image:
     repository: quay.io/ecosystem-appeng/aiobs-console-plugin
-    tag: 1.5.0
+    tag: 1.5.1
   imagePullPolicy: Always
   imagePullSecrets: []
   replicas: 1
