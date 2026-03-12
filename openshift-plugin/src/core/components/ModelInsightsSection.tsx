@@ -15,6 +15,7 @@ import {
   TextContent,
   TextVariants,
   Title,
+  Tooltip,
 } from '@patternfly/react-core';
 import { ChartDonut, ChartThemeColor } from '@patternfly/react-charts';
 import {
@@ -37,6 +38,18 @@ interface InsightDonutCardProps {
   colorScale?: string[];
 }
 
+const DEFAULT_COLOR_SCALE = [
+  '#0066cc',
+  '#8bc1f7',
+  '#3e8635',
+  '#f0ab00',
+  '#7c3aed',
+  '#2b9af3',
+  '#f4c145',
+  '#5752d1',
+  '#6a6e73',
+];
+
 const InsightDonutCard: React.FC<InsightDonutCardProps> = ({
   title,
   subtitle,
@@ -44,9 +57,7 @@ const InsightDonutCard: React.FC<InsightDonutCardProps> = ({
   totalLabel,
   colorScale,
 }) => {
-  const legendData = data.map((datum) => ({
-    name: `${datum.x} (${datum.y})`,
-  }));
+  const colors = colorScale ?? DEFAULT_COLOR_SCALE;
 
   return (
     <Card isCompact style={{ height: '100%' }}>
@@ -61,21 +72,70 @@ const InsightDonutCard: React.FC<InsightDonutCardProps> = ({
         </TextContent>
       </CardTitle>
       <CardBody>
-        <ChartDonut
-          ariaDesc={title}
-          ariaTitle={title}
-          data={data}
-          labels={({ datum }) => `${datum.x}: ${datum.y}`}
-          width={220}
-          height={220}
-          legendData={legendData}
-          legendPosition="bottom"
-          padding={{ top: 20, bottom: 60, left: 20, right: 20 }}
-          themeColor={ChartThemeColor.multiOrdered}
-          colorScale={colorScale}
-          title={totalLabel}
-          subTitle="Models"
-        />
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <ChartDonut
+            ariaDesc={title}
+            ariaTitle={title}
+            constrainToVisibleArea
+            data={data}
+            labels={({ datum }) => `${datum.x}: ${datum.y}`}
+            width={220}
+            height={200}
+            padding={{ top: 20, bottom: 20, left: 20, right: 20 }}
+            themeColor={ChartThemeColor.multiOrdered}
+            colorScale={colorScale}
+            title={totalLabel}
+            subTitle="Models"
+          />
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            justifyContent: 'center',
+            gap: '8px',
+            marginTop: '8px',
+          }}
+          data-testid={`${title}-legend`}
+        >
+          {data.map((datum, index) => {
+            const label = `${datum.x} (${datum.y})`;
+            return (
+              <Tooltip key={datum.x} content={label}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    maxWidth: '160px',
+                    cursor: 'default',
+                  }}
+                  data-testid={`legend-item-${datum.x}`}
+                >
+                  <span
+                    style={{
+                      width: '10px',
+                      height: '10px',
+                      borderRadius: '50%',
+                      backgroundColor: colors[index % colors.length],
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontSize: '12px',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {label}
+                  </span>
+                </div>
+              </Tooltip>
+            );
+          })}
+        </div>
       </CardBody>
     </Card>
   );
