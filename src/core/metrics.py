@@ -1614,7 +1614,7 @@ def discover_openshift_metrics():
             "Total Nodes": "sum(kube_node_info)",
             "Total Namespaces": "count(kube_namespace_labels)",
             # GPU metrics (only available if GPUs are present)
-            "GPU Count": "count(DCGM_FI_DEV_GPU_TEMP) or sum(habana_hpu_count)",
+            "GPU Count": "count(DCGM_FI_DEV_GPU_TEMP) or count(habanalabs_temperature_onchip)",
             "GPU Utilization (%)": "avg(DCGM_FI_DEV_GPU_UTIL) or avg(habanalabs_utilization)",
         },
         "Jobs & Workloads": {
@@ -1656,7 +1656,7 @@ def discover_openshift_metrics():
             "GPU Power Usage (W)": "avg(DCGM_FI_DEV_POWER_USAGE) or avg(habanalabs_power_mW) / 1000",
             "GPU Utilization (%)": "avg(DCGM_FI_DEV_GPU_UTIL) or avg(habanalabs_utilization)",
             "GPU Memory Used (GB)": "avg(DCGM_FI_DEV_FB_USED) / (1024*1024*1024) or avg(habanalabs_memory_used_bytes) / (1024*1024*1024)",
-            "GPU Count": "count(DCGM_FI_DEV_GPU_TEMP) or sum(habana_hpu_count)",
+            "GPU Count": "count(DCGM_FI_DEV_GPU_TEMP) or count(habanalabs_temperature_onchip)",
             "GPU Memory Temp (°C)": "avg(DCGM_FI_DEV_MEMORY_TEMP) or avg(habanalabs_temperature_threshold_memory)",
         },
         "Device (DCGM)": {
@@ -1687,7 +1687,7 @@ def discover_openshift_metrics():
             # - power: mW → W
             # - memory: bytes → GiB
             # - PCIe throughput/traffic: bytes → MB
-            "Device Count": "sum(habana_hpu_count)",
+            "Device Count": "count(habanalabs_temperature_onchip)",
 
             # Core / compute
             "Energy (J)": "avg(habanalabs_energy)",
