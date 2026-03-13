@@ -189,3 +189,6 @@ charts/
 
 # TMP directory (if any)
 TMP/
+
+# Geenerated files
+**/generated/
