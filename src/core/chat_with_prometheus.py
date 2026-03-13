@@ -830,23 +830,23 @@ def generate_metadata_driven_promql(
 
     elif intent == 'percentile':
         if metric_type == 'histogram':
-            query = f"histogram_quantile(0.95, rate({metric_name}_bucket[5m]))"
+            query = f"histogram_quantile(0.95, rate({metric_name}_bucket[<rate_interval>]))"
         else:
             query = f"quantile(0.95, {metric_name})"
         return apply_boolean_filter(query)
 
     elif intent == 'rate':
         if metric_type == 'counter':
-            query = f"sum(rate({metric_name}[5m]))"
+            query = f"sum(rate({metric_name}[<rate_interval>]))"
         elif metric_type == 'histogram':
-            query = f"histogram_quantile(0.95, rate({metric_name}_bucket[5m]))"
+            query = f"histogram_quantile(0.95, rate({metric_name}_bucket[<rate_interval>]))"
         else:
-            query = f"rate({metric_name}[5m])"
+            query = f"rate({metric_name}[<rate_interval>])"
         return apply_boolean_filter(query)
 
     elif intent == 'trend':
         if metric_type == 'counter':
-            query = f"rate({metric_name}[5m])"
+            query = f"rate({metric_name}[<rate_interval>])"
         elif metric_type == 'gauge':
             query = f"avg_over_time({metric_name}[1h])"
         else:
@@ -855,16 +855,16 @@ def generate_metadata_driven_promql(
 
     elif intent == 'top_n':
         if metric_type == 'counter':
-            query = f"topk(5, rate({metric_name}[5m]))"
+            query = f"topk(5, rate({metric_name}[<rate_interval>]))"
         else:
             query = f"topk(5, {metric_name})"
         return apply_boolean_filter(query)
 
     elif intent == 'comparison':
         if metric_type == 'counter':
-            query = f"sum by (model_name) (rate({metric_name}[5m]))"
+            query = f"sum by (model_name) (rate({metric_name}[<rate_interval>]))"
         elif metric_type == 'histogram':
-            query = f"histogram_quantile(0.95, sum by (model_name, le) (rate({metric_name}_bucket[5m])))"
+            query = f"histogram_quantile(0.95, sum by (model_name, le) (rate({metric_name}_bucket[<rate_interval>])))"
         else:
             query = f"avg by (model_name) ({metric_name})"
         return apply_boolean_filter(query)
@@ -872,7 +872,7 @@ def generate_metadata_driven_promql(
     else:
         # Default based on metric type
         if metric_type == 'counter':
-            query = f"rate({metric_name}[5m])"
+            query = f"rate({metric_name}[<rate_interval>])"
         elif metric_type == 'gauge':
             if 'temperature' in concepts['measurements'] or 'usage' in concepts['measurements']:
                 query = f"avg({metric_name})"
@@ -898,8 +898,8 @@ def generate_query_examples(metric_name: str, metadata: Dict[str, Any]) -> List[
     # Type-specific examples
     if metric_type == 'counter':
         examples.extend([
-            f"rate({metric_name}[5m])",
-            f"sum(rate({metric_name}[5m]))",
+            f"rate({metric_name}[<rate_interval>])",
+            f"sum(rate({metric_name}[<rate_interval>]))",
             f"increase({metric_name}[1h])"
         ])
     elif metric_type == 'gauge':
@@ -912,7 +912,7 @@ def generate_query_examples(metric_name: str, metadata: Dict[str, Any]) -> List[
         examples.extend([
             f"histogram_quantile(0.95, {metric_name}_bucket)",
             f"histogram_quantile(0.99, {metric_name}_bucket)",
-            f"rate({metric_name}_sum[5m]) / rate({metric_name}_count[5m])"
+            f"rate({metric_name}_sum[<rate_interval>]) / rate({metric_name}_count[<rate_interval>])"
         ])
     
     # Add common aggregations
@@ -941,7 +941,7 @@ def suggest_related_queries(user_intent: str, base_metric: str = "") -> List[str
         
         # Rate calculations for counters
         if not base_metric.startswith("rate("):
-            suggestions.append(f"rate({base_metric}[5m])")
+            suggestions.append(f"rate({base_metric}[<rate_interval>])")
         
         # Histogram quantiles if it looks like a histogram
         if "_bucket" in base_metric or "histogram" in base_metric.lower():

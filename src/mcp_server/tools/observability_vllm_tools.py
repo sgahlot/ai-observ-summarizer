@@ -238,15 +238,26 @@ def get_vllm_metrics_tool() -> List[Dict[str, Any]]:
         if not vllm_metrics_dict:
             return make_mcp_text_response("No vLLM metrics are currently available from Prometheus.")
 
+        # Replace hardcoded [5m] with <rate_interval> placeholder so the LLM
+        # adjusts the rate window to match the user's requested time range
+        # instead of blindly copying [5m].
+        display_metrics = {
+            name: query.replace('[5m]', '[<rate_interval>]')
+            for name, query in vllm_metrics_dict.items()
+        }
+
         # Format the response with categories for better organization
-        content = f"Available vLLM Metrics ({len(vllm_metrics_dict)} total):\n\n"
-        
+        content = f"Available vLLM Metrics ({len(display_metrics)} total):\n\n"
+        content += ("**Note:** `<rate_interval>` must be set based on the user's requested "
+                     "time range: <=1h use 5m, <=6h use 15m, <=24h use 1h, "
+                     "<=48h use 4h, >48h use 12h. Default: 5m.\n\n")
+
         # Group metrics by type for better presentation
         gpu_metrics = {}
         vllm_core_metrics = {}
         other_metrics = {}
-        
-        for friendly_name, promql_query in vllm_metrics_dict.items():
+
+        for friendly_name, promql_query in display_metrics.items():
             if any(gpu_term in friendly_name.lower() for gpu_term in ['gpu', 'temperature', 'power', 'memory', 'energy', 'utilization']):
                 gpu_metrics[friendly_name] = promql_query
             elif any(vllm_term in friendly_name.lower() for vllm_term in ['prompt', 'token', 'latency', 'request', 'inference']):
@@ -277,7 +288,7 @@ def get_vllm_metrics_tool() -> List[Dict[str, Any]]:
         content += f"- GPU Metrics: {len(gpu_metrics)}\n"
         content += f"- vLLM Performance: {len(vllm_core_metrics)}\n"
         content += f"- Other: {len(other_metrics)}\n"
-        content += f"- Total: {len(vllm_metrics_dict)}\n"
+        content += f"- Total: {len(display_metrics)}\n"
 
         return make_mcp_text_response(content)
 
