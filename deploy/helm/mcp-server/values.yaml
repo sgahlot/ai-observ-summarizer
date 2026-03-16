@@ -5,7 +5,7 @@ deployment:
 
 image:
   repository: quay.io/ecosystem-appeng/aiobs-mcp-server
-  tag: 2.0.2
+  tag: 2.0.3
   pullPolicy: IfNotPresent
 
 service:
