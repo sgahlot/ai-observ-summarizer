@@ -1,4 +1,4 @@
-export type Provider = 'openai' | 'anthropic' | 'google' | 'meta' | 'internal' | 'other';
+export type Provider = 'openai' | 'anthropic' | 'google' | 'meta' | 'maas' | 'internal' | 'other';
 
 export type StorageType = 'secret' | 'cache' | 'none';
 
@@ -112,4 +112,5 @@ export interface ProviderModel {
   context_length?: number; // Token limit
   created?: number;        // Release date (timestamp)
   owned_by?: string;       // Owner/organization
+  isConfigured?: boolean;  // Whether model is already configured (for MAAS update flow)
 }
