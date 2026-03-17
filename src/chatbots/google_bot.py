@@ -315,8 +315,14 @@ class GoogleChatBot(BaseChatBot):
                         if hasattr(p, 'function_call') and p.function_call
                     }
 
+                    if self._check_tool_loop(tool_names_this_iteration, consecutive_tool_tracker):
+                        return (
+                            "I got stuck in a loop calling the same tool repeatedly. "
+                            "Please try rephrasing your question or being more specific."
+                        )
+
                     # Build function responses for next iteration
-                    function_responses = []  # Clear previous responses
+                    function_responses = []
                     for part in parts:
                         if hasattr(part, 'function_call') and part.function_call:
                             func_call = part.function_call
@@ -340,12 +346,6 @@ class GoogleChatBot(BaseChatBot):
                                     )
                                 )
                             )
-
-                    if self._check_tool_loop(tool_names_this_iteration, consecutive_tool_tracker):
-                        return (
-                            "I got stuck in a loop calling the same tool repeatedly. "
-                            "Please try rephrasing your question or being more specific."
-                        )
 
                     logger.info(f"Prepared {len(function_responses)} function response(s) for next iteration")
                     # Continue loop to send function responses

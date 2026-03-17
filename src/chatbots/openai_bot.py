@@ -179,6 +179,12 @@ Wrong flow:
                         tc.function.name for tc in message.tool_calls
                     }
 
+                    if self._check_tool_loop(tool_names_this_iteration, consecutive_tool_tracker):
+                        return (
+                            "I got stuck in a loop calling the same tool repeatedly. "
+                            "Please try rephrasing your question or being more specific."
+                        )
+
                     tool_results = []
                     for tool_call in message.tool_calls:
                         tool_name = tool_call.function.name
@@ -202,12 +208,6 @@ Wrong flow:
                             "tool_call_id": tool_id,
                             "content": tool_result
                         })
-
-                    if self._check_tool_loop(tool_names_this_iteration, consecutive_tool_tracker):
-                        return (
-                            "I got stuck in a loop calling the same tool repeatedly. "
-                            "Please try rephrasing your question or being more specific."
-                        )
 
                     # Add tool results to conversation
                     messages.extend(tool_results)
