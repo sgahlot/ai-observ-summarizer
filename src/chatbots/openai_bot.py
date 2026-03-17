@@ -174,8 +174,12 @@ Wrong flow:
                 if finish_reason == 'tool_calls' and message.tool_calls:
                     logger.info(f"🤖 OpenAI requesting {len(message.tool_calls)} tool(s)")
 
+                    # Collect tool names for iteration-level loop detection
+                    tool_names_this_iteration = {
+                        tc.function.name for tc in message.tool_calls
+                    }
+
                     tool_results = []
-                    tool_loop_detected = False
                     for tool_call in message.tool_calls:
                         tool_name = tool_call.function.name
                         tool_args_str = tool_call.function.arguments
@@ -186,10 +190,6 @@ Wrong flow:
                             tool_args = json.loads(tool_args_str)
                         except json.JSONDecodeError:
                             tool_args = {}
-
-                        if self._check_tool_loop(tool_name, consecutive_tool_tracker):
-                            tool_loop_detected = True
-                            break
 
                         if progress_callback:
                             progress_callback(f"🔧 Using tool: {tool_name}")
@@ -203,7 +203,7 @@ Wrong flow:
                             "content": tool_result
                         })
 
-                    if tool_loop_detected:
+                    if self._check_tool_loop(tool_names_this_iteration, consecutive_tool_tracker):
                         return (
                             "I got stuck in a loop calling the same tool repeatedly. "
                             "Please try rephrasing your question or being more specific."

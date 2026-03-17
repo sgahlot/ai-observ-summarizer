@@ -1272,42 +1272,47 @@ class TestLlamaGracefulFallback:
 
 
 class TestToolLoopDetection:
-    """Test the consecutive same-tool loop detection in BaseChatBot."""
+    """Test the consecutive same-tool loop detection in BaseChatBot.
+
+    Loop detection operates at the iteration level: each call to
+    _check_tool_loop represents one LLM response (iteration) and receives
+    the *set* of tool names used in that response.
+    """
 
     def test_no_loop_different_tools(self, mock_mcp_tools):
-        """Test that different tools don't trigger loop detection."""
+        """Test that different single-tool iterations don't trigger loop detection."""
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         tracker = {"name": None, "count": 0}
 
-        assert bot._check_tool_loop("execute_promql", tracker) is False
-        assert bot._check_tool_loop("get_label_values", tracker) is False
-        assert bot._check_tool_loop("execute_promql", tracker) is False
+        assert bot._check_tool_loop({"execute_promql"}, tracker) is False
+        assert bot._check_tool_loop({"get_label_values"}, tracker) is False
+        assert bot._check_tool_loop({"execute_promql"}, tracker) is False
         assert tracker["count"] == 1  # Reset on tool change
 
     def test_same_tool_below_threshold(self, mock_mcp_tools):
-        """Test that same tool called < 5 times doesn't trigger."""
+        """Test that same single-tool iterations < 5 times doesn't trigger."""
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         tracker = {"name": None, "count": 0}
 
         for i in range(4):
-            assert bot._check_tool_loop("execute_promql", tracker) is False
+            assert bot._check_tool_loop({"execute_promql"}, tracker) is False
         assert tracker["count"] == 4
 
     def test_same_tool_at_threshold_triggers(self, mock_mcp_tools):
-        """Test that same tool called 5 times triggers loop detection."""
+        """Test that same single-tool iteration 5 times triggers loop detection."""
         from chatbots import LlamaChatBot
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         tracker = {"name": None, "count": 0}
 
         for i in range(4):
-            assert bot._check_tool_loop("query_tempo_tool", tracker) is False
-        # 5th call triggers
-        assert bot._check_tool_loop("query_tempo_tool", tracker) is True
+            assert bot._check_tool_loop({"query_tempo_tool"}, tracker) is False
+        # 5th iteration triggers
+        assert bot._check_tool_loop({"query_tempo_tool"}, tracker) is True
 
     def test_counter_resets_on_different_tool(self, mock_mcp_tools):
         """Test that the counter resets when a different tool is called."""
@@ -1316,15 +1321,53 @@ class TestToolLoopDetection:
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
         tracker = {"name": None, "count": 0}
 
-        # Call same tool 4 times (just below threshold)
+        # Call same tool in 4 consecutive iterations (just below threshold)
         for i in range(4):
-            bot._check_tool_loop("query_tempo_tool", tracker)
+            bot._check_tool_loop({"query_tempo_tool"}, tracker)
         assert tracker["count"] == 4
 
         # Different tool resets counter
-        bot._check_tool_loop("execute_promql", tracker)
+        bot._check_tool_loop({"execute_promql"}, tracker)
         assert tracker["count"] == 1
         assert tracker["name"] == "execute_promql"
+
+    def test_parallel_same_tool_calls_not_flagged(self, mock_mcp_tools):
+        """Test that one iteration with multiple calls to the same tool is NOT a loop.
+
+        This is the key scenario: Haiku issues 5x execute_promql in a single
+        response for different pod-phase queries. That's one iteration with
+        parallel queries, not 5 consecutive loop iterations.
+        """
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        tracker = {"name": None, "count": 0}
+
+        # One iteration with 5 calls to the same tool — the set has 1 element,
+        # but it's only 1 iteration so count goes to 1, not 5.
+        assert bot._check_tool_loop({"execute_promql"}, tracker) is False
+        assert tracker["count"] == 1
+
+        # A second iteration with different tools resets counter
+        assert bot._check_tool_loop({"execute_promql", "get_label_values"}, tracker) is False
+        assert tracker["count"] == 0
+
+    def test_multi_tool_iteration_resets_counter(self, mock_mcp_tools):
+        """Test that an iteration with multiple different tools resets the counter."""
+        from chatbots import LlamaChatBot
+
+        bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
+        tracker = {"name": None, "count": 0}
+
+        # Build up 4 consecutive same-tool iterations
+        for i in range(4):
+            bot._check_tool_loop({"execute_promql"}, tracker)
+        assert tracker["count"] == 4
+
+        # An iteration with multiple different tools resets the counter
+        bot._check_tool_loop({"execute_promql", "query_tempo_tool"}, tracker)
+        assert tracker["count"] == 0
+        assert tracker["name"] is None
 
     def test_tool_loop_breaks_chat_loop(self, mock_mcp_tools):
         """Test that tool loop detection breaks the chat iteration loop."""
@@ -1332,7 +1375,7 @@ class TestToolLoopDetection:
 
         bot = LlamaChatBot(LLAMA_3_1_8B, tool_executor=mock_mcp_tools)
 
-        # Create 6 responses that all call the same tool
+        # Create 6 responses that each call the same single tool
         def make_tool_response():
             tc = MagicMock()
             tc.id = "call_1"
@@ -1357,7 +1400,7 @@ class TestToolLoopDetection:
 
         result = bot.chat("find traces")
 
-        # Should break after 5 consecutive same-tool calls, not use all 6
+        # Should break after 5 consecutive same-tool iterations, not use all 6
         assert bot.client.chat.completions.create.call_count == 5
         assert "got stuck in a loop" in result
 
