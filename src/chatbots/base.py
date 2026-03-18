@@ -111,7 +111,6 @@ class BaseChatBot(ABC):
         Returns:
             API key string or None if not needed/available
         """
-        pass
 
     def _extract_model_name(self) -> str:
         """Extract the API-specific model name from the full model identifier.
@@ -758,26 +757,3 @@ Begin by finding the perfect metric for the user's question, then provide compre
         Returns:
             Model's response as a string
         """
-        pass
-
-    def test_mcp_tools(self) -> bool:
-        """Test if tool executor is initialized and has tools available."""
-        try:
-            # Check if tool executor is available
-            if self.tool_executor is None:
-                logger.error("Tool executor is None - not initialized")
-                return False
-
-            # Test tool executor
-            tools = self.tool_executor.list_tools()
-            tool_count = len(tools)
-            if tool_count > 0:
-                logger.info(f"Tool executor working with {tool_count} tools")
-                return True
-            else:
-                logger.error("Tool executor has no registered tools")
-                return False
-
-        except Exception as e:
-            logger.error(f"Tool executor test failed: {e}")
-            return False
