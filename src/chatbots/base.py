@@ -127,33 +127,45 @@ class BaseChatBot(ABC):
             return self.model_name.split("/", 1)[1]
         return self.model_name
 
-    # Maximum number of consecutive calls to the same tool before breaking
-    # the loop. Legitimate multi-call patterns (e.g., execute_promql for
-    # power then temperature) use at most 3 consecutive same-tool calls.
+    # Maximum number of consecutive iterations calling the same single tool
+    # before breaking the loop. Tracked at the iteration level so that
+    # parallel calls to the same tool within one response don't false-positive.
     _MAX_CONSECUTIVE_SAME_TOOL = 5
 
-    def _check_tool_loop(self, tool_name: str, consecutive_tool_tracker: dict) -> bool:
-        """Check if the same tool has been called too many times consecutively.
+    def _check_tool_loop(self, tool_names_this_iteration: set, consecutive_tool_tracker: dict) -> bool:
+        """Check if the same tool is being called across consecutive iterations.
+
+        Tracks at the iteration level, not individual tool-call level.
+        A single iteration calling the same tool multiple times (parallel queries)
+        is legitimate. The loop detector only fires when consecutive *iterations*
+        each call the same single tool.
 
         Args:
-            tool_name: The tool being called this iteration.
+            tool_names_this_iteration: Set of tool names called in this iteration.
             consecutive_tool_tracker: Dict with 'name' and 'count' keys,
-                mutated in place to track state across calls.
+                mutated in place to track state across iterations.
 
         Returns:
             True if the tool loop threshold has been reached (caller should break).
         """
-        if tool_name == consecutive_tool_tracker.get("name"):
-            consecutive_tool_tracker["count"] += 1
+        if len(tool_names_this_iteration) == 1:
+            tool_name = next(iter(tool_names_this_iteration))
+            if tool_name == consecutive_tool_tracker.get("name"):
+                consecutive_tool_tracker["count"] += 1
+            else:
+                consecutive_tool_tracker["name"] = tool_name
+                consecutive_tool_tracker["count"] = 1
         else:
-            consecutive_tool_tracker["name"] = tool_name
-            consecutive_tool_tracker["count"] = 1
+            # Multiple different tools in one iteration — not a loop
+            consecutive_tool_tracker["name"] = None
+            consecutive_tool_tracker["count"] = 0
 
         if consecutive_tool_tracker["count"] >= self._MAX_CONSECUTIVE_SAME_TOOL:
             logger.warning(
-                "Tool loop detected: %s called %d times consecutively. "
+                "Tool loop detected: %s called in %d consecutive iterations. "
                 "Breaking loop.",
-                tool_name, consecutive_tool_tracker["count"],
+                consecutive_tool_tracker.get("name"),
+                consecutive_tool_tracker["count"],
             )
             return True
         return False
