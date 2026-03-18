@@ -396,10 +396,10 @@ def execute_range_queries_parallel(
 
 
 def calculate_histogram_quantile_optimal_lookback(duration_hours: float) -> str:
-    """Calculate optimal lookback window for rate() queries based on total time range.
+    """Select an appropriate rate() lookback window based on the total query time range.
 
-    This prevents sparse data in histogram_quantile queries by using a lookback window
-    proportional to the total time range.
+    Balances granularity against sparse-data risk by mapping the duration
+    to one of five discrete tiers.
 
     This is the single source of truth for the 5-tier rate interval mapping.
     All other locations (promql_service.py, prometheus_tools.py safety-net,
