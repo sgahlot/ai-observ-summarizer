@@ -489,8 +489,8 @@ class TestRateIntervalTierMapping:
             assert "[4h]" in q, f"Expected [4h] in {q}"
 
     @patch('src.core.promql_service.discover_available_metrics_from_thanos')
-    def test_tier_gt_48h_uses_12h(self, mock_discovery):
-        """>48h range should use 12h rate interval."""
+    def test_tier_gt_48h_dynamic_3_days(self, mock_discovery):
+        """>48h range should compute dynamically: 72h / 12 = 6h."""
         mock_discovery.return_value = []
         start_ts = 1640995200
         end_ts = start_ts + 3600 * 72  # 72 hours (3 days)
@@ -499,7 +499,20 @@ class TestRateIntervalTierMapping:
         )
         latency_queries = [q for q in result if "rate(" in q]
         for q in latency_queries:
-            assert "[12h]" in q, f"Expected [12h] in {q}"
+            assert "[6h]" in q, f"Expected [6h] in {q}"
+
+    @patch('src.core.promql_service.discover_available_metrics_from_thanos')
+    def test_tier_gt_48h_dynamic_1_week(self, mock_discovery):
+        """>48h range should compute dynamically: 168h / 12 = 14h."""
+        mock_discovery.return_value = []
+        start_ts = 1640995200
+        end_ts = start_ts + 3600 * 168  # 168 hours (1 week)
+        result = generate_promql_from_question(
+            "What is the latency?", "test-ns", "test-model", start_ts, end_ts
+        )
+        latency_queries = [q for q in result if "rate(" in q]
+        for q in latency_queries:
+            assert "[14h]" in q, f"Expected [14h] in {q}"
 
 
 class TestDataValidation:
@@ -575,8 +588,10 @@ class TestCalculateHistogramQuantileOptimalLookback:
         assert calculate_histogram_quantile_optimal_lookback(36.0) == "4h"
         assert calculate_histogram_quantile_optimal_lookback(48.0) == "4h"
 
-    def test_tier_gt_48h(self):
-        """>48h should return 12h."""
-        assert calculate_histogram_quantile_optimal_lookback(48.01) == "12h"
-        assert calculate_histogram_quantile_optimal_lookback(72.0) == "12h"
-        assert calculate_histogram_quantile_optimal_lookback(168.0) == "12h"
+    def test_gt_48h_dynamic(self):
+        """>48h should compute dynamically: duration / 12, rounded."""
+        assert calculate_histogram_quantile_optimal_lookback(48.01) == "4h"   # 48.01/12 ≈ 4.0
+        assert calculate_histogram_quantile_optimal_lookback(72.0) == "6h"    # 72/12 = 6
+        assert calculate_histogram_quantile_optimal_lookback(168.0) == "14h"  # 168/12 = 14
+        assert calculate_histogram_quantile_optimal_lookback(336.0) == "28h"  # 336/12 = 28 (2 weeks)
+        assert calculate_histogram_quantile_optimal_lookback(720.0) == "60h"  # 720/12 = 60 (~1 month)

@@ -399,15 +399,16 @@ class TestResolveRateIntervalPlaceholder:
         )
         assert result == "rate(metric[4h])"
 
-    def test_tier_gt_48h(self):
-        """>48h range -> 12h."""
+    def test_gt_48h_dynamic(self):
+        """>48h range -> computed dynamically: 168h / 12 = 14h."""
         from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
 
         query = "rate(metric[<rate_interval>])"
+        # 7 days = 168h -> 168/12 = 14h
         result = _resolve_rate_interval_placeholder(
             query, "2026-03-10T10:00:00Z", "2026-03-17T10:00:00Z"
         )
-        assert result == "rate(metric[12h])"
+        assert result == "rate(metric[14h])"
 
     def test_multiple_placeholders_replaced(self):
         """All occurrences of <rate_interval> should be replaced."""

@@ -398,28 +398,28 @@ def execute_range_queries_parallel(
 def calculate_histogram_quantile_optimal_lookback(duration_hours: float) -> str:
     """Select an appropriate rate() lookback window based on the total query time range.
 
-    Balances granularity against sparse-data risk by mapping the duration
-    to one of seven discrete tiers, each targeting ~12 data points at the
-    tier boundary.
+    Balances granularity against sparse-data risk, targeting ~12 data points.
 
-    This is the single source of truth for the 7-tier rate interval mapping.
+    This is the single source of truth for rate interval selection.
     All other locations (promql_service.py, prometheus_tools.py safety-net,
-    observability_vllm_tools.py guidance note) must use this same mapping.
+    observability_vllm_tools.py guidance note) must use this function.
 
-    Tier mapping:
+    For ranges <= 48h, uses a fixed tier mapping:
         <=1h  -> 5m   (~12 data points at 1h)
         <=3h  -> 15m  (~12 data points at 3h)
         <=6h  -> 30m  (~12 data points at 6h)
         <=12h -> 1h   (~12 data points at 12h)
         <=24h -> 2h   (~12 data points at 24h)
         <=48h -> 4h   (~12 data points at 48h)
-        >48h  -> 12h  (half-day smoothing for week+ ranges)
+
+    For ranges > 48h, computes dynamically: duration / 12, rounded to the
+    nearest whole hour.  Examples: 3 days -> 6h, 1 week -> 14h, 1 month -> 60h.
 
     Args:
         duration_hours: Total time range duration in hours
 
     Returns:
-        Lookback window string (e.g., "5m", "15m", "30m", "1h", "2h", "4h", "12h")
+        Lookback window string (e.g., "5m", "15m", "30m", "1h", "2h", "14h")
     """
     if duration_hours <= 1:
         return "5m"   # 1 hour or less -> 5 minute lookback
@@ -434,7 +434,10 @@ def calculate_histogram_quantile_optimal_lookback(duration_hours: float) -> str:
     elif duration_hours <= 48:
         return "4h"   # 24-48 hours -> 4 hour lookback
     else:
-        return "12h"  # >48 hours -> 12 hour lookback
+        # Compute dynamically for longer ranges, targeting ~12 data points
+        raw_hours = duration_hours / 12
+        rounded_hours = max(1, round(raw_hours))
+        return f"{rounded_hours}h"
 
 
 @dataclass(frozen=True)

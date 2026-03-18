@@ -252,7 +252,8 @@ def get_vllm_metrics_tool() -> List[Dict[str, Any]]:
         content = f"Available vLLM Metrics ({len(display_metrics)} total):\n\n"
         content += ("**Note:** `<rate_interval>` must be set based on the user's requested "
                      "time range: <=1h use 5m, <=3h use 15m, <=6h use 30m, "
-                     "<=12h use 1h, <=24h use 2h, <=48h use 4h, >48h use 12h. "
+                     "<=12h use 1h, <=24h use 2h, <=48h use 4h, "
+                     ">48h divide hours by 12 and round (e.g. 3d=6h, 1w=14h, 1mo=60h). "
                      "Default: 5m.\n\n")
 
         # Group metrics by type for better presentation
