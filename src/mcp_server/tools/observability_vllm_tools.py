@@ -238,11 +238,13 @@ def get_vllm_metrics_tool() -> List[Dict[str, Any]]:
         if not vllm_metrics_dict:
             return make_mcp_text_response("No vLLM metrics are currently available from Prometheus.")
 
-        # Replace hardcoded [5m] with <rate_interval> placeholder so the LLM
-        # adjusts the rate window to match the user's requested time range
-        # instead of blindly copying [5m].
+        # Replace any hardcoded rate window (e.g. [5m], [15m], [1h]) with
+        # <rate_interval> placeholder so the LLM adjusts the rate window to
+        # match the user's requested time range instead of copying a literal.
+        # All current queries use [5m], but this regex future-proofs against
+        # new metrics that might use other windows.
         display_metrics = {
-            name: query.replace('[5m]', '[<rate_interval>]')
+            name: re.sub(r'\[\d+[mhd]\]', '[<rate_interval>]', query)
             for name, query in vllm_metrics_dict.items()
         }
 

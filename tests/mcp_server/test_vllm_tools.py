@@ -275,6 +275,30 @@ def test_get_vllm_metrics_tool_replaces_5m_with_rate_interval(mock_get_vllm_metr
 
 
 @patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_metrics")
+def test_get_vllm_metrics_tool_replaces_any_rate_window(mock_get_vllm_metrics):
+    """Test that get_vllm_metrics_tool replaces non-[5m] rate windows too."""
+    mock_get_vllm_metrics.return_value = {
+        "Custom Rate 15m": "rate(custom_metric[15m])",
+        "Custom Increase 1h": "sum(increase(custom_counter[1h]))",
+        "Standard 5m": "rate(vllm:latency_bucket[5m])",
+        "Gauge (no window)": "avg(DCGM_FI_DEV_GPU_TEMP)",
+    }
+
+    result = tools.get_vllm_metrics_tool()
+    text = "\n".join(_texts(result))
+
+    # All hardcoded windows should be replaced
+    assert "[15m]" not in text
+    assert "[1h]" not in text
+    assert "[5m]" not in text
+    assert "rate(custom_metric[<rate_interval>])" in text
+    assert "increase(custom_counter[<rate_interval>])" in text
+    assert "rate(vllm:latency_bucket[<rate_interval>])" in text
+    # Gauge query without window should be unchanged
+    assert "avg(DCGM_FI_DEV_GPU_TEMP)" in text
+
+
+@patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_metrics")
 def test_get_vllm_metrics_tool_empty(mock_get_vllm_metrics):
     """Test get_vllm_metrics_tool with empty response"""
     mock_get_vllm_metrics.return_value = {}

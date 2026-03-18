@@ -21,6 +21,7 @@ from core.chat_with_prometheus import (
     find_best_metric_with_metadata as core_find_best_metric_with_metadata,
 )
 from core.metrics_catalog import get_metrics_catalog
+from core.metrics import calculate_histogram_quantile_optimal_lookback
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -128,6 +129,61 @@ def convert_time_to_promql_duration(
         return make_mcp_text_response(f"Error: {str(e)}", is_error=True)
 
 
+def _resolve_rate_interval_placeholder(query: str, start_time: Optional[str], end_time: Optional[str]) -> str:
+    """Replace any surviving [<rate_interval>] placeholder with a sensible default.
+
+    The LLM is expected to resolve this placeholder itself based on the
+    user's requested time range and the tier guidance. If the placeholder
+    survives to execution time (LLM failed to replace it), substitute a
+    reasonable value derived from the query time range rather than sending
+    invalid PromQL to Prometheus.
+
+    Uses calculate_histogram_quantile_optimal_lookback() from core.metrics
+    as the single source of truth for the 5-tier rate interval mapping.
+    """
+    if '<rate_interval>' not in query:
+        return query
+
+    logger.warning(
+        "LLM left <rate_interval> placeholder in PromQL query — "
+        "substituting based on query time range."
+    )
+
+    rate_interval = '5m'  # safe default
+
+    if start_time and end_time:
+        try:
+            from datetime import datetime
+
+            def _parse_iso(ts: str) -> datetime:
+                # Strip trailing 'Z' and handle fractional seconds
+                ts = ts.rstrip('Z')
+                for fmt in ('%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S'):
+                    try:
+                        return datetime.fromisoformat(ts)
+                    except ValueError:
+                        continue
+                return datetime.fromisoformat(ts)
+
+            start_dt = _parse_iso(start_time)
+            end_dt = _parse_iso(end_time)
+            duration_hours = (end_dt - start_dt).total_seconds() / 3600
+
+            rate_interval = calculate_histogram_quantile_optimal_lookback(duration_hours)
+
+            logger.info(
+                "Resolved <rate_interval> to %s based on %.1fh query range",
+                rate_interval, duration_hours,
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not parse query time range for <rate_interval> "
+                "substitution, using default %s: %s", rate_interval, e,
+            )
+
+    return query.replace('<rate_interval>', rate_interval)
+
+
 def execute_promql(
     query: str,
     time_range: Optional[str] = None,
@@ -138,7 +194,7 @@ def execute_promql(
     try:
         if not query:
             return make_mcp_text_response("query is required", is_error=True)
-        
+
         # Convert parameters to what our core function expects
         start_time = start_datetime
         end_time = end_datetime
@@ -157,6 +213,11 @@ def execute_promql(
             else:
                 start_time = (datetime.now() - timedelta(hours=1)).isoformat() + "Z"
         
+        # Safety net: replace any surviving <rate_interval> placeholder
+        # before sending to Prometheus (the LLM should have resolved it,
+        # but if it didn't, substitute based on query time range).
+        query = _resolve_rate_interval_placeholder(query, start_time, end_time)
+
         # Direct call to core business logic - SAME AS WORKING TOOLS
         result = execute_promql_query(query, start_time, end_time)
         

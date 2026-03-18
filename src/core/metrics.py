@@ -401,20 +401,31 @@ def calculate_histogram_quantile_optimal_lookback(duration_hours: float) -> str:
     This prevents sparse data in histogram_quantile queries by using a lookback window
     proportional to the total time range.
 
+    This is the single source of truth for the 5-tier rate interval mapping.
+    All other locations (promql_service.py, prometheus_tools.py safety-net,
+    observability_vllm_tools.py guidance note) must use this same mapping.
+
+    Tier mapping:
+        <=1h  -> 5m   (fine-grained, ~12 data points)
+        <=6h  -> 15m  (quarter-hour smoothing)
+        <=24h -> 1h   (hourly smoothing, ~24 data points)
+        <=48h -> 4h   (4-hour smoothing, ~12 data points)
+        >48h  -> 12h  (half-day smoothing for week+ ranges)
+
     Args:
         duration_hours: Total time range duration in hours
 
     Returns:
-        Lookback window string (e.g., "5m", "30m", "2h")
+        Lookback window string (e.g., "5m", "15m", "1h", "4h", "12h")
     """
     if duration_hours <= 1:
-        return "5m"  # 1 hour or less -> 5 minute lookback
-    elif duration_hours <= 3:
-        return "15m"  # 1-3 hours -> 15 minute lookback
-    elif duration_hours <= 12:
-        return "1h"  # 3-12 hours -> 1 hour lookback
+        return "5m"   # 1 hour or less -> 5 minute lookback
+    elif duration_hours <= 6:
+        return "15m"  # 1-6 hours -> 15 minute lookback
+    elif duration_hours <= 24:
+        return "1h"   # 6-24 hours -> 1 hour lookback
     elif duration_hours <= 48:
-        return "4h"  # 12-48 hours -> 4 hour lookback
+        return "4h"   # 24-48 hours -> 4 hour lookback
     else:
         return "12h"  # >48 hours -> 12 hour lookback
 

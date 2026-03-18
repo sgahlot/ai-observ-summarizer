@@ -320,6 +320,97 @@ class TestArchitectureSeparation:
         assert "from core." in source and "from core." in vllm_source
 
 
+class TestResolveRateIntervalPlaceholder:
+    """Tests for the _resolve_rate_interval_placeholder safety-net function."""
+
+    def test_no_placeholder_returns_query_unchanged(self):
+        """Query without <rate_interval> should pass through unchanged."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(vllm:e2e_request_latency_seconds_count[5m])"
+        result = _resolve_rate_interval_placeholder(query, None, None)
+        assert result == query
+
+    def test_placeholder_replaced_with_default_when_no_times(self):
+        """Without start/end times, should substitute the 5m default."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[<rate_interval>])"
+        result = _resolve_rate_interval_placeholder(query, None, None)
+        assert result == "rate(metric[5m])"
+
+    def test_tier_leq_1h(self):
+        """<=1h range -> 5m."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[<rate_interval>])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-17T10:00:00Z", "2026-03-17T10:30:00Z"
+        )
+        assert result == "rate(metric[5m])"
+
+    def test_tier_leq_6h(self):
+        """<=6h range -> 15m."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[<rate_interval>])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-17T06:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[15m])"
+
+    def test_tier_leq_24h(self):
+        """<=24h range -> 1h."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[<rate_interval>])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[1h])"
+
+    def test_tier_leq_48h(self):
+        """<=48h range -> 4h."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[<rate_interval>])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-15T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[4h])"
+
+    def test_tier_gt_48h(self):
+        """>48h range -> 12h."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[<rate_interval>])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-10T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[12h])"
+
+    def test_multiple_placeholders_replaced(self):
+        """All occurrences of <rate_interval> should be replaced."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = (
+            "histogram_quantile(0.95, sum(rate(metric_bucket[<rate_interval>])) by (le)) "
+            "/ rate(metric_count[<rate_interval>])"
+        )
+        result = _resolve_rate_interval_placeholder(query, None, None)
+        assert "<rate_interval>" not in result
+        assert "[5m]" in result
+        assert result.count("[5m]") == 2
+
+    def test_malformed_timestamps_use_default(self):
+        """Unparseable timestamps should fall back to 5m default."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[<rate_interval>])"
+        result = _resolve_rate_interval_placeholder(query, "not-a-date", "also-not-a-date")
+        assert result == "rate(metric[5m])"
+
+
 class TestRealDataFlow:
     """Test data flow with mocked Prometheus responses."""
     
