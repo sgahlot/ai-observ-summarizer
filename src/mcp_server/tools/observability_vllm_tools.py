@@ -39,7 +39,6 @@ from core.metrics import (
     get_vllm_namespaces_helper,
     get_vllm_metrics,
     fetch_metrics,
-    get_summarization_models,
     get_cluster_gpu_info,
     get_namespace_model_deployment_info,
     execute_instant_queries_parallel,
@@ -68,23 +67,6 @@ from mcp_server.exceptions import (
 
 # Configure structured logging
 logger = get_python_logger()
-
-
-def check_rag_availability():
-    """Check if RAG infrastructure is available for vLLM operations."""
-    try:
-        from core.config import RAG_AVAILABLE
-        if not RAG_AVAILABLE:
-            error = MCPException(
-                message="vLLM infrastructure not available",
-                error_code=MCPErrorCode.CONFIGURATION_ERROR,
-                recovery_suggestion="RAG infrastructure is not installed or accessible. vLLM metrics require local model deployment. Install with: make install ENABLE_RAG=true"
-            )
-            return error.to_mcp_response()
-        return None
-    except Exception:
-        # If we can't determine availability, allow the operation to continue
-        return None
 
 
 def resolve_time_range(
