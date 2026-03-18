@@ -6,6 +6,7 @@ FIXED: Now follows the same pattern as working vLLM and OpenShift tools.
 
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from core.response_utils import make_mcp_text_response
 
@@ -139,7 +140,7 @@ def _resolve_rate_interval_placeholder(query: str, start_time: Optional[str], en
     invalid PromQL to Prometheus.
 
     Uses calculate_histogram_quantile_optimal_lookback() from core.metrics
-    as the single source of truth for the 5-tier rate interval mapping.
+    as the single source of truth for the 7-tier rate interval mapping.
     """
     if '<rate_interval>' not in query:
         return query
@@ -153,20 +154,8 @@ def _resolve_rate_interval_placeholder(query: str, start_time: Optional[str], en
 
     if start_time and end_time:
         try:
-            from datetime import datetime
-
-            def _parse_iso(ts: str) -> datetime:
-                # Strip trailing 'Z' and handle fractional seconds
-                ts = ts.rstrip('Z')
-                for fmt in ('%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S'):
-                    try:
-                        return datetime.fromisoformat(ts)
-                    except ValueError:
-                        continue
-                return datetime.fromisoformat(ts)
-
-            start_dt = _parse_iso(start_time)
-            end_dt = _parse_iso(end_time)
+            start_dt = datetime.fromisoformat(start_time.rstrip('Z'))
+            end_dt = datetime.fromisoformat(end_time.rstrip('Z'))
             duration_hours = (end_dt - start_dt).total_seconds() / 3600
 
             rate_interval = calculate_histogram_quantile_optimal_lookback(duration_hours)
@@ -201,7 +190,6 @@ def execute_promql(
         
         # Handle time_range parameter conversion
         if time_range:
-            from datetime import datetime, timedelta
             end_time = datetime.now().isoformat() + "Z"
             
             if "5m" in time_range or "5 min" in time_range:

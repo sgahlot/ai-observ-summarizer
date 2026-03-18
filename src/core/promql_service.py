@@ -35,7 +35,7 @@ def generate_promql_from_question(question: str, namespace: Optional[str], model
     duration_seconds = end_ts - start_ts
     duration_hours = duration_seconds / 3600
 
-    # Use the shared 5-tier mapping from metrics.py (single source of truth)
+    # Use the shared 7-tier mapping from metrics.py (single source of truth)
     rate_interval = calculate_histogram_quantile_optimal_lookback(duration_hours)
     
     logger.info("Time range: %.1fh, interval=%s", duration_hours, rate_interval)
