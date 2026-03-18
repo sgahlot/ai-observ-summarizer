@@ -349,25 +349,45 @@ class TestResolveRateIntervalPlaceholder:
         )
         assert result == "rate(metric[5m])"
 
+    def test_tier_leq_3h(self):
+        """<=3h range -> 15m."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[<rate_interval>])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-17T08:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[15m])"
+
     def test_tier_leq_6h(self):
-        """<=6h range -> 15m."""
+        """<=6h range -> 30m."""
         from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
 
         query = "rate(metric[<rate_interval>])"
         result = _resolve_rate_interval_placeholder(
             query, "2026-03-17T06:00:00Z", "2026-03-17T10:00:00Z"
         )
-        assert result == "rate(metric[15m])"
+        assert result == "rate(metric[30m])"
+
+    def test_tier_leq_12h(self):
+        """<=12h range -> 1h."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[<rate_interval>])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-17T00:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[1h])"
 
     def test_tier_leq_24h(self):
-        """<=24h range -> 1h."""
+        """<=24h range -> 2h."""
         from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
 
         query = "rate(metric[<rate_interval>])"
         result = _resolve_rate_interval_placeholder(
             query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
         )
-        assert result == "rate(metric[1h])"
+        assert result == "rate(metric[2h])"
 
     def test_tier_leq_48h(self):
         """<=48h range -> 4h."""

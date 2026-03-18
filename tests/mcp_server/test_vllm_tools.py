@@ -272,6 +272,7 @@ def test_get_vllm_metrics_tool_replaces_5m_with_rate_interval(mock_get_vllm_metr
     # Rate interval guidance note should be present
     assert "<rate_interval>" in text
     assert "<=1h use 5m" in text
+    assert "<=3h use 15m" in text
 
 
 @patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_metrics")

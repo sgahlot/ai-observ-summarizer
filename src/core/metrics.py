@@ -399,31 +399,38 @@ def calculate_histogram_quantile_optimal_lookback(duration_hours: float) -> str:
     """Select an appropriate rate() lookback window based on the total query time range.
 
     Balances granularity against sparse-data risk by mapping the duration
-    to one of five discrete tiers.
+    to one of seven discrete tiers, each targeting ~12 data points at the
+    tier boundary.
 
-    This is the single source of truth for the 5-tier rate interval mapping.
+    This is the single source of truth for the 7-tier rate interval mapping.
     All other locations (promql_service.py, prometheus_tools.py safety-net,
     observability_vllm_tools.py guidance note) must use this same mapping.
 
     Tier mapping:
-        <=1h  -> 5m   (fine-grained, ~12 data points)
-        <=6h  -> 15m  (quarter-hour smoothing)
-        <=24h -> 1h   (hourly smoothing, ~24 data points)
-        <=48h -> 4h   (4-hour smoothing, ~12 data points)
+        <=1h  -> 5m   (~12 data points at 1h)
+        <=3h  -> 15m  (~12 data points at 3h)
+        <=6h  -> 30m  (~12 data points at 6h)
+        <=12h -> 1h   (~12 data points at 12h)
+        <=24h -> 2h   (~12 data points at 24h)
+        <=48h -> 4h   (~12 data points at 48h)
         >48h  -> 12h  (half-day smoothing for week+ ranges)
 
     Args:
         duration_hours: Total time range duration in hours
 
     Returns:
-        Lookback window string (e.g., "5m", "15m", "1h", "4h", "12h")
+        Lookback window string (e.g., "5m", "15m", "30m", "1h", "2h", "4h", "12h")
     """
     if duration_hours <= 1:
         return "5m"   # 1 hour or less -> 5 minute lookback
+    elif duration_hours <= 3:
+        return "15m"  # 1-3 hours -> 15 minute lookback
     elif duration_hours <= 6:
-        return "15m"  # 1-6 hours -> 15 minute lookback
+        return "30m"  # 3-6 hours -> 30 minute lookback
+    elif duration_hours <= 12:
+        return "1h"   # 6-12 hours -> 1 hour lookback
     elif duration_hours <= 24:
-        return "1h"   # 6-24 hours -> 1 hour lookback
+        return "2h"   # 12-24 hours -> 2 hour lookback
     elif duration_hours <= 48:
         return "4h"   # 24-48 hours -> 4 hour lookback
     else:

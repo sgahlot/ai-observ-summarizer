@@ -408,29 +408,27 @@ class TestErrorHandling:
 
 
 class TestRateIntervalTierMapping:
-    """Test that promql_service uses the correct 5-tier rate interval mapping."""
+    """Test that promql_service uses the correct 7-tier rate interval mapping."""
 
     @patch('src.core.promql_service.discover_available_metrics_from_thanos')
     def test_tier_leq_1h_uses_5m(self, mock_discovery):
         """<=1h range should use 5m rate interval."""
         mock_discovery.return_value = []
-        # 30 min range
         start_ts = 1640995200
         end_ts = start_ts + 1800  # 30 min
         result = generate_promql_from_question(
             "What is the latency?", "test-ns", "test-model", start_ts, end_ts
         )
-        # Latency queries should contain [5m]
         latency_queries = [q for q in result if "rate(" in q]
         for q in latency_queries:
             assert "[5m]" in q, f"Expected [5m] in {q}"
 
     @patch('src.core.promql_service.discover_available_metrics_from_thanos')
-    def test_tier_leq_6h_uses_15m(self, mock_discovery):
-        """<=6h range should use 15m rate interval."""
+    def test_tier_leq_3h_uses_15m(self, mock_discovery):
+        """<=3h range should use 15m rate interval."""
         mock_discovery.return_value = []
         start_ts = 1640995200
-        end_ts = start_ts + 3600 * 4  # 4 hours
+        end_ts = start_ts + 3600 * 2  # 2 hours
         result = generate_promql_from_question(
             "What is the latency?", "test-ns", "test-model", start_ts, end_ts
         )
@@ -439,17 +437,43 @@ class TestRateIntervalTierMapping:
             assert "[15m]" in q, f"Expected [15m] in {q}"
 
     @patch('src.core.promql_service.discover_available_metrics_from_thanos')
-    def test_tier_leq_24h_uses_1h(self, mock_discovery):
-        """<=24h range should use 1h rate interval."""
+    def test_tier_leq_6h_uses_30m(self, mock_discovery):
+        """<=6h range should use 30m rate interval."""
         mock_discovery.return_value = []
         start_ts = 1640995200
-        end_ts = start_ts + 3600 * 12  # 12 hours
+        end_ts = start_ts + 3600 * 4  # 4 hours
+        result = generate_promql_from_question(
+            "What is the latency?", "test-ns", "test-model", start_ts, end_ts
+        )
+        latency_queries = [q for q in result if "rate(" in q]
+        for q in latency_queries:
+            assert "[30m]" in q, f"Expected [30m] in {q}"
+
+    @patch('src.core.promql_service.discover_available_metrics_from_thanos')
+    def test_tier_leq_12h_uses_1h(self, mock_discovery):
+        """<=12h range should use 1h rate interval."""
+        mock_discovery.return_value = []
+        start_ts = 1640995200
+        end_ts = start_ts + 3600 * 8  # 8 hours
         result = generate_promql_from_question(
             "What is the latency?", "test-ns", "test-model", start_ts, end_ts
         )
         latency_queries = [q for q in result if "rate(" in q]
         for q in latency_queries:
             assert "[1h]" in q, f"Expected [1h] in {q}"
+
+    @patch('src.core.promql_service.discover_available_metrics_from_thanos')
+    def test_tier_leq_24h_uses_2h(self, mock_discovery):
+        """<=24h range should use 2h rate interval."""
+        mock_discovery.return_value = []
+        start_ts = 1640995200
+        end_ts = start_ts + 3600 * 18  # 18 hours
+        result = generate_promql_from_question(
+            "What is the latency?", "test-ns", "test-model", start_ts, end_ts
+        )
+        latency_queries = [q for q in result if "rate(" in q]
+        for q in latency_queries:
+            assert "[2h]" in q, f"Expected [2h] in {q}"
 
     @patch('src.core.promql_service.discover_available_metrics_from_thanos')
     def test_tier_leq_48h_uses_4h(self, mock_discovery):
@@ -521,17 +545,29 @@ class TestCalculateHistogramQuantileOptimalLookback:
         assert calculate_histogram_quantile_optimal_lookback(0.5) == "5m"
         assert calculate_histogram_quantile_optimal_lookback(1.0) == "5m"
 
-    def test_tier_leq_6h(self):
-        """<=6h should return 15m."""
+    def test_tier_leq_3h(self):
+        """<=3h should return 15m."""
         assert calculate_histogram_quantile_optimal_lookback(1.01) == "15m"
-        assert calculate_histogram_quantile_optimal_lookback(4.0) == "15m"
-        assert calculate_histogram_quantile_optimal_lookback(6.0) == "15m"
+        assert calculate_histogram_quantile_optimal_lookback(2.0) == "15m"
+        assert calculate_histogram_quantile_optimal_lookback(3.0) == "15m"
+
+    def test_tier_leq_6h(self):
+        """<=6h should return 30m."""
+        assert calculate_histogram_quantile_optimal_lookback(3.01) == "30m"
+        assert calculate_histogram_quantile_optimal_lookback(5.0) == "30m"
+        assert calculate_histogram_quantile_optimal_lookback(6.0) == "30m"
+
+    def test_tier_leq_12h(self):
+        """<=12h should return 1h."""
+        assert calculate_histogram_quantile_optimal_lookback(6.01) == "1h"
+        assert calculate_histogram_quantile_optimal_lookback(9.0) == "1h"
+        assert calculate_histogram_quantile_optimal_lookback(12.0) == "1h"
 
     def test_tier_leq_24h(self):
-        """<=24h should return 1h."""
-        assert calculate_histogram_quantile_optimal_lookback(6.01) == "1h"
-        assert calculate_histogram_quantile_optimal_lookback(12.0) == "1h"
-        assert calculate_histogram_quantile_optimal_lookback(24.0) == "1h"
+        """<=24h should return 2h."""
+        assert calculate_histogram_quantile_optimal_lookback(12.01) == "2h"
+        assert calculate_histogram_quantile_optimal_lookback(18.0) == "2h"
+        assert calculate_histogram_quantile_optimal_lookback(24.0) == "2h"
 
     def test_tier_leq_48h(self):
         """<=48h should return 4h."""
