@@ -232,7 +232,7 @@ def execute_promql_query(
     # Execute query - use instant query if no time range specified
     if start_time or end_time:
         # Range query
-        step = choose_prometheus_step(int(start_timestamp), int(end_timestamp))
+        step = choose_prometheus_step(int(start_timestamp), int(end_timestamp), min_step_seconds=60)
         logger.info("Range query step: %s (start=%s, end=%s)", step, start_time, end_time)
         params = {
             "query": query,
