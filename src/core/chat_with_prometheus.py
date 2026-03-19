@@ -20,8 +20,10 @@ from typing import Dict, Any, List, Optional
 
 from .config import PROMETHEUS_URL, THANOS_TOKEN, VERIFY_SSL
 from .llm_client import summarize_with_llm
+from .metrics import choose_prometheus_step
 from .response_validator import ResponseType
 from .metrics_catalog import get_metrics_catalog
+from .time_utils import parse_duration_to_timedelta
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -211,17 +213,10 @@ def execute_promql_query(
     # Parse time parameters
     if start_time:
         if start_time.endswith(('m', 'h', 'd')):
-            # Relative time (e.g., "1h", "30m")
+            # Relative time (e.g., "1h", "30m", "2d")
             now = datetime.utcnow()
-            if start_time.endswith('m'):
-                minutes = int(start_time[:-1])
-                start_timestamp = (now - timedelta(minutes=minutes)).timestamp()
-            elif start_time.endswith('h'):
-                hours = int(start_time[:-1])
-                start_timestamp = (now - timedelta(hours=hours)).timestamp()
-            elif start_time.endswith('d'):
-                days = int(start_time[:-1])
-                start_timestamp = (now - timedelta(days=days)).timestamp()
+            delta = parse_duration_to_timedelta(start_time)
+            start_timestamp = (now - delta).timestamp()
         else:
             # Absolute time
             start_timestamp = datetime.fromisoformat(start_time.replace('Z', '+00:00')).timestamp()
@@ -237,11 +232,13 @@ def execute_promql_query(
     # Execute query - use instant query if no time range specified
     if start_time or end_time:
         # Range query
+        step = choose_prometheus_step(int(start_timestamp), int(end_timestamp))
+        logger.info("Range query step: %s (start=%s, end=%s)", step, start_time, end_time)
         params = {
             "query": query,
             "start": start_timestamp,
             "end": end_timestamp,
-            "step": "60s"  # 1 minute resolution
+            "step": step,
         }
         response = make_prometheus_request("/api/v1/query_range", params)
     else:

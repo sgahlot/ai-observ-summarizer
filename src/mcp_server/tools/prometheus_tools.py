@@ -6,6 +6,7 @@ FIXED: Now follows the same pattern as working vLLM and OpenShift tools.
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from core.response_utils import make_mcp_text_response
@@ -23,6 +24,7 @@ from core.chat_with_prometheus import (
 )
 from core.metrics_catalog import get_metrics_catalog
 from core.metrics import calculate_histogram_quantile_optimal_lookback
+from core.time_utils import parse_duration_to_timedelta
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -130,47 +132,69 @@ def convert_time_to_promql_duration(
         return make_mcp_text_response(f"Error: {str(e)}", is_error=True)
 
 
-def _resolve_rate_interval_placeholder(query: str, start_time: Optional[str], end_time: Optional[str]) -> str:
-    """Replace any surviving [<rate_interval>] placeholder with a sensible default.
+# Literal rate windows we normalize when the query time range is known.
+# Matches any PromQL duration inside square brackets (e.g. [5m], [2h], [2d]).
+_RATE_WINDOW_PATTERN = re.compile(r'\[\d+[smhd]\]')
 
-    The LLM is expected to resolve this placeholder itself based on the
-    user's requested time range and the tier guidance. If the placeholder
-    survives to execution time (LLM failed to replace it), substitute a
-    reasonable value derived from the query time range rather than sending
-    invalid PromQL to Prometheus.
+
+def _resolve_rate_interval_placeholder(query: str, start_time: Optional[str], end_time: Optional[str]) -> str:
+    """Replace any surviving [<rate_interval>] and normalize literal rate windows.
+
+    Two behaviors:
+
+    1. **Placeholder:** If the query contains `<rate_interval>`, substitute a
+       value from the 7-tier mapping (or default 5m). The LLM is expected to
+       resolve this itself; if it survives, we fix it here.
+
+    2. **Literal windows:** When start/end are known, replace any literal rate
+       window (e.g. [5m], [1h], [2d]) with the tier-appropriate value. This
+       closes the gap where the LLM constructs rate(metric[5m]) from training
+       and never uses the placeholder.
 
     Uses calculate_histogram_quantile_optimal_lookback() from core.metrics
     as the single source of truth for the 7-tier rate interval mapping.
     """
-    if '<rate_interval>' not in query:
-        return query
-
-    logger.warning(
-        "LLM left <rate_interval> placeholder in PromQL query — "
-        "substituting based on query time range."
-    )
-
     rate_interval = '5m'  # safe default
+    has_placeholder = '<rate_interval>' in query
 
     if start_time and end_time:
         try:
             start_dt = datetime.fromisoformat(start_time.rstrip('Z'))
             end_dt = datetime.fromisoformat(end_time.rstrip('Z'))
             duration_hours = (end_dt - start_dt).total_seconds() / 3600
-
             rate_interval = calculate_histogram_quantile_optimal_lookback(duration_hours)
-
-            logger.info(
-                "Resolved <rate_interval> to %s based on %.1fh query range",
-                rate_interval, duration_hours,
-            )
+            if has_placeholder:
+                logger.warning(
+                    "LLM left <rate_interval> placeholder in PromQL query — "
+                    "substituting %s based on %.1fh query range.",
+                    rate_interval, duration_hours,
+                )
+            else:
+                # Check for literal rate windows (e.g. LLM used rate(x[5m]) from training)
+                if _RATE_WINDOW_PATTERN.search(query):
+                    logger.info(
+                        "Normalizing rate window(s) to %s for %.1fh query range.",
+                        rate_interval, duration_hours,
+                    )
         except Exception as e:
-            logger.warning(
-                "Could not parse query time range for <rate_interval> "
-                "substitution, using default %s: %s", rate_interval, e,
-            )
+            if has_placeholder:
+                logger.warning(
+                    "Could not parse query time range for <rate_interval> "
+                    "substitution, using default %s: %s", rate_interval, e,
+                )
+            rate_interval = '5m'
+            # Don't normalize literals if we couldn't compute tier
+            start_time = None
+            end_time = None
 
-    return query.replace('<rate_interval>', rate_interval)
+    if has_placeholder:
+        query = query.replace('<rate_interval>', rate_interval)
+
+    # When we have a known time range, normalize any literal rate window to the tier
+    if start_time and end_time and rate_interval:
+        query = _RATE_WINDOW_PATTERN.sub(f'[{rate_interval}]', query)
+
+    return query
 
 
 def execute_promql(
@@ -191,20 +215,18 @@ def execute_promql(
         # Handle time_range parameter conversion
         if time_range:
             end_time = datetime.now().isoformat() + "Z"
-            
-            if "5m" in time_range or "5 min" in time_range:
-                start_time = (datetime.now() - timedelta(minutes=5)).isoformat() + "Z"
-            elif "1h" in time_range or "1 hour" in time_range:
-                start_time = (datetime.now() - timedelta(hours=1)).isoformat() + "Z"
-            elif "now" in time_range:
-                start_time = (datetime.now() - timedelta(minutes=5)).isoformat() + "Z"
-            else:
-                start_time = (datetime.now() - timedelta(hours=1)).isoformat() + "Z"
+            delta = parse_duration_to_timedelta(time_range)
+            start_time = (datetime.now() - delta).isoformat() + "Z"
         
         # Safety net: replace any surviving <rate_interval> placeholder
         # before sending to Prometheus (the LLM should have resolved it,
         # but if it didn't, substitute based on query time range).
+        original_query = query
         query = _resolve_rate_interval_placeholder(query, start_time, end_time)
+
+        if query != original_query:
+            logger.info("Query normalized: '%s' -> '%s'", original_query, query)
+        logger.info("Executing PromQL query: %s (start=%s, end=%s)", query, start_time, end_time)
 
         # Direct call to core business logic - SAME AS WORKING TOOLS
         result = execute_promql_query(query, start_time, end_time)

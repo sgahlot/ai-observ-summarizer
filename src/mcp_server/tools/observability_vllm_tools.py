@@ -226,7 +226,7 @@ def get_vllm_metrics_tool() -> List[Dict[str, Any]]:
         # All current queries use [5m], but this regex future-proofs against
         # new metrics that might use other windows.
         display_metrics = {
-            name: re.sub(r'\[\d+[mhd]\]', '[<rate_interval>]', query)
+            name: re.sub(r'\[\d+[smhd]\]', '[<rate_interval>]', query)
             for name, query in vllm_metrics_dict.items()
         }
 

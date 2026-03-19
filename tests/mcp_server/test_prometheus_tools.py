@@ -4,6 +4,7 @@ import pytest
 import json
 import sys
 import os
+from datetime import timedelta
 
 # Python path is now handled by conftest.py
 
@@ -430,6 +431,160 @@ class TestResolveRateIntervalPlaceholder:
         query = "rate(metric[<rate_interval>])"
         result = _resolve_rate_interval_placeholder(query, "not-a-date", "also-not-a-date")
         assert result == "rate(metric[5m])"
+
+
+class TestNormalizeLiteralRateWindows:
+    """Tests for literal rate window normalization (no placeholder)."""
+
+    def test_literal_5m_normalized_for_24h_range(self):
+        """LLM wrote [5m] from training — should be normalized to [2h] for 24h range."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(vllm:request_success_total[5m])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(vllm:request_success_total[2h])"
+
+    def test_literal_not_normalized_without_times(self):
+        """Without start/end, literal windows should pass through unchanged."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(vllm:request_success_total[5m])"
+        result = _resolve_rate_interval_placeholder(query, None, None)
+        assert result == query
+
+    def test_literal_already_matches_tier(self):
+        """[2h] for 24h range is already correct — result is the same (no-op)."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[2h])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[2h])"
+
+    def test_multiple_literal_windows_all_normalized(self):
+        """All literal windows in a multi-rate query should be normalized."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = (
+            "histogram_quantile(0.95, sum(rate(metric_bucket[5m])) by (le)) "
+            "/ rate(metric_count[5m])"
+        )
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result.count("[2h]") == 2
+        assert "[5m]" not in result
+
+    def test_literal_normalized_for_6h_range(self):
+        """[5m] should become [30m] for a 6h range."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[5m])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-17T04:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[30m])"
+
+    def test_no_rate_window_passes_through(self):
+        """Query without any rate window is not modified."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "histogram_quantile(0.95, vllm:time_to_first_token_seconds_bucket)"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == query
+
+    def test_malformed_timestamps_skip_normalization(self):
+        """Unparseable timestamps should not normalize literal windows."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[5m])"
+        result = _resolve_rate_interval_placeholder(query, "not-a-date", "also-not-a-date")
+        assert result == "rate(metric[5m])"
+
+    def test_full_duration_window_normalized_to_tier(self):
+        """LLM used full duration [24h] as rate window — should be normalized to [2h]."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[24h])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[2h])"
+
+    def test_day_unit_normalized(self):
+        """LLM used [2d] — should be normalized to [4h] for 48h range."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "increase(vllm:request_success_total[2d])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-15T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "increase(vllm:request_success_total[4h])"
+
+    def test_month_duration_normalized(self):
+        """LLM used [30d] — should be normalized dynamically for 30-day range."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(metric[30d])"
+        # 30 days = 720h -> 720/12 = 60h
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-02-15T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(metric[60h])"
+
+
+class TestParseDurationToTimedelta:
+    """Tests for parse_duration_to_timedelta (in core.time_utils)."""
+
+    def test_simple_hours(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("3h") == timedelta(hours=3)
+
+    def test_simple_minutes(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("30m") == timedelta(minutes=30)
+
+    def test_simple_days(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("2d") == timedelta(days=2)
+
+    def test_composite_duration(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("1h30m") == timedelta(hours=1, minutes=30)
+
+    def test_24_hours(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("24h") == timedelta(hours=24)
+
+    def test_unparseable_defaults_to_1h(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("foo") == timedelta(hours=1)
+
+    def test_seconds(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("90s") == timedelta(seconds=90)
+
+    def test_custom_default(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("foo", default=timedelta(hours=24)) == timedelta(hours=24)
+
+    def test_prefixed_string(self):
+        """Handles 'last 3h' format used by convert_time_range_to_iso."""
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("last 3h") == timedelta(hours=3)
+
+    def test_decimal_hours(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("1.5h") == timedelta(hours=1.5)
+
+    def test_decimal_days(self):
+        from core.time_utils import parse_duration_to_timedelta
+        assert parse_duration_to_timedelta("2.5d") == timedelta(days=2.5)
 
 
 class TestRealDataFlow:
