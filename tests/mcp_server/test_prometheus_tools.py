@@ -498,6 +498,58 @@ class TestNormalizeLiteralRateWindows:
         )
         assert result == query
 
+    def test_avg_over_time_not_normalized(self):
+        """avg_over_time window should NOT be normalized — it's not a rate function."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "avg_over_time(node_cpu_seconds_total[5m])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == query  # unchanged
+
+    def test_max_over_time_not_normalized(self):
+        """max_over_time window should NOT be normalized."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "max_over_time(container_memory_usage_bytes[1h])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == query  # unchanged
+
+    def test_mixed_rate_and_over_time(self):
+        """rate() window should be normalized but avg_over_time() should not."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "avg_over_time(rate(http_requests_total[5m])[1h:])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        # rate's [5m] should become [2h], but the subquery [1h:] should be untouched
+        assert "rate(http_requests_total[2h])" in result
+        assert "[1h:]" in result
+
+    def test_subquery_step_preserved(self):
+        """rate(x[5m:1m]) — normalize the 5m range but preserve the :1m step."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = "rate(http_requests_total[5m:1m])"
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == "rate(http_requests_total[2h:1m])"
+
+    def test_label_with_brackets_handled(self):
+        """Brackets in label values should not break the regex."""
+        from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder
+
+        query = 'rate(metric{label="value[1]"}[5m])'
+        result = _resolve_rate_interval_placeholder(
+            query, "2026-03-16T10:00:00Z", "2026-03-17T10:00:00Z"
+        )
+        assert result == 'rate(metric{label="value[1]"}[2h])'
+
     def test_malformed_timestamps_skip_normalization(self):
         """Unparseable timestamps should not normalize literal windows."""
         from mcp_server.tools.prometheus_tools import _resolve_rate_interval_placeholder

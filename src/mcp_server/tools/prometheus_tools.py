@@ -133,8 +133,14 @@ def convert_time_to_promql_duration(
 
 
 # Literal rate windows we normalize when the query time range is known.
-# Matches any PromQL duration inside square brackets (e.g. [5m], [2h], [2d]).
-_RATE_WINDOW_PATTERN = re.compile(r'\[\d+[smhd]\]')
+# Only matches duration windows inside rate-family functions
+# (rate, irate, increase, delta, idelta, resets) — leaves avg_over_time,
+# max_over_time, etc. untouched.
+# Uses .*? (lazy) instead of [^[]* to handle brackets in label values.
+# Optional (:[^\]]*) captures subquery steps (e.g. [5m:1m]) and preserves them.
+_RATE_FUNC_WINDOW_PATTERN = re.compile(
+    r'((?:rate|irate|increase|delta|idelta|resets)\s*\(.*?)\[(\d+[smhd])(:[^\]]*)?\]'
+)
 
 
 def _resolve_rate_interval_placeholder(query: str, start_time: Optional[str], end_time: Optional[str]) -> str:
@@ -146,10 +152,12 @@ def _resolve_rate_interval_placeholder(query: str, start_time: Optional[str], en
        value from the 7-tier mapping (or default 5m). The LLM is expected to
        resolve this itself; if it survives, we fix it here.
 
-    2. **Literal windows:** When start/end are known, replace any literal rate
-       window (e.g. [5m], [1h], [2d]) with the tier-appropriate value. This
-       closes the gap where the LLM constructs rate(metric[5m]) from training
-       and never uses the placeholder.
+    2. **Literal windows:** When start/end are known, replace literal rate
+       windows inside rate-family functions (rate, irate, increase, delta,
+       idelta, resets) with the tier-appropriate value. Windows in other
+       functions (avg_over_time, max_over_time, etc.) are left untouched.
+       This closes the gap where the LLM constructs rate(metric[5m]) from
+       training and never uses the placeholder.
 
     Uses calculate_histogram_quantile_optimal_lookback() from core.metrics
     as the single source of truth for the 7-tier rate interval mapping.
@@ -171,7 +179,7 @@ def _resolve_rate_interval_placeholder(query: str, start_time: Optional[str], en
                 )
             else:
                 # Check for literal rate windows (e.g. LLM used rate(x[5m]) from training)
-                if _RATE_WINDOW_PATTERN.search(query):
+                if _RATE_FUNC_WINDOW_PATTERN.search(query):
                     logger.info(
                         "Normalizing rate window(s) to %s for %.1fh query range.",
                         rate_interval, duration_hours,
@@ -190,9 +198,12 @@ def _resolve_rate_interval_placeholder(query: str, start_time: Optional[str], en
     if has_placeholder:
         query = query.replace('<rate_interval>', rate_interval)
 
-    # When we have a known time range, normalize any literal rate window to the tier
+    # When we have a known time range, normalize rate-family windows to the tier
     if start_time and end_time and rate_interval:
-        query = _RATE_WINDOW_PATTERN.sub(f'[{rate_interval}]', query)
+        query = _RATE_FUNC_WINDOW_PATTERN.sub(
+            lambda m: f'{m.group(1)}[{rate_interval}{m.group(3) or ""}]',
+            query,
+        )
 
     return query
 
