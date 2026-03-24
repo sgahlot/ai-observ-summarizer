@@ -81,7 +81,7 @@ spec:
               value: "{{ .Values.llm.url }}"
             {{- else }}
             - name: LLAMA_STACK_URL
-              value: "http://llamastack.{{ .Release.Namespace }}.svc.cluster.local:8321/v1/openai/v1"
+              value: "http://llamastack-service.{{ .Release.Namespace }}.svc.cluster.local:8321/v1/openai/v1"
             {{- end }}
             {{- if .Values.env.GPU_METRICS_PREFIX_NVIDIA }}
             - name: GPU_METRICS_PREFIX_NVIDIA

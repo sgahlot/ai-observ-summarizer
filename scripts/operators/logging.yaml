@@ -26,7 +26,7 @@ metadata:
   name: cluster-logging
   namespace: ${NAMESPACE}
 spec:
-  channel: stable-6.3
+  channel: stable-6.4
   installPlanApproval: Automatic
   name: cluster-logging
   source: redhat-operators

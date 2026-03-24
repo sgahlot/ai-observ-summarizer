@@ -171,13 +171,13 @@ def get_model_config() -> List[Dict[str, Any]]:
         full_model_config = safe_json_loads(model_config_str, "MODEL_CONFIG environment variable")
         
         # Import here to avoid circular imports
-        from core.config import RAG_AVAILABLE
+        from core.config import is_rag_available
         
         # Filter out local models if RAG is not available
         model_config = {}
         for name, config in full_model_config.items():
             is_external = config.get("external", True)
-            if not is_external and not RAG_AVAILABLE:
+            if not is_external and not is_rag_available():
                 # Skip local models when RAG infrastructure is unavailable
                 continue
             model_config[name] = config
@@ -190,7 +190,7 @@ def get_model_config() -> List[Dict[str, Any]]:
         model_config = {}
 
     if not model_config:
-        if not RAG_AVAILABLE:
+        if not is_rag_available():
             return make_mcp_text_response("No LLM models available. RAG infrastructure is not installed or accessible. Please configure external models (Anthropic, OpenAI, Google) with API keys.")
         return make_mcp_text_response("No LLM models configured for summarization.")
 

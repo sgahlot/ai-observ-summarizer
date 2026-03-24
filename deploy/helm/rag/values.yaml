@@ -1,7 +1,7 @@
-# This chart now only deploys backend services (llm-service, llama-stack, pgvector)
-# RAG UI components have been removed
+# This chart deploys backend services (llm-service, llama-stack-instance, pgvector)
+# llama-stack-instance creates a LlamaStackDistribution CR managed by the RHOAI operator
 
-# Common model values for llm-service and llama-stack
+# Common model values for llm-service and llama-stack-instance
 # See format in https://github.com/RHEcosystemAppEng/ai-architecture-charts/blob/main/helm/llm-service/values.yaml
 # For e.g., to add a new model add the following block and it will append to the list of models defined in the llm-service
 
@@ -34,7 +34,7 @@ minio:
     - https://raw.githubusercontent.com/rh-ai-quickstart/RAG/refs/heads/main/notebooks/Zippity_Zoo_and_the_Town_of_Whispering_Willows.pdf
 
 
-llama-stack:
+llama-stack-instance:
   env:
     - name: VLLM_MAX_TOKENS
       value: "4096"
