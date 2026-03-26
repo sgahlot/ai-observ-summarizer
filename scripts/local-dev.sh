@@ -413,7 +413,7 @@ start_port_forwards() {
     echo -e "${BLUE}🔍 Finding pods and starting port-forwards...${NC}"
 
     local THANOS_POD_LABEL='app.kubernetes.io/component=query-layer,app.kubernetes.io/instance=thanos-querier'
-    local LLAMASTACK_SERVICE_LABEL='app.kubernetes.io/instance=llamastack,app.kubernetes.io/managed-by=llama-stack-operator'
+    local LLAMASTACK_SERVICE_LABEL='app.kubernetes.io/part-of=llama-stack, app.kubernetes.io/managed-by=llama-stack-operator'
     local LLAMA_MODEL_SERVICE_LABEL="serving.kserve.io/inferenceservice=$LLM_MODEL, component=predictor"
     local TEMPO_SERVICE_LABEL='app.kubernetes.io/name=tempo,app.kubernetes.io/component=gateway'
     local KORREL8R_SERVICE_LABEL='app.kubernetes.io/name=korrel8r'
