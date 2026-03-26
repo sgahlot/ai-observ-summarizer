@@ -726,13 +726,24 @@ class LangGraphAgent:
                     result_state, user_question, namespace, progress_callback, config
                 )
 
-            # Extract the final AI message content
+            # Extract the final AI message content.
+            # Google Gemini may return content as a list of content blocks
+            # rather than a plain string, so normalise to str.
             final_message = result_state["messages"][-1]
-            final_content = (
+            raw_content = (
                 final_message.content
                 if hasattr(final_message, "content")
                 else str(final_message)
             )
+            if isinstance(raw_content, list):
+                final_content = "\n".join(
+                    block.get("text", str(block))
+                    if isinstance(block, dict)
+                    else str(block)
+                    for block in raw_content
+                )
+            else:
+                final_content = raw_content
 
             if not final_content or not final_content.strip():
                 logger.warning(

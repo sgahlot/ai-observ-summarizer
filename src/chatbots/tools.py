@@ -17,6 +17,7 @@ Usage:
 
 from typing import Any, Dict, List, Optional, Type
 
+from enum import Enum
 from pydantic import BaseModel, Field, create_model
 from langchain_core.tools import BaseTool
 
@@ -58,10 +59,31 @@ def _json_schema_to_pydantic_model(
 
     field_definitions: Dict[str, Any] = {}
     for field_name, field_schema in properties.items():
-        field_type = _JSON_SCHEMA_TYPE_MAP.get(
-            field_schema.get("type", "string"), Any
-        )
+        json_type = field_schema.get("type", "string")
+        field_type: Any = _JSON_SCHEMA_TYPE_MAP.get(json_type, Any)
+
+        # For array types, use List[<element_type>] so the generated
+        # Pydantic schema includes the ``items`` field.  Google Gemini
+        # rejects tool schemas that declare ``type: "array"`` without it.
+        if json_type == "array":
+            items_schema = field_schema.get("items", {})
+            item_type = _JSON_SCHEMA_TYPE_MAP.get(
+                items_schema.get("type", "string"), Any
+            )
+            field_type = List[item_type]
+
+        # Preserve enum constraints so providers (especially Gemini)
+        # know the valid values for string parameters.
+        enum_values = field_schema.get("enum")
+        if enum_values and field_type is str:
+            enum_cls = Enum(  # type: ignore[misc]
+                f"{name}_{field_name}_enum",
+                {v: v for v in enum_values},
+            )
+            field_type = enum_cls
+
         description = field_schema.get("description", "")
+        default_value = field_schema.get("default")
         is_required = field_name in required_fields
 
         if is_required:
@@ -70,9 +92,11 @@ def _json_schema_to_pydantic_model(
                 Field(description=description),
             )
         else:
+            # Preserve the schema's default value instead of always using None.
+            # This gives models (especially Gemini) a hint about expected format.
             field_definitions[field_name] = (
                 Optional[field_type],
-                Field(default=None, description=description),
+                Field(default=default_value, description=description),
             )
 
     return create_model(name, **field_definitions)
