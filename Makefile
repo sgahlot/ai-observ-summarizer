@@ -3,7 +3,7 @@
 
 # NAMESPACE validation for deployment targets
 ifeq ($(NAMESPACE),)
-ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-alerting build-mcp-server build-console-plugin build-react-ui push push-alerting push-mcp-server push-console-plugin push-react-ui clean config test test-python test-react check-observability-drift install-operators uninstall-operators check-operators verify-operators-ready check-llamastack-operator cleanup-loki-clusterroles install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r,$(MAKECMDGOALS)))
+ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-alerting build-mcp-server build-console-plugin build-react-ui push push-alerting push-mcp-server push-console-plugin push-react-ui clean config test test-python test-react check-observability-drift install-operators uninstall-operators check-operators verify-operators-ready check-llamastack-operator enable-llamastack-operator pre-install-checks cleanup-loki-clusterroles install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r,$(MAKECMDGOALS)))
 $(error NAMESPACE is not set)
 endif
 endif
@@ -508,15 +508,53 @@ uninstall-react-ui:
 	-@helm -n $(NAMESPACE) uninstall $(REACT_UI_RELEASE_NAME) --ignore-not-found
 	@echo "✅ React UI uninstalled"
 
+.PHONY: enable-llamastack-operator
+enable-llamastack-operator:
+	@if [ "$(ENABLE_LLAMA_STACK_OPERATOR)" = "true" ]; then \
+		echo "Enabling LlamaStack Operator (ENABLE_LLAMA_STACK_OPERATOR=true)..."; \
+		DSC_NAME=$$(oc get datasciencecluster -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || \
+			{ echo "ERROR: No DataScienceCluster found. Ensure RHOAI (2.22+ or 3.x) is installed."; exit 1; }; \
+		STATE=$$(oc get datasciencecluster $$DSC_NAME -o jsonpath='{.spec.components.llamastackoperator.managementState}' 2>/dev/null); \
+		if [ "$$STATE" != "Managed" ]; then \
+			echo "Patching DataScienceCluster ($$DSC_NAME) to set llamastackoperator=Managed..."; \
+			oc patch datasciencecluster $$DSC_NAME --type merge \
+				-p '{"spec":{"components":{"llamastackoperator":{"managementState":"Managed"}}}}'; \
+			echo "Waiting for LlamaStack Operator CRD to be registered (up to 180s)..."; \
+			SECONDS=0; \
+			while [ $$SECONDS -lt 180 ]; do \
+				if oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
+					break; \
+				fi; \
+				sleep 5; \
+			done; \
+			if ! oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
+				echo "ERROR: LlamaStack Operator CRD not registered after 180s. Check RHOAI operator logs in redhat-ods-applications namespace."; \
+				exit 1; \
+			fi; \
+			echo "✅ LlamaStack Operator enabled successfully."; \
+		else \
+			echo "✅ LlamaStack Operator is already enabled (Managed)."; \
+		fi; \
+	fi
+
 .PHONY: check-llamastack-operator
 check-llamastack-operator:
 	@echo "Checking LlamaStack Operator CRD..."
-	@oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1 || \
-		{ echo "ERROR: LlamaStackDistribution CRD not found. Ensure RHOAI is installed with llamastackoperator: Managed in the DataScienceCluster."; exit 1; }
-	@echo "LlamaStack Operator CRD is registered."
+	@if ! oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
+		echo ""; \
+		echo "❌ ERROR: LlamaStack Operator CRD (llamastackdistributions.llamastack.io) not found."; \
+		echo "          The LlamaStack operator must be enabled in your DataScienceCluster."; \
+		echo "Either:"; \
+		echo "  1. Re-run with: make install ENABLE_LLAMA_STACK_OPERATOR=true NAMESPACE=$(NAMESPACE)"; \
+		echo "  2. Enable manually: oc patch datasciencecluster <name> --type merge -p '{\"spec\":{\"components\":{\"llamastackoperator\":{\"managementState\":\"Managed\"}}}}'"; \
+		echo "     Then wait 3-5 minutes for the operator to start and register the CRD before re-running install."; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "✅ LlamaStack Operator CRD is registered."
 
 .PHONY: install-rag
-install-rag: namespace check-llamastack-operator
+install-rag: namespace enable-llamastack-operator check-llamastack-operator
 	@$(eval LLM_SERVICE_ARGS := $(call helm_llm_service_args))
 	@$(eval LLAMA_STACK_ARGS := $(call helm_llama_stack_args))
 	@$(eval PGVECTOR_ARGS := $(call helm_pgvector_args))
@@ -532,8 +570,14 @@ install-rag: namespace check-llamastack-operator
 	@echo "$(RAG_CHART) installed successfully"
 
 
+.PHONY: pre-install-checks
+pre-install-checks:
+	@if [ "$(ENABLE_RAG)" != "false" ]; then \
+		$(MAKE) enable-llamastack-operator check-llamastack-operator; \
+	fi
+
 .PHONY: install
-install: namespace enable-user-workload-monitoring depend validate-llm install-operators install-observability-stack install-mcp-server delete-jobs
+install: namespace pre-install-checks enable-user-workload-monitoring depend validate-llm install-operators install-observability-stack install-mcp-server delete-jobs
 	@echo "DEV_MODE is set to: $(DEV_MODE)"
 	@if [ "$(DEV_MODE)" = "true" ]; then \
 		echo "→ DEV_MODE=true: Installing React UI standalone application only"; \

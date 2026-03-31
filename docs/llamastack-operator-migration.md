@@ -24,6 +24,8 @@ The project deploys LlamaStack via the `llama-stack` Helm chart (v0.5.3) from `a
   - [For the Uninitiated](#for-the-uninitiated)
   - [Technical Description](#technical-description)
 - [Context](#context)
+  - [RHOAI Version Compatibility](#rhoai-version-compatibility)
+  - [RHOAI 2.x vs 3.x Operator Dependency Differences](#rhoai-2x-vs-3x-operator-dependency-differences)
 - [Cluster Preparation (RHOAI + Prerequisite Operators)](#cluster-preparation-rhoai--prerequisite-operators)
   - [Cluster Baseline](#cluster-baseline)
   - [What NOT to Install (Already Handled by make install)](#what-not-to-install-already-handled-by-make-install)
@@ -67,6 +69,57 @@ Based on cluster investigation (2026-03-23), we are proceeding with **Option C f
 - The `LlamaStackDistribution` CRD is provided by RHOAI, not by a separate Helm chart
 - The llm-service (vLLM model serving) continues to use the architecture charts -- only LlamaStack itself moves to the operator
 
+### RHOAI Version Compatibility
+
+The LlamaStack operator is available in **both RHOAI 2.x (from 2.22+) and RHOAI 3.x** as a Technology Preview feature. The `DataScienceCluster` CR in both versions includes `llamastackoperator` as a component, and both expose the same `LlamaStackDistribution` CRD (`llamastack.io/v1alpha1`). The enablement process is identical on both versions -- set `llamastackoperator: Managed` in the DataScienceCluster.
+
+**The LlamaStack operator defaults to `Removed` on both RHOAI 2.x and 3.x.** This was verified by performing a clean install of RHOAI 3.3.0 and creating a DataScienceCluster with default settings -- the operator was not enabled. The [upstream source code](https://github.com/opendatahub-io/opendatahub-operator) (`pkg/initialinstall/creation.go`) also confirms `llamastackoperator` is initialized with `managementState: Removed`.
+
+The `check-llamastack-operator` Makefile target handles this automatically -- it detects when the operator is not enabled and patches the DataScienceCluster to set `llamastackoperator: Managed`, then waits for the CRD to become available. No manual step is required.
+
+**Minimum version requirements:**
+- **RHOAI 2.22+** (Developer Preview for RAG) or **RHOAI 3.x** (Technology Preview)
+- **OCP 4.17+** (Kubernetes 1.32+) -- the LlamaStack operator requires this for CRD schema validation ([known issue RHOAIENG-32145](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25/html/release_notes/known-issues_relnotes))
+
+**LlamaStack operator version history in RHOAI:**
+
+| RHOAI Version | LlamaStack Support | Documentation |
+|--------------|-------------------|---------------|
+| 2.19 - 2.21 | Not available | N/A |
+| 2.22 | Developer Preview (under "Working with RAG") | [Working with RAG](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.22/html/working_with_rag/deploying-a-rag-stack-in-a-data-science-project_rag) |
+| 2.23 | Technology Preview (under "Working with RAG") | [Working with Llama Stack chapter](https://docs.redhat.com/pt-br/documentation/red_hat_openshift_ai_self-managed/2.23/html/working_with_rag/working-with-llama-stack_rag) |
+| 2.25 | Technology Preview (standalone guide) | [Working with Llama Stack](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25/html-single/working_with_llama_stack/index) |
+| 3.0+ | Technology Preview (standalone guide) | [Working with Llama Stack](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.0/html-single/working_with_llama_stack/index) |
+
+**Verified on clusters:**
+
+| Cluster | RHOAI Version | OCP Version | Default LlamaStack State | CRD API |
+|---------|--------------|-------------|-------------------------|---------|
+| sandip-test1 | 3.3.0 (fresh install) | 4.21 | `Removed` (not enabled by default) | `llamastack.io/v1alpha1` |
+| tsisodia-dev | 2.25.3 | 4.20 | `Removed` (not enabled by default) | `llamastack.io/v1alpha1` |
+
+**Important:** Enabling the LlamaStack operator on an existing cluster does not affect existing workloads. The operator:
+- Deploys a single controller pod (`llama-stack-k8s-operator-controller-manager`) in `redhat-ods-applications`
+- Registers the `LlamaStackDistribution` CRD
+- Creates standard ClusterRoles/Bindings scoped to LlamaStack resources only
+- Does **not** install any webhooks, network policies, or modify KNative/Istio/Ingress resources
+- Does **not** touch existing Helm-deployed LlamaStack instances (they are plain Deployments, not operator-managed CRs)
+
+#### RHOAI 2.x vs 3.x Operator Dependency Differences
+
+RHOAI 3.x significantly simplifies the operator dependency chain compared to 2.x. KServe Serverless mode was deprecated in RHOAI 2.25 and retired in 3.0, eliminating several operator prerequisites:
+
+| Component | RHOAI 2.x | RHOAI 3.x |
+|-----------|-----------|-----------|
+| **OpenShift Serverless (KNative)** | Required for KServe Serverless mode | Not needed (KServe uses RawDeployment only) |
+| **OpenShift Service Mesh** | v2 (Istio-based, required for KServe Serverless) | v3 (optional, different architecture -- no Istio sidecar pods) |
+| **Authorino Operator** | Required for KServe token auth with Serverless ingress | Not needed |
+| **Kiali / Jaeger Operators** | Service Mesh 2.x visualization/tracing dependencies | Not applicable |
+| **KNative Serving namespace** | `knative-serving` namespace with KNative pods | Does not exist |
+| **Istio pods** | `istio-system` namespace with Istio gateway/istiod | Empty or does not exist |
+
+These dependency reductions do **not** affect the LlamaStack operator itself -- the LlamaStack operator has no dependency on KNative, Service Mesh, or Istio. The differences above are relevant only for the broader RHOAI platform and KServe model serving configuration.
+
 ### Why migrate?
 
 - Operator-managed lifecycle (the operator handles Deployment creation, updates, and health)
@@ -81,6 +134,8 @@ Based on cluster investigation (2026-03-23), we are proceeding with **Option C f
 > **Status: COMPLETE** (performed 2026-03-23 on ROSA cluster `sandip-test1`)
 
 This section describes the one-time cluster setup required before the code migration (Phases 1-7 below) can proceed. All steps here are manual operator installations and configurations performed by a cluster admin.
+
+> **Note:** The steps below were originally performed on RHOAI 3.3 (fresh cluster), but apply equally to RHOAI 2.x clusters. If you already have RHOAI installed (either 2.x or 3.x), skip to [Step 3](#step-3-create-datasciencecluster-with-llamastack-operator-enabled) to enable the LlamaStack operator. See [RHOAI Version Compatibility](#rhoai-version-compatibility) for details on the differences between versions.
 
 ### Cluster Baseline
 
@@ -233,7 +288,9 @@ oc describe node <gpu-node-name> | grep nvidia.com/gpu
 
 ### Step 2: Install RHOAI Operator
 
-RHOAI 3.3 is the latest GA version and supports OCP 4.21. Install via the `stable-3.3` channel.
+> **Skip this step** if RHOAI is already installed on your cluster (either 2.x or 3.x). Proceed to [Step 3](#step-3-create-datasciencecluster-with-llamastack-operator-enabled) to enable the LlamaStack operator component.
+
+RHOAI 3.3 is the latest GA version and supports OCP 4.21. Install via the `stable-3.3` channel. RHOAI 2.x (2.22+) is also supported -- the LlamaStack operator is available as a Technology Preview in both versions.
 
 **Note:** RHOAI 3.4 is Early Access (not GA). In RHOAI 3.3, the LlamaStack operator is fully functional but managed exclusively via CLI/YAML -- there is no "Gen AI Studio" UI in the dashboard for creating LlamaStackDistribution instances. The Gen AI Studio dashboard UI is an EA feature in RHOAI 3.4+.
 
@@ -276,7 +333,18 @@ oc get csv -n redhat-ods-operator | grep rhods
 
 ### Step 3: Create DataScienceCluster with LlamaStack Operator Enabled
 
-Once RHOAI is installed, create a `DataScienceCluster` with the LlamaStack operator component set to `Managed`. KServe is configured for RawDeployment mode (no Serverless/ServiceMesh dependency).
+Once RHOAI is installed, ensure the `DataScienceCluster` has the LlamaStack operator component set to `Managed`.
+
+**If you already have a DataScienceCluster** (e.g., on an existing RHOAI 2.x cluster), you can simply patch it to enable the LlamaStack operator without affecting any other components:
+
+```bash
+oc patch datasciencecluster default-dsc --type merge \
+  -p '{"spec":{"components":{"llamastackoperator":{"managementState":"Managed"}}}}'
+```
+
+This is safe to run on existing clusters -- enabling the LlamaStack operator does not modify KNative, Istio, Service Mesh, Ingress, or any other existing resources. It only deploys the operator controller pod and registers the CRD. Existing workloads in all namespaces are unaffected.
+
+**If creating a new DataScienceCluster** (e.g., on a fresh RHOAI 3.x cluster), use the full YAML below. KServe is configured for RawDeployment mode (no Serverless/ServiceMesh dependency).
 
 ```bash
 cat <<'EOF' | oc apply -f -
