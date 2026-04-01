@@ -143,7 +143,7 @@ def create_chatbot(
             logger.warning(f"Unknown external provider {provider}, using OpenAI as fallback")
             return OpenAIChatBot(model_name, api_key, api_url, tool_executor)
     else:
-        # Check if RAG (local models) infrastructure is available (dynamic check with caching)
+        # Check if RAG (local models) infrastructure is available
         if not is_rag_available():
             logger.error(f"Local model {model_name} requested but RAG infrastructure not available")
             raise ValueError(

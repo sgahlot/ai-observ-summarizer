@@ -78,22 +78,9 @@ def detect_environment() -> str:
         return "local"  # Default to local for safety
 
 
-import threading
-from datetime import datetime
-from typing import Optional
-
-# RAG availability cache
-_rag_available_cache: Optional[bool] = None
-_rag_cache_lock = threading.RLock()
-_rag_cache_timestamp: Optional[datetime] = None
-_RAG_CACHE_TTL_SECONDS = 30  # Re-check every 30 seconds
-
-
-def _check_rag_infrastructure() -> bool:
-    """
-    Internal function to check if RAG (LlamaStack) infrastructure is reachable.
-    This performs the actual HTTP check.
-    """
+def _check_rag_available() -> bool:
+    """Check if RAG (local model) infrastructure is available via HTTP probe."""
+    # Auto-detect based on LLAMA_STACK_URL availability
     llama_stack_url = os.getenv("LLAMA_STACK_URL", "http://localhost:8321/v1/openai/v1")
     try:
         import requests
@@ -107,54 +94,23 @@ def _check_rag_infrastructure() -> bool:
         return False
 
 
+# Mutable cache for RAG availability — caches True permanently, retries on False.
+_rag_available_cache: bool = None
+
+
 def is_rag_available() -> bool:
-    """
-    Check if RAG (local model) infrastructure is available.
-    
-    Uses caching with TTL to avoid checking on every request while still
-    allowing dynamic detection when LlamaStack becomes available.
-    
-    Returns:
-        True if LlamaStack is reachable, False otherwise
-    """
-    global _rag_available_cache, _rag_cache_timestamp
-    
-    with _rag_cache_lock:
-        now = datetime.now()
-        
-        # Check if cache is valid
-        cache_valid = (
-            _rag_available_cache is not None and
-            _rag_cache_timestamp is not None and
-            (now - _rag_cache_timestamp).total_seconds() < _RAG_CACHE_TTL_SECONDS
-        )
-        
-        if not cache_valid:
-            # Cache expired or not set, perform check
-            _rag_available_cache = _check_rag_infrastructure()
-            _rag_cache_timestamp = now
-            logger.debug(f"RAG availability checked: {_rag_available_cache}")
-        
-        return _rag_available_cache
+    """Check if RAG infrastructure is available, with sticky-True caching.
 
-
-def refresh_rag_status() -> bool:
+    Once LlamaStack is detected as available the result is cached permanently.
+    If it was previously unavailable, re-probe on every call so that startup
+    ordering issues resolve themselves without a process restart.
     """
-    Force refresh of RAG availability status.
-    
-    Use this after deploying LlamaStack to immediately detect it
-    without waiting for cache expiry.
-    
-    Returns:
-        Current RAG availability status
-    """
-    global _rag_available_cache, _rag_cache_timestamp
-    
-    with _rag_cache_lock:
-        _rag_available_cache = _check_rag_infrastructure()
-        _rag_cache_timestamp = datetime.now()
-        logger.info(f"RAG availability refreshed: {_rag_available_cache}")
-        return _rag_available_cache
+    global _rag_available_cache
+    if _rag_available_cache is True:
+        return True
+    result = _check_rag_available()
+    _rag_available_cache = result
+    return result
 
 def get_prometheus_url() -> str:
     """Get Prometheus URL based on environment."""
@@ -211,10 +167,7 @@ LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "180.0"))  # LLM AP
 MODEL_CONFIG = load_model_config()
 THANOS_TOKEN = load_thanos_token()
 VERIFY_SSL = get_ca_verify_setting()
-
-# NOTE: RAG_AVAILABLE is checked dynamically with caching (30s TTL)
-# Use is_rag_available() for fresh checks, or refresh_rag_status() to force refresh
-# The initial value is set here for backward compatibility
+# Seed the cache at startup (logged below); consumers must call is_rag_available()
 RAG_AVAILABLE = is_rag_available()
 
 # Import new dynamic config manager functions

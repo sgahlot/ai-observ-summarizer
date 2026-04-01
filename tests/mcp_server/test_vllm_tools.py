@@ -51,11 +51,13 @@ def test_get_model_config_success(mock_get_config, mock_is_rag):
 
 @patch("core.config.is_rag_available", return_value=True)
 @patch("core.model_config_manager.get_model_config", return_value={})
-def test_get_model_config_empty(mock_get_config, mock_is_rag):
+def test_get_model_config_empty(mock_get_config, mock_rag):
     out = tools.get_model_config()
     texts = _texts(out)
-    # When RAG is available and config is empty, should show this message
+    # When is_rag_available() returns True and config is empty, should show this message
     assert any("No LLM models configured" in t for t in texts)
+
+
 @patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_metrics", return_value={"latency": "q1", "tps": "q2"})
 @patch("src.mcp_server.tools.observability_vllm_tools.execute_range_queries_parallel")
 @patch("src.mcp_server.tools.observability_vllm_tools.build_prompt", return_value="PROMPT")
