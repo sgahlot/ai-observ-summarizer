@@ -3,7 +3,7 @@
 
 # NAMESPACE validation for deployment targets
 ifeq ($(NAMESPACE),)
-ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-alerting build-mcp-server build-console-plugin build-react-ui push push-alerting push-mcp-server push-console-plugin push-react-ui clean config test test-python test-react check-observability-drift install-operators uninstall-operators check-operators verify-operators-ready cleanup-loki-clusterroles install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r,$(MAKECMDGOALS)))
+ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-alerting build-mcp-server build-console-plugin build-react-ui push push-alerting push-mcp-server push-console-plugin push-react-ui clean config test test-python test-react check-observability-drift install-operators uninstall-operators check-operators verify-operators-ready cleanup-loki-clusterroles install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r operator-build operator-push operator-bundle-build operator-bundle-push operator-catalog-build operator-catalog-push operator-build-all operator-push-all operator-deploy operator-config,$(MAKECMDGOALS)))
 $(error NAMESPACE is not set)
 endif
 endif
@@ -84,6 +84,11 @@ REACT_UI_CHART_PATH ?= react-ui-app
 KORREL8R_RELEASE_NAME ?= korrel8r-summarizer
 KORREL8R_CHART_PATH ?= observability/korrel8r
 KORREL8R_NAMESPACE ?= openshift-cluster-observability-operator
+
+# Component toggles
+RAG_ENABLED ?= true
+ALERTING_ENABLED ?= false
+INFRASTRUCTURE_ENABLED ?= true
 
 TOLERATIONS_TEMPLATE=[{"key":"$(1)","effect":"NoSchedule","operator":"Exists"}]
 GEN_MODEL_CONFIG_PREFIX = /tmp/gen_model_config
@@ -210,7 +215,7 @@ help:
 	@echo "  uninstall-console-plugin - Uninstall OpenShift Console Plugin"
 	@echo "  install-react-ui   - Install React UI standalone application"
 	@echo "  uninstall-react-ui - Uninstall React UI standalone application"
-	@echo "  uninstall          - Uninstall from OpenShift"
+	@echo "  uninstall          - what from OpenShift"
 	@echo "  status             - Check deployment status"
 	@echo "  list-models        - List available models"
 	@echo "  generate-model-config - Generate JSON config for specified LLM using template"
@@ -290,8 +295,8 @@ help:
 	@echo "  LLM                - Model id (eg. llama-3-1-8b-instruct)"
 	@echo "  LLM_URL            - Use existing model URL (auto-adds :8080/v1 if no port specified)"
 	@echo "  SAFETY             - Safety model id"
-	@echo "  ENABLE_RAG         - Set to 'false' to skip RAG backend services (default: true)"
-	@echo "  ALERTS             - Set to TRUE to install alerting with main deployment"
+	@echo "  RAG_ENABLED         - Set to 'false' to skip RAG backend services (default: true)"
+	@echo "  ALERTING_ENABLED    - Set to 'true' to install alerting (default: false)"
 	@echo "  SLACK_WEBHOOK_URL  - Slack Webhook URL for alerting (will prompt if not provided)"
 	@echo "  MINIO_USER         - MinIO username for observability storage (default: admin)"
 	@echo "  MINIO_PASSWORD     - MinIO password for observability storage (default: minio123)"
@@ -404,6 +409,8 @@ depend:
 	@echo "Updating Helm dependencies (for $(MINIO_CHART))..."
 	@cd deploy/helm && helm dependency update $(MINIO_CHART_PATH) || exit 1
 
+
+# Install observability stack using individual charts
 
 .PHONY: install-mcp-server
 install-mcp-server: namespace
@@ -535,12 +542,12 @@ install: namespace enable-user-workload-monitoring depend validate-llm install-o
 		echo "→ DEV_MODE=false: Installing OpenShift Console Plugin only"; \
 		$(MAKE) install-console-plugin NAMESPACE=$(NAMESPACE); \
 	fi
-	@if [ "$(ENABLE_RAG)" != "false" ]; then \
-		echo "Installing RAG backend services (set ENABLE_RAG=false to skip)..."; \
+	@if [ "$(RAG_ENABLED)" != "false" ]; then \
+		echo "Installing RAG backend services (set RAG_ENABLED=false to skip)..."; \
 		$(MAKE) install-rag NAMESPACE=$(NAMESPACE); \
 	fi
-	@if [ "$(ALERTS)" = "TRUE" ]; then \
-		echo "ALERTS flag is set to TRUE. Installing alerting..."; \
+	@if [ "$(ALERTING_ENABLED)" = "true" ]; then \
+		echo "ALERTING_ENABLED is set to true. Installing alerting..."; \
 		$(MAKE) install-alerts NAMESPACE=$(NAMESPACE); \
 	fi
 	@echo "Installation complete."
@@ -1202,11 +1209,13 @@ uninstall-minio:
 	@echo "Removing minio PVCs from $(MINIO_NAMESPACE)"
 	- @oc delete pvc -n $(MINIO_NAMESPACE) -l app.kubernetes.io/name=$(MINIO_CHART) --timeout=30s ||:
 
-# Cleanup Loki ClusterRoles and ClusterRoleBindings (reusable target)
+# Cleanup Loki ClusterRoles, ClusterRoleBindings, and ServiceAccount (reusable target)
+# This ensures fresh RBAC creation on every install, avoiding stale/orphaned resources
 .PHONY: cleanup-loki-clusterroles
 cleanup-loki-clusterroles:
 	- @oc delete clusterrole logging-collector-logs-writer collect-application-logs collect-audit-logs collect-infrastructure-logs --ignore-not-found 2>/dev/null ||:
 	- @oc delete clusterrolebinding logging-collector-logs-writer collect-application-logs collect-audit-logs collect-infrastructure-logs --ignore-not-found 2>/dev/null ||:
+	- @oc delete serviceaccount collector -n $(LOKI_NAMESPACE) --ignore-not-found 2>/dev/null ||:
 
 .PHONY: install-loki
 install-loki:
@@ -1286,6 +1295,60 @@ uninstall-loki:
 	@echo "  → ClusterRole cleanup complete"
 
 	@$(MAKE) disable-logging-ui
+
+# -- Operator Image Build targets (delegates to deploy/operator/Makefile) --
+
+OPERATOR_DIR := deploy/operator
+OPERATOR_IMAGE_TAG_BASE := $(REGISTRY)/$(ORG)/aiobs-operator
+
+# Common args to pass to operator Makefile
+OPERATOR_MAKE_ARGS := VERSION=$(VERSION) IMAGE_TAG_BASE=$(OPERATOR_IMAGE_TAG_BASE) PLATFORMS=$(PLATFORM)
+
+.PHONY: operator-build operator-push operator-bundle-build operator-bundle-push operator-catalog-build operator-catalog-push operator-build-all operator-push-all operator-deploy operator-config
+
+operator-config:
+	@echo "🔧 Operator Build Configuration:"
+	@echo "  Registry: $(REGISTRY)"
+	@echo "  Org: $(ORG)"
+	@echo "  Version: $(VERSION)"
+	@echo "  Platform: $(PLATFORM)"
+	@echo "  Image Tag Base: $(OPERATOR_IMAGE_TAG_BASE)"
+	@echo "  Operator Image: $(OPERATOR_IMAGE_TAG_BASE):v$(VERSION)"
+	@echo "  Bundle Image: $(OPERATOR_IMAGE_TAG_BASE)-bundle:v$(VERSION)"
+	@echo "  Catalog Image: $(OPERATOR_IMAGE_TAG_BASE)-catalog:v$(VERSION)"
+
+operator-build:
+	@echo "🔨 Building operator image..."
+	$(MAKE) -C $(OPERATOR_DIR) docker-build $(OPERATOR_MAKE_ARGS)
+
+operator-push:
+	@echo "📤 Pushing operator image..."
+	$(MAKE) -C $(OPERATOR_DIR) docker-push $(OPERATOR_MAKE_ARGS)
+
+operator-bundle-build:
+	@echo "📦 Building bundle image..."
+	$(MAKE) -C $(OPERATOR_DIR) bundle-build $(OPERATOR_MAKE_ARGS)
+
+operator-bundle-push:
+	@echo "📤 Pushing bundle image..."
+	$(MAKE) -C $(OPERATOR_DIR) bundle-push $(OPERATOR_MAKE_ARGS)
+
+operator-catalog-build:
+	@echo "📚 Building catalog image..."
+	$(MAKE) -C $(OPERATOR_DIR) catalog-build $(OPERATOR_MAKE_ARGS)
+
+operator-catalog-push:
+	@echo "📤 Pushing catalog image..."
+	$(MAKE) -C $(OPERATOR_DIR) catalog-push $(OPERATOR_MAKE_ARGS)
+
+operator-build-all: operator-build operator-bundle-build operator-catalog-build
+	@echo "✅ All operator images built"
+
+operator-push-all: operator-push operator-bundle-push operator-catalog-push
+	@echo "✅ All operator images pushed"
+
+operator-deploy: operator-build-all operator-push-all
+	@echo "✅ All operator images built and pushed"
 
 # -- Operator Installation targets --
 
