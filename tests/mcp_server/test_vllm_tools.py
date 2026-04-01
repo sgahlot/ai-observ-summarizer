@@ -48,15 +48,15 @@ def test_get_model_config_success(_):
     assert text.find("m1") < text.find("m2")
 
 
-@patch("core.config.RAG_AVAILABLE", True)
+@patch("core.config.is_rag_available", return_value=True)
 @patch("src.mcp_server.tools.observability_vllm_tools.os.getenv")
-def test_get_model_config_empty(mock_getenv):
+def test_get_model_config_empty(mock_getenv, mock_rag):
     # Return "{}" for MODEL_CONFIG, None for all other env vars
     mock_getenv.side_effect = lambda key, default=None: "{}" if key == "MODEL_CONFIG" else default
 
     out = tools.get_model_config()
     texts = _texts(out)
-    # When RAG_AVAILABLE is True and config is empty, should show this message
+    # When is_rag_available() returns True and config is empty, should show this message
     assert any("No LLM models configured" in t for t in texts)
 @patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_metrics", return_value={"latency": "q1", "tps": "q2"})
 @patch("src.mcp_server.tools.observability_vllm_tools.execute_range_queries_parallel")
