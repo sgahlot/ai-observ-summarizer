@@ -188,15 +188,14 @@ def get_model_config() -> List[Dict[str, Any]]:
         from core.model_config_manager import get_model_config as get_runtime_model_config
         full_model_config = get_runtime_model_config()
         
-        # Import here to avoid circular imports - use dynamic check
+        # Import here to avoid circular imports
         from core.config import is_rag_available
-        rag_available = is_rag_available()
         
         # Filter out local models if RAG is not available
         model_config = {}
         for name, config in full_model_config.items():
             is_external = config.get("external", True)
-            if not is_external and not rag_available:
+            if not is_external and not is_rag_available():
                 # Skip local models when RAG infrastructure is unavailable
                 continue
             model_config[name] = config

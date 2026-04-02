@@ -105,7 +105,7 @@ def test_chatbot_imports(mock_mcp_tools):
 
 
 @patch("chatbots.factory.is_rag_available", return_value=True)
-def test_factory_creates_llama_bot(mock_is_rag_available, mock_mcp_tools):
+def test_factory_creates_llama_bot(mock_rag, mock_mcp_tools):
     """Test that factory creates LlamaChatBot for Llama 3.1 models."""
     from chatbots import create_chatbot, LlamaChatBot
 
@@ -115,7 +115,7 @@ def test_factory_creates_llama_bot(mock_is_rag_available, mock_mcp_tools):
 
 
 @patch("chatbots.factory.is_rag_available", return_value=True)
-def test_factory_creates_deterministic_bot(mock_is_rag_available, mock_mcp_tools):
+def test_factory_creates_deterministic_bot(mock_rag, mock_mcp_tools):
     """Test that factory creates DeterministicChatBot for Llama 3.2 models."""
     from chatbots import create_chatbot, DeterministicChatBot
 
