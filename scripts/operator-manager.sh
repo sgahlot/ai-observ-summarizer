@@ -2,6 +2,10 @@
 
 # OpenShift Operator Management Script
 # Handles installation/uninstallation and checking of OpenShift operators
+#
+# Requirements:
+# - python3 on PATH when installing into openshift-operators-redhat while an
+#   OperatorGroup already exists (YAML is filtered to avoid duplicate OGs).
 
 # Source common utilities
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -582,6 +586,7 @@ install_operator() {
         local existing_og=$(oc get operatorgroup -n "$namespace" -o name 2>/dev/null | head -1)
         if [ -n "$existing_og" ]; then
             echo -e "${BLUE}     → OperatorGroup already exists in shared namespace $namespace ($existing_og). Skipping creation.${NC}"
+            # python3: splits multi-doc YAML and drops OperatorGroup (see file header).
             envsubst < "$yaml_path" | python3 -c "
 import sys
 docs = sys.stdin.read().split('---')
