@@ -23,6 +23,13 @@ minio:
   # Bucket configuration - array of bucket names
   buckets: ["tempo", "loki"]
 
+  # Storage configuration
+  storage:
+    size: 10Gi
+    # Optional: bind PVC to a named StorageClass (e.g. gp3). If unset, the
+    # cluster default StorageClass is used — required on clouds where no default exists.
+    # storageClassName: gp3
+
   # Security Context - empty to let OpenShift assign
   podSecurityContext: {}
   containerSecurityContext: {}
