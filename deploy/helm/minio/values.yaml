@@ -23,6 +23,10 @@ minio:
   # Bucket configuration - array of bucket names
   buckets: ["tempo", "loki"]
 
+  # Storage configuration
+  storage:
+    size: 10Gi
+
   # Security Context - empty to let OpenShift assign
   podSecurityContext: {}
   containerSecurityContext: {}

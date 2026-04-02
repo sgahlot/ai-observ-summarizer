@@ -60,4 +60,5 @@ spec:
           mountPath: /data
       volumes:
       - name: data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: {{ include "minio.fullname" . }}-data
