@@ -80,6 +80,7 @@ def detect_environment() -> str:
 
 def _check_rag_available() -> bool:
     """Check if RAG (local model) infrastructure is available via HTTP probe."""
+    # Auto-detect based on LLAMA_STACK_URL availability
     llama_stack_url = os.getenv("LLAMA_STACK_URL", "http://localhost:8321/v1/openai/v1")
     try:
         import requests

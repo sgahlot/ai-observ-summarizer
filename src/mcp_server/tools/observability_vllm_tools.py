@@ -69,6 +69,23 @@ from mcp_server.exceptions import (
 logger = get_python_logger()
 
 
+def check_rag_availability():
+    """Check if RAG infrastructure is available for vLLM operations (dynamic check with caching)."""
+    try:
+        from core.config import is_rag_available
+        if not is_rag_available():
+            error = MCPException(
+                message="vLLM infrastructure not available",
+                error_code=MCPErrorCode.CONFIGURATION_ERROR,
+                recovery_suggestion="RAG infrastructure is not installed or accessible. vLLM metrics require local model deployment. Install with: make install ENABLE_RAG=true"
+            )
+            return error.to_mcp_response()
+        return None
+    except Exception:
+        # If we can't determine availability, allow the operation to continue
+        return None
+
+
 def resolve_time_range(
     time_range: Optional[str] = None,
     start_datetime: Optional[str] = None,
@@ -160,15 +177,16 @@ def list_vllm_namespaces() -> List[Dict[str, Any]]:
 def get_model_config() -> List[Dict[str, Any]]:
     """Get available LLM models for summarization and analysis.
     
-    Uses the exact same logic as the metrics API's /model_config endpoint:
-    - Reads MODEL_CONFIG from environment (JSON string)
+    Uses runtime model config which includes:
+    - External models from MODEL_CONFIG env var
+    - Internal models discovered from InferenceServices at runtime
     - Filters out local models when RAG infrastructure is unavailable
-    - Parses to dict and sorts with external:false models first
     - Returns a human-readable list formatted for MCP
     """
     try:
-        model_config_str = os.getenv("MODEL_CONFIG", "{}")
-        full_model_config = safe_json_loads(model_config_str, "MODEL_CONFIG environment variable")
+        # Use runtime model config which includes discovered InferenceServices
+        from core.model_config_manager import get_model_config as get_runtime_model_config
+        full_model_config = get_runtime_model_config()
         
         # Import here to avoid circular imports
         from core.config import is_rag_available
@@ -185,8 +203,8 @@ def get_model_config() -> List[Dict[str, Any]]:
         model_config = dict(
             sorted(model_config.items(), key=lambda x: x[1].get("external", True))
         )
-    except ValidationError:
-        logger.warning("Could not parse MODEL_CONFIG environment variable, using empty configuration")
+    except Exception as e:
+        logger.warning(f"Could not load model configuration: {e}")
         model_config = {}
 
     if not model_config:
@@ -220,15 +238,30 @@ def get_vllm_metrics_tool() -> List[Dict[str, Any]]:
         if not vllm_metrics_dict:
             return make_mcp_text_response("No vLLM metrics are currently available from Prometheus.")
 
+        # Replace any hardcoded rate window (e.g. [5m], [15m], [1h]) with
+        # <rate_interval> placeholder so the LLM adjusts the rate window to
+        # match the user's requested time range instead of copying a literal.
+        # All current queries use [5m], but this regex future-proofs against
+        # new metrics that might use other windows.
+        display_metrics = {
+            name: re.sub(r'\[\d+[smhd]\]', '[<rate_interval>]', query)
+            for name, query in vllm_metrics_dict.items()
+        }
+
         # Format the response with categories for better organization
-        content = f"Available vLLM Metrics ({len(vllm_metrics_dict)} total):\n\n"
-        
+        content = f"Available vLLM Metrics ({len(display_metrics)} total):\n\n"
+        content += ("**Note:** `<rate_interval>` must be set based on the user's requested "
+                     "time range: <=1h use 5m, <=3h use 15m, <=6h use 30m, "
+                     "<=12h use 1h, <=24h use 2h, <=48h use 4h, "
+                     ">48h divide hours by 12 and round (e.g. 3d=6h, 1w=14h, 1mo=60h). "
+                     "Default: 5m.\n\n")
+
         # Group metrics by type for better presentation
         gpu_metrics = {}
         vllm_core_metrics = {}
         other_metrics = {}
-        
-        for friendly_name, promql_query in vllm_metrics_dict.items():
+
+        for friendly_name, promql_query in display_metrics.items():
             if any(gpu_term in friendly_name.lower() for gpu_term in ['gpu', 'temperature', 'power', 'memory', 'energy', 'utilization']):
                 gpu_metrics[friendly_name] = promql_query
             elif any(vllm_term in friendly_name.lower() for vllm_term in ['prompt', 'token', 'latency', 'request', 'inference']):
@@ -259,7 +292,7 @@ def get_vllm_metrics_tool() -> List[Dict[str, Any]]:
         content += f"- GPU Metrics: {len(gpu_metrics)}\n"
         content += f"- vLLM Performance: {len(vllm_core_metrics)}\n"
         content += f"- Other: {len(other_metrics)}\n"
-        content += f"- Total: {len(vllm_metrics_dict)}\n"
+        content += f"- Total: {len(display_metrics)}\n"
 
         return make_mcp_text_response(content)
 
