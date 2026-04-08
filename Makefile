@@ -1335,13 +1335,13 @@ install-loki:
 		echo "  → loki-stack already installed, skipping..."; \
 	else \
 		echo "→ Verifying Logging and Loki Operators are ready..."; \
-		if ! oc get operator cluster-logging.openshift-logging >/dev/null 2>&1; then \
+		if ! oc get subscription cluster-logging -n openshift-logging >/dev/null 2>&1; then \
 			echo "  ❌ Error: Logging Operator is not installed"; \
 			echo "  → Run: make install-logging-operator"; \
 			exit 1; \
 		fi; \
 		echo "  ✅ Logging Operator is installed"; \
-		if ! oc get operator loki-operator.openshift-operators-redhat >/dev/null 2>&1; then \
+		if ! oc get subscription loki-operator -n openshift-operators-redhat >/dev/null 2>&1; then \
 			echo "  ❌ Error: Loki Operator is not installed"; \
 			echo "  → Run: make install-loki-operator"; \
 			exit 1; \
@@ -1502,7 +1502,7 @@ verify-operators-ready:
 	@echo "🔍 Verifying all required operators are installed and ready..."
 	@ERRORS=0; \
 	echo "  → Checking Cluster Observability Operator..."; \
-	if oc get operator cluster-observability-operator.openshift-cluster-observability >/dev/null 2>&1; then \
+	if oc get subscription cluster-observability-operator -n openshift-cluster-observability-operator >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription cluster-observability-operator -n openshift-cluster-observability-operator -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-cluster-observability-operator -o jsonpath='{.status.phase}' 2>/dev/null); \
@@ -1519,7 +1519,7 @@ verify-operators-ready:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	echo "  → Checking OpenTelemetry Operator..."; \
-	if oc get operator opentelemetry-product.openshift-opentelemetry-operator >/dev/null 2>&1; then \
+	if oc get subscription opentelemetry-product -n openshift-opentelemetry-operator >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription opentelemetry-product -n openshift-opentelemetry-operator -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-opentelemetry-operator -o jsonpath='{.status.phase}' 2>/dev/null); \
@@ -1536,7 +1536,7 @@ verify-operators-ready:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	echo "  → Checking Tempo Operator..."; \
-	if oc get operator tempo-product.openshift-tempo-operator >/dev/null 2>&1; then \
+	if oc get subscription tempo-product -n openshift-tempo-operator >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription tempo-product -n openshift-tempo-operator -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-tempo-operator -o jsonpath='{.status.phase}' 2>/dev/null); \
@@ -1553,7 +1553,7 @@ verify-operators-ready:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	echo "  → Checking Logging Operator..."; \
-	if oc get operator cluster-logging.openshift-logging >/dev/null 2>&1; then \
+	if oc get subscription cluster-logging -n openshift-logging >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription cluster-logging -n openshift-logging -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-logging -o jsonpath='{.status.phase}' 2>/dev/null); \
@@ -1570,7 +1570,7 @@ verify-operators-ready:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	echo "  → Checking Loki Operator..."; \
-	if oc get operator loki-operator.openshift-operators-redhat >/dev/null 2>&1; then \
+	if oc get subscription loki-operator -n openshift-operators-redhat >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription loki-operator -n openshift-operators-redhat -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-operators-redhat -o jsonpath='{.status.phase}' 2>/dev/null); \
