@@ -17,6 +17,8 @@ IMAGE_PREFIX ?= aiobs
 VERSION ?= 4.1.8
 PLATFORM ?= linux/amd64
 DEV_MODE ?= false
+USE_LLAMA_STACK_OPERATOR ?= false
+RHOAI_VERSION ?= 2
 
 # GPU Metrics Discovery - custom prefix overrides (comma-separated, additive)
 GPU_PREFIX_NVIDIA ?=
@@ -59,8 +61,6 @@ MINIO_HOST ?= minio
 MINIO_PORT ?= 9000
 # MinIO bucket configuration (comma-separated list)
 MINIO_BUCKETS ?= tempo,loki
-# After install, verify DCGM ServiceMonitor and optionally restart GPU operator (GPU clusters only)
-VERIFY_GPU_METRICS ?= false
 
 # HF_TOKEN is only required if LLM_URL is not set
 HF_TOKEN ?= $(shell \
@@ -121,6 +121,29 @@ DEFAULT_LLM_PORT_AND_PATH := :8080/v1
 
 OPERATOR_MANAGER_SCRIPT := scripts/operator-manager.sh
 
+# LlamaStack deployment mode: Helm chart (default) vs Operator
+ifeq ($(USE_LLAMA_STACK_OPERATOR),true)
+  LLAMA_STACK_CHART_PREFIX := llama-stack-instance
+  LLAMA_STACK_SVC_NAME := llamastack-service
+else
+  LLAMA_STACK_CHART_PREFIX := llama-stack
+  LLAMA_STACK_SVC_NAME := llamastack
+endif
+
+# Logging/Loki operator channel: RHOAI 3.x uses stable-6.4, RHOAI 2.x uses stable-6.3
+ifeq ($(RHOAI_VERSION),3)
+  LOGGING_LOKI_CHANNEL := stable-6.4
+else
+  LOGGING_LOKI_CHANNEL := stable-6.3
+endif
+
+# Validate: LlamaStack operator requires RHOAI 3.x (operator v0.3.0 on RHOAI 2.x is not supported)
+ifeq ($(USE_LLAMA_STACK_OPERATOR),true)
+ifneq ($(RHOAI_VERSION),3)
+  $(error USE_LLAMA_STACK_OPERATOR=true requires RHOAI_VERSION=3. The LlamaStack operator on RHOAI 2.x (v0.3.0) is not supported.)
+endif
+endif
+
 # Helm argument templates
 
 helm_llm_service_args = \
@@ -150,8 +173,9 @@ helm_llama_stack_args = \
     $(if $(SAFETY_URL),--set global.models.$(SAFETY).url='$(SAFETY_URL)',) \
     $(if $(LLM_API_TOKEN),--set global.models.$(LLM).apiToken='$(LLM_API_TOKEN)',) \
     $(if $(SAFETY_API_TOKEN),--set global.models.$(SAFETY).apiToken='$(SAFETY_API_TOKEN)',) \
-    $(if $(LLAMA_STACK_ENV),--set-json llama-stack-instance.secrets='$(LLAMA_STACK_ENV)',) \
-    $(if $(RAW_DEPLOYMENT),--set llama-stack-instance.rawDeploymentMode=$(RAW_DEPLOYMENT),)
+    $(if $(LLAMA_STACK_ENV),--set-json $(LLAMA_STACK_CHART_PREFIX).secrets='$(LLAMA_STACK_ENV)',) \
+    $(if $(RAW_DEPLOYMENT),--set $(LLAMA_STACK_CHART_PREFIX).rawDeploymentMode=$(RAW_DEPLOYMENT),) \
+    $(if $(filter true,$(USE_LLAMA_STACK_OPERATOR)),--set llama-stack.enabled=false --set llama-stack-instance.enabled=true,)
 
 helm_pgvector_args = \
     --set pgvector.secret.user=$(POSTGRES_USER) \
@@ -211,7 +235,8 @@ help:
 	@echo "  install            - Deploy to OpenShift using Helm (DEV_MODE=false: Console Plugin only, DEV_MODE=true: React UI only)"
 	@echo "  install-with-alerts - Deploy with alerting enabled"
 	@echo "  install-local      - Set up local development environment"
-	@echo "  install-rag        - Install RAG backend services only"
+	@echo "  install-rag        - Install RAG backend services only (uses Helm chart by default, operator with USE_LLAMA_STACK_OPERATOR=true)"
+	@echo "  enable-llamastack-operator - Enable LlamaStack operator in DataScienceCluster (required before USE_LLAMA_STACK_OPERATOR=true)"
 	@echo "  install-mcp-server - Install MCP server only"
 	@echo "  install-console-plugin - Install OpenShift Console Plugin"
 	@echo "  uninstall-console-plugin - Uninstall OpenShift Console Plugin"
@@ -243,7 +268,6 @@ help:
 	@echo "  uninstall-loki-operator - Uninstall Loki Operator only"
 	@echo "  check-operators - Check status of all mandatory operators"
 	@echo "  verify-operators-ready - Verify all operators are installed and ready (used internally)"
-	@echo "  verify-gpu-metrics - Verify nvidia-dcgm-exporter ServiceMonitor; restart GPU operator if missing (no NAMESPACE required)"
 	@echo ""
 	@echo "Individual Components:"
 	@echo "  install-observability - Install TempoStack, LokiStack and OTEL Collector only"
@@ -299,6 +323,8 @@ help:
 	@echo "  LLM_URL            - Use existing model URL (auto-adds :8080/v1 if no port specified)"
 	@echo "  SAFETY             - Safety model id"
 	@echo "  RAG_ENABLED         - Set to 'false' to skip RAG backend services (default: true)"
+	@echo "  RHOAI_VERSION          - Set to '2' for RHOAI 2.x or '3' for RHOAI 3.x (controls operator channels: stable-6.3 vs stable-6.4) (default: 2)"
+	@echo "  USE_LLAMA_STACK_OPERATOR - Set to 'true' to deploy LlamaStack via operator instead of Helm chart (requires RHOAI_VERSION=3) (default: false)"
 	@echo "  ALERTING_ENABLED    - Set to 'true' to install alerting (default: false)"
 	@echo "  SLACK_WEBHOOK_URL  - Slack Webhook URL for alerting (will prompt if not provided)"
 	@echo "  MINIO_USER         - MinIO username for observability storage (default: admin)"
@@ -306,7 +332,6 @@ help:
 	@echo "  MINIO_BUCKETS      - Comma-separated list of MinIO buckets to create (default: tempo,loki)"
 	@echo "  UNINSTALL_OBSERVABILITY - Set to 'true' to uninstall observability stack during uninstall"
 	@echo "  UNINSTALL_OPERATORS     - Set to 'true' to uninstall operators during uninstall"
-	@echo "  VERIFY_GPU_METRICS      - Set to 'true' to run verify-gpu-metrics at end of make install (default: false)"
 	@echo "  GPU_PREFIX_NVIDIA  - Extra NVIDIA metric prefixes (comma-separated, additive to defaults)"
 	@echo "  GPU_PREFIX_INTEL   - Extra Intel metric prefixes (comma-separated, additive to defaults)"
 	@echo "  GPU_PREFIX_AMD     - Extra AMD metric prefixes (comma-separated, additive to defaults)"
@@ -434,7 +459,7 @@ install-mcp-server: namespace
 			--set LLM_PREDICTOR=$(LLM)-predictor \
 			--set env.DEV_MODE=$(DEV_MODE) \
 			$(if $(MCP_SERVER_ROUTE_HOST),--set route.host='$(MCP_SERVER_ROUTE_HOST)',) \
-			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',) \
+			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',$(if $(filter true,$(USE_LLAMA_STACK_OPERATOR)),--set llm.url='http://$(LLAMA_STACK_SVC_NAME).$(NAMESPACE).svc.cluster.local:8321/v1/openai/v1',)) \
 			$(if $(GPU_PREFIX_NVIDIA),--set env.GPU_METRICS_PREFIX_NVIDIA='$(GPU_PREFIX_NVIDIA)',) \
 			$(if $(GPU_PREFIX_INTEL),--set env.GPU_METRICS_PREFIX_INTEL='$(GPU_PREFIX_INTEL)',) \
 			$(if $(GPU_PREFIX_AMD),--set env.GPU_METRICS_PREFIX_AMD='$(GPU_PREFIX_AMD)',) \
@@ -448,7 +473,7 @@ install-mcp-server: namespace
 			--set LLM_PREDICTOR=$(LLM)-predictor \
 			--set env.DEV_MODE=$(DEV_MODE) \
 			$(if $(MCP_SERVER_ROUTE_HOST),--set route.host='$(MCP_SERVER_ROUTE_HOST)',) \
-			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',) \
+			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',$(if $(filter true,$(USE_LLAMA_STACK_OPERATOR)),--set llm.url='http://$(LLAMA_STACK_SVC_NAME).$(NAMESPACE).svc.cluster.local:8321/v1/openai/v1',)) \
 			$(if $(GPU_PREFIX_NVIDIA),--set env.GPU_METRICS_PREFIX_NVIDIA='$(GPU_PREFIX_NVIDIA)',) \
 			$(if $(GPU_PREFIX_INTEL),--set env.GPU_METRICS_PREFIX_INTEL='$(GPU_PREFIX_INTEL)',) \
 			$(if $(GPU_PREFIX_AMD),--set env.GPU_METRICS_PREFIX_AMD='$(GPU_PREFIX_AMD)',) \
@@ -521,6 +546,33 @@ uninstall-react-ui:
 	-@helm -n $(NAMESPACE) uninstall $(REACT_UI_RELEASE_NAME) --ignore-not-found
 	@echo "✅ React UI uninstalled"
 
+.PHONY: enable-llamastack-operator
+enable-llamastack-operator:
+	@echo "Enabling LlamaStack Operator..."
+	@DSC_NAME=$$(oc get datasciencecluster -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || \
+		{ echo "ERROR: No DataScienceCluster found. Ensure RHOAI (2.22+ or 3.x) is installed."; exit 1; }; \
+	STATE=$$(oc get datasciencecluster $$DSC_NAME -o jsonpath='{.spec.components.llamastackoperator.managementState}' 2>/dev/null); \
+	if [ "$$STATE" != "Managed" ]; then \
+		echo "Patching DataScienceCluster ($$DSC_NAME) to set llamastackoperator=Managed..."; \
+		oc patch datasciencecluster $$DSC_NAME --type merge \
+			-p '{"spec":{"components":{"llamastackoperator":{"managementState":"Managed"}}}}'; \
+		echo "Waiting for LlamaStack Operator CRD to be registered (up to 180s)..."; \
+		SECONDS=0; \
+		while [ $$SECONDS -lt 180 ]; do \
+			if oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
+				break; \
+			fi; \
+			sleep 5; \
+		done; \
+		if ! oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
+			echo "ERROR: LlamaStack Operator CRD not registered after 180s. Check RHOAI operator logs in redhat-ods-applications namespace."; \
+			exit 1; \
+		fi; \
+		echo "✅ LlamaStack Operator enabled successfully."; \
+	else \
+		echo "✅ LlamaStack Operator is already enabled (Managed)."; \
+	fi
+
 .PHONY: check-llamastack-operator
 check-llamastack-operator:
 	@echo "Checking LlamaStack Operator CRD..."
@@ -529,8 +581,10 @@ check-llamastack-operator:
 		echo "❌ ERROR: LlamaStack Operator CRD (llamastackdistributions.llamastack.io) not found."; \
 		echo "          The LlamaStack operator must be enabled in your DataScienceCluster (RHOAI 3.x required)."; \
 		echo ""; \
-		echo "Enable it manually:"; \
-		echo "  oc patch datasciencecluster <name> --type merge -p '{\"spec\":{\"components\":{\"llamastackoperator\":{\"managementState\":\"Managed\"}}}}'"; \
+		echo "Either:"; \
+		echo "  1. Run: make enable-llamastack-operator"; \
+		echo "  2. Enable manually:"; \
+		echo "     oc patch datasciencecluster <name> --type merge -p '{\"spec\":{\"components\":{\"llamastackoperator\":{\"managementState\":\"Managed\"}}}}'"; \
 		echo ""; \
 		echo "Then wait 3-5 minutes for the operator to start and register the CRD before re-running install."; \
 		echo ""; \
@@ -538,8 +592,14 @@ check-llamastack-operator:
 	fi
 	@echo "✅ LlamaStack Operator CRD is registered."
 
+.PHONY: check-llamastack-prerequisites
+check-llamastack-prerequisites:
+	@if [ "$(USE_LLAMA_STACK_OPERATOR)" = "true" ]; then \
+		$(MAKE) check-llamastack-operator; \
+	fi
+
 .PHONY: install-rag
-install-rag: namespace check-llamastack-operator
+install-rag: namespace check-llamastack-prerequisites
 	@$(eval LLM_SERVICE_ARGS := $(call helm_llm_service_args))
 	@$(eval LLAMA_STACK_ARGS := $(call helm_llama_stack_args))
 	@$(eval PGVECTOR_ARGS := $(call helm_pgvector_args))
@@ -557,7 +617,7 @@ install-rag: namespace check-llamastack-operator
 
 .PHONY: pre-install-checks
 pre-install-checks:
-	@if [ "$(ENABLE_RAG)" != "false" ]; then \
+	@if [ "$(ENABLE_RAG)" != "false" ] && [ "$(USE_LLAMA_STACK_OPERATOR)" = "true" ]; then \
 		$(MAKE) check-llamastack-operator; \
 	fi
 
@@ -578,10 +638,6 @@ install: namespace pre-install-checks enable-user-workload-monitoring depend val
 	@if [ "$(ALERTING_ENABLED)" = "true" ]; then \
 		echo "ALERTING_ENABLED is set to true. Installing alerting..."; \
 		$(MAKE) install-alerts NAMESPACE=$(NAMESPACE); \
-	fi
-	@if [ "$(VERIFY_GPU_METRICS)" = "true" ]; then \
-		echo "→ VERIFY_GPU_METRICS=true: checking DCGM ServiceMonitor..."; \
-		$(MAKE) verify-gpu-metrics; \
 	fi
 	@echo "Installation complete."
 
@@ -884,7 +940,8 @@ install-alerts: patch-config create-secret
 	@echo "Installing/Upgrading Helm chart $(ALERTING_RELEASE_NAME) in namespace $(NAMESPACE)..."
 	@cd deploy/helm && helm upgrade --install $(ALERTING_RELEASE_NAME) ./alerting --namespace $(NAMESPACE) \
 		--set image.repository=$(METRICS_ALERTING_IMAGE) \
-		--set image.tag=$(VERSION)
+		--set image.tag=$(VERSION) \
+		$(if $(filter true,$(USE_LLAMA_STACK_OPERATOR)),--set config.llamaStackUrl='http://$(LLAMA_STACK_SVC_NAME).$(NAMESPACE).svc.cluster.local:8321',)
 	@echo "Alerting Helm chart deployment complete."
 
 .PHONY: uninstall-alerts
@@ -1259,34 +1316,6 @@ uninstall-minio:
 	@echo "Removing minio PVCs from $(MINIO_NAMESPACE)"
 	- @oc delete pvc -n $(MINIO_NAMESPACE) -l app.kubernetes.io/name=$(MINIO_CHART) --timeout=30s ||:
 
-# Verify DCGM metrics scrape config exists (NVIDIA GPU Operator). Safe on non-GPU clusters (no-op if namespace missing).
-.PHONY: verify-gpu-metrics
-verify-gpu-metrics:
-	@if ! oc get namespace nvidia-gpu-operator >/dev/null 2>&1; then \
-		echo "→ Skipping GPU metrics verify: namespace nvidia-gpu-operator not found."; \
-	elif ! oc get servicemonitor nvidia-dcgm-exporter -n nvidia-gpu-operator >/dev/null 2>&1; then \
-		echo "WARNING: DCGM ServiceMonitor missing. Restarting GPU operator to trigger reconciliation..."; \
-		oc rollout restart deployment/gpu-operator -n nvidia-gpu-operator; \
-		oc rollout status deployment/gpu-operator -n nvidia-gpu-operator --timeout=120s; \
-		echo "→ Waiting for ClusterPolicy controller to reconcile ServiceMonitor (up to 4 minutes)..."; \
-		attempt=0; \
-		while [ $$attempt -lt 16 ]; do \
-			if oc get servicemonitor nvidia-dcgm-exporter -n nvidia-gpu-operator >/dev/null 2>&1; then \
-				echo "DCGM ServiceMonitor restored."; \
-				break; \
-			fi; \
-			attempt=$$((attempt + 1)); \
-			echo "  ⏳ Waiting for ServiceMonitor (attempt $$attempt/16)..."; \
-			sleep 15; \
-		done; \
-		if ! oc get servicemonitor nvidia-dcgm-exporter -n nvidia-gpu-operator >/dev/null 2>&1; then \
-			echo "ERROR: DCGM ServiceMonitor still missing after GPU operator restart. Manual intervention required."; \
-			exit 1; \
-		fi; \
-	else \
-		echo "DCGM ServiceMonitor exists. GPU metrics OK."; \
-	fi
-
 # Cleanup Loki ClusterRoles, ClusterRoleBindings, and ServiceAccount (reusable target)
 # This ensures fresh RBAC creation on every install, avoiding stale/orphaned resources
 .PHONY: cleanup-loki-clusterroles
@@ -1454,13 +1483,13 @@ install-tempo-operator:
 .PHONY: install-logging-operator
 install-logging-operator:
 	@echo ""
-	@$(OPERATOR_MANAGER_SCRIPT) -i logging -n openshift-logging
+	@CHANNEL=$(LOGGING_LOKI_CHANNEL) $(OPERATOR_MANAGER_SCRIPT) -i logging -n openshift-logging
 
 # Install Loki Operator
 .PHONY: install-loki-operator
 install-loki-operator:
 	@echo ""
-	@$(OPERATOR_MANAGER_SCRIPT) -i loki -n openshift-operators-redhat
+	@CHANNEL=$(LOGGING_LOKI_CHANNEL) $(OPERATOR_MANAGER_SCRIPT) -i loki -n openshift-operators-redhat
 
 # Verify all required operators are installed and ready
 .PHONY: verify-operators-ready

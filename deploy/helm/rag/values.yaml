@@ -1,7 +1,10 @@
-# This chart deploys backend services (llm-service, llama-stack-instance, pgvector)
-# llama-stack-instance creates a LlamaStackDistribution CR managed by the RHOAI operator
+# This chart deploys backend services (llm-service, llama-stack, pgvector)
+# Two LlamaStack deployment modes:
+#   Default (Helm chart):  llama-stack.enabled=true   -> deploys raw LlamaStack Deployment (service: llamastack)
+#   Operator mode:         llama-stack-instance.enabled=true -> creates LlamaStackDistribution CR (service: llamastack-service)
+# To switch to operator mode, set RHOAI_VERSION=3 USE_LLAMA_STACK_OPERATOR=true when running make install
 
-# Common model values for llm-service and llama-stack-instance
+# Common model values for llm-service and llama-stack / llama-stack-instance
 # See format in https://github.com/RHEcosystemAppEng/ai-architecture-charts/blob/main/helm/llm-service/values.yaml
 # For e.g., to add a new model add the following block and it will append to the list of models defined in the llm-service
 
@@ -34,7 +37,53 @@ minio:
     - https://raw.githubusercontent.com/rh-ai-quickstart/RAG/refs/heads/main/notebooks/Zippity_Zoo_and_the_Town_of_Whispering_Willows.pdf
 
 
+llama-stack:
+  enabled: true
+  env:
+    - name: VLLM_MAX_TOKENS
+      value: "4096"
+    - name: VLLM_API_TOKEN
+      value: fake
+    - name: OTEL_ENDPOINT
+      value: http://otel-collector-collector.observability-hub.svc.cluster.local:4318/v1/traces
+    - name: OTEL_PYTHON_DISABLED_INSTRUMENTATIONS
+      value: sqlite3
+    - name: POSTGRES_USER
+      valueFrom:
+        secretKeyRef:
+          key: user
+          name: pgvector
+    - name: POSTGRES_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          key: password
+          name: pgvector
+    - name: POSTGRES_HOST
+      valueFrom:
+        secretKeyRef:
+          key: host
+          name: pgvector
+    - name: POSTGRES_PORT
+      valueFrom:
+        secretKeyRef:
+          key: port
+          name: pgvector
+    - name: POSTGRES_DBNAME
+      valueFrom:
+        secretKeyRef:
+          key: dbname
+          name: pgvector
+  secrets:
+    TAVILY_SEARCH_API_KEY: "Paste-your-key-here"
+  mcp-servers:
+    observability-mcp:
+      uri: http://aiobs-mcp-server-svc.{{ .Release.Namespace }}.svc.cluster.local:8085/mcp
+    #  mcp-weather:
+    #   uri: http://rag-mcp-weather:8000/sse
+
+
 llama-stack-instance:
+  enabled: false
   env:
     - name: VLLM_MAX_TOKENS
       value: "4096"

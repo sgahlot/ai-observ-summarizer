@@ -413,7 +413,8 @@ start_port_forwards() {
     echo -e "${BLUE}🔍 Finding pods and starting port-forwards...${NC}"
 
     local THANOS_POD_LABEL='app.kubernetes.io/component=query-layer,app.kubernetes.io/instance=thanos-querier'
-    local LLAMASTACK_SERVICE_LABEL='app.kubernetes.io/part-of=llama-stack, app.kubernetes.io/managed-by=llama-stack-operator'
+    local LLAMASTACK_HELM_LABEL='app.kubernetes.io/instance=rag,app.kubernetes.io/name=llamastack'
+    local LLAMASTACK_OPERATOR_LABEL='app.kubernetes.io/part-of=llama-stack,app.kubernetes.io/managed-by=llama-stack-operator'
     local LLAMA_MODEL_SERVICE_LABEL="serving.kserve.io/inferenceservice=$LLM_MODEL, component=predictor"
     local TEMPO_SERVICE_LABEL='app.kubernetes.io/name=tempo,app.kubernetes.io/component=gateway'
     local KORREL8R_SERVICE_LABEL='app.kubernetes.io/name=korrel8r'
@@ -421,8 +422,11 @@ start_port_forwards() {
     THANOS_POD=$(oc get pods -n "$PROMETHEUS_NAMESPACE" -o name -l "$THANOS_POD_LABEL" | head -1)
     create_port_forward "$THANOS_POD" "$THANOS_PORT_LOCALHOST" "$THANOS_SERVICE_PORT" "$PROMETHEUS_NAMESPACE" "Thanos" "📊"
 
-    # Find LlamaStack pod
-    LLAMASTACK_SERVICE=$(oc get services -n "$LLAMA_MODEL_NAMESPACE" -o name -l "$LLAMASTACK_SERVICE_LABEL")
+    # Find LlamaStack service (try Helm chart labels first, then operator labels)
+    LLAMASTACK_SERVICE=$(oc get services -n "$LLAMA_MODEL_NAMESPACE" -o name -l "$LLAMASTACK_HELM_LABEL" 2>/dev/null)
+    if [ -z "$LLAMASTACK_SERVICE" ]; then
+        LLAMASTACK_SERVICE=$(oc get services -n "$LLAMA_MODEL_NAMESPACE" -o name -l "$LLAMASTACK_OPERATOR_LABEL" 2>/dev/null)
+    fi
     create_port_forward "$LLAMASTACK_SERVICE" "$LLAMASTACK_PORT_LOCALHOST" "$LLAMASTACK_SERVICE_PORT" "$LLAMA_MODEL_NAMESPACE" "LlamaStack" "🦙"
 
     # Find Llama Model service
