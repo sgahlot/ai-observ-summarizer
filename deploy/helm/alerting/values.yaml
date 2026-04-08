@@ -1,6 +1,6 @@
 image:
   repository: quay.io/ecosystem-appeng/aiobs-metrics-alerting
-  tag: 4.1.8
+  tag: 4.2.4
   pullPolicy: IfNotPresent
 
 schedule: "*/1 * * * *" # cron job scheduled every minute
