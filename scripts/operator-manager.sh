@@ -147,9 +147,9 @@ parse_args() {
         [[ "$DEBUG" == "true" ]] && echo -e "${BLUE}📋 Auto-detected YAML file: $YAML_FILE${NC}"
     fi
 
-    # Check if operator is installed
+    # Check if operator is installed (pass NAMESPACE if available from -n flag)
     local is_installed=false
-    check_operator "$OPERATOR_NAME" && is_installed=true
+    check_operator "$OPERATOR_NAME" "$NAMESPACE" && is_installed=true
 
     # Execute check/install/uninstall action based on operator status
     case "$ACTION" in
@@ -219,19 +219,53 @@ validate_namespace() {
 # `operator` resources are phantom aggregation objects that persist as long as
 # CRDs exist — even after a clean uninstall. Checking them causes false positives
 # ("already installed") and blocks reinstall.
+#
+# Args:
+#   $1 - Full operator name (e.g., "cluster-logging.openshift-logging")
+#   $2 - (optional) Namespace override. If not provided, uses get_operator_namespace().
 check_operator() {
     local operator_name="$1"
-    [[ "$DEBUG" == "true" ]] && echo -e "${BLUE}📋 Checking operator: $operator_name${NC}"
-
-    # operator_name is in "subscription.namespace" format (e.g., "cluster-logging.openshift-logging")
+    local ns_arg="${2:-}"
+    local namespace="${ns_arg:-$(get_operator_namespace "$operator_name")}"
     local subscription_name="${operator_name%%.*}"
-    local namespace="${operator_name#*.}"
+
+    [[ "$DEBUG" == "true" ]] && echo -e "${BLUE}📋 Checking operator: $operator_name (subscription=$subscription_name, namespace=$namespace)${NC}"
 
     if oc get subscription "$subscription_name" -n "$namespace" >/dev/null 2>&1; then
         return 0  # Operator has an active Subscription
     else
         return 1  # No active Subscription
     fi
+}
+
+# Map full operator names to their actual install namespaces.
+# Note: These differ from the OLM operator resource names — e.g., the OLM resource
+# is "cluster-observability-operator.openshift-cluster-observability" but the actual
+# namespace is "openshift-cluster-observability-operator".
+get_operator_namespace() {
+    local operator_name="$1"
+
+    case "$operator_name" in
+        "$FULL_NAME_OBSERVABILITY")
+            echo "openshift-cluster-observability-operator"
+            ;;
+        "$FULL_NAME_OTEL")
+            echo "openshift-opentelemetry-operator"
+            ;;
+        "$FULL_NAME_TEMPO")
+            echo "openshift-tempo-operator"
+            ;;
+        "$FULL_NAME_LOGGING")
+            echo "openshift-logging"
+            ;;
+        "$FULL_NAME_LOKI")
+            echo "openshift-operators-redhat"
+            ;;
+        *)
+            # Fallback: parse from the full name (works when format is subscription.namespace)
+            echo "${operator_name#*.}"
+            ;;
+    esac
 }
 
 # Function to get full operator name from simple name
@@ -550,7 +584,7 @@ for doc in docs:
     local attempt=0
 
     while [ $attempt -lt $max_attempts ]; do
-        if check_operator "$operator_name"; then
+        if check_operator "$operator_name" "$namespace"; then
             echo -e "${GREEN}  ✅ Subscription confirmed${NC}"
             break
         fi
