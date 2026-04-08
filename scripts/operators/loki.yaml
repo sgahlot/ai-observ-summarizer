@@ -27,4 +27,4 @@ spec:
   source: redhat-operators
   sourceNamespace: openshift-marketplace
   installPlanApproval: Manual
-  startingCSV: loki-operator.v6.3.4
+  startingCSV: ${STARTING_CSV}

@@ -522,6 +522,7 @@ install_operator() {
     # Suppress "AlreadyExists" errors for namespaces since uninstall preserves them by design.
     export NAMESPACE="$namespace"
     export CHANNEL="${CHANNEL:-stable}"
+    export STARTING_CSV="${STARTING_CSV:-}"
 
     # In shared namespaces (e.g. openshift-operators-redhat), an OperatorGroup likely already exists
     # from other operators. Creating a second one causes OLM to deadlock (no InstallPlans created).

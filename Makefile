@@ -130,11 +130,15 @@ else
   LLAMA_STACK_SVC_NAME := llamastack
 endif
 
-# Logging/Loki operator channel: RHOAI 3.x uses stable-6.4, RHOAI 2.x uses stable-6.3
+# Logging/Loki operator channel and starting CSV: RHOAI 3.x uses stable-6.4, RHOAI 2.x uses stable-6.3
 ifeq ($(RHOAI_VERSION),3)
   LOGGING_LOKI_CHANNEL := stable-6.4
+  LOGGING_STARTING_CSV := cluster-logging.v6.4.3
+  LOKI_STARTING_CSV := loki-operator.v6.4.3
 else
   LOGGING_LOKI_CHANNEL := stable-6.3
+  LOGGING_STARTING_CSV := cluster-logging.v6.3.4
+  LOKI_STARTING_CSV := loki-operator.v6.3.4
 endif
 
 # Validate: LlamaStack operator requires RHOAI 3.x (operator v0.3.0 on RHOAI 2.x is not supported)
@@ -1483,13 +1487,13 @@ install-tempo-operator:
 .PHONY: install-logging-operator
 install-logging-operator:
 	@echo ""
-	@CHANNEL=$(LOGGING_LOKI_CHANNEL) $(OPERATOR_MANAGER_SCRIPT) -i logging -n openshift-logging
+	@CHANNEL=$(LOGGING_LOKI_CHANNEL) STARTING_CSV=$(LOGGING_STARTING_CSV) $(OPERATOR_MANAGER_SCRIPT) -i logging -n openshift-logging
 
 # Install Loki Operator
 .PHONY: install-loki-operator
 install-loki-operator:
 	@echo ""
-	@CHANNEL=$(LOGGING_LOKI_CHANNEL) $(OPERATOR_MANAGER_SCRIPT) -i loki -n openshift-operators-redhat
+	@CHANNEL=$(LOGGING_LOKI_CHANNEL) STARTING_CSV=$(LOKI_STARTING_CSV) $(OPERATOR_MANAGER_SCRIPT) -i loki -n openshift-operators-redhat
 
 # Verify all required operators are installed and ready
 .PHONY: verify-operators-ready
