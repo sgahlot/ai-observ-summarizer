@@ -120,6 +120,24 @@ DEFAULT_LLM_PORT_AND_PATH := :8080/v1
 
 OPERATOR_MANAGER_SCRIPT := scripts/operator-manager.sh
 
+# Auto-detect LlamaStack operator on RHOAI 3.x: if the operator is set to Managed
+# in the DataScienceCluster, automatically use operator-based deployment. This avoids
+# deploying a conflicting Helm-based LlamaStack alongside an operator-managed instance.
+# Checks managementState (not just CRD existence) because CRDs can persist after the
+# operator is disabled. Only runs for RHOAI 3.x (2.x doesn't support it).
+ifeq ($(RHOAI_VERSION),3)
+ifneq ($(USE_LLAMA_STACK_OPERATOR),true)
+  _LLAMA_OP_STATE := $(shell oc get datasciencecluster -o jsonpath='{.items[0].spec.components.llamastackoperator.managementState}' 2>/dev/null)
+  ifeq ($(_LLAMA_OP_STATE),Managed)
+    $(info ℹ️  Auto-detected LlamaStack operator (Managed) in DataScienceCluster — switching to operator mode (USE_LLAMA_STACK_OPERATOR=true))
+    USE_LLAMA_STACK_OPERATOR := true
+  else
+    $(info ℹ️  LlamaStack operator not enabled — using architectural Helm charts for LlamaStack.)
+    $(info    To enable the operator, run: make enable-llamastack-operator)
+  endif
+endif
+endif
+
 # LlamaStack deployment mode: Helm chart (default) vs Operator
 ifeq ($(USE_LLAMA_STACK_OPERATOR),true)
   LLAMA_STACK_CHART_PREFIX := llama-stack-instance
