@@ -138,6 +138,10 @@ ifneq ($(USE_LLAMA_STACK_OPERATOR),true)
 endif
 endif
 
+# Export so recursive $(MAKE) calls inherit the resolved value and skip re-detection
+export USE_LLAMA_STACK_OPERATOR
+export RHOAI_VERSION
+
 # LlamaStack deployment mode: Helm chart (default) vs Operator
 ifeq ($(USE_LLAMA_STACK_OPERATOR),true)
   LLAMA_STACK_CHART_PREFIX := llama-stack-instance
@@ -1644,7 +1648,6 @@ install-operators: install-cluster-observability-operator install-opentelemetry-
 	@echo "✅ All operators installation completed"
 	@echo "⏳ Waiting 15 seconds for operators to stabilize and CRDs to be fully ready..."
 	@sleep 15
-	@$(MAKE) verify-operators-ready
 
 # Uninstall Cluster Observability Operator
 .PHONY: uninstall-cluster-observability-operator
