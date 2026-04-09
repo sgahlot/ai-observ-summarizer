@@ -186,7 +186,19 @@ parse_args() {
             ;;
         "$OPERATOR_ACTION_UNINSTALL")
             validate_namespace "$OPERATOR_ACTION_UNINSTALL"
-            if [ "$is_installed" = false ]; then
+            # For uninstall, check if a Subscription exists — don't require CSV Succeeded.
+            # check_operator() requires CSV Succeeded phase, which is too strict for uninstall:
+            # if a Subscription exists but OLM couldn't resolve it (e.g., channel removed from
+            # catalog), check_operator() returns false and uninstall skips the operator entirely,
+            # leaving orphaned Subscriptions and OperatorGroups that cause deadlocks on reinstall.
+            local sub_info=$(get_subscription_info "$OPERATOR_NAME")
+            local unsub_name="${sub_info%%:*}"
+            local unsub_ns="${NAMESPACE:-${sub_info##*:}}"
+            local has_subscription=false
+            if [ -n "$unsub_name" ] && oc get "$OLM_SUBSCRIPTION_RESOURCE" "$unsub_name" -n "$unsub_ns" >/dev/null 2>&1; then
+                has_subscription=true
+            fi
+            if [ "$is_installed" = false ] && [ "$has_subscription" = false ]; then
                 echo -e "${YELLOW}⚠️  Operator $OPERATOR_NAME is not installed${NC}"
                 exit 0
             fi
