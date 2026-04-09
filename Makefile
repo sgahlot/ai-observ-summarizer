@@ -90,7 +90,6 @@ KORREL8R_NAMESPACE ?= openshift-cluster-observability-operator
 # Component toggles
 RAG_ENABLED ?= true
 ALERTING_ENABLED ?= false
-INFRASTRUCTURE_ENABLED ?= true
 
 TOLERATIONS_TEMPLATE=[{"key":"$(1)","effect":"NoSchedule","operator":"Exists"}]
 GEN_MODEL_CONFIG_PREFIX = /tmp/gen_model_config
@@ -717,7 +716,14 @@ uninstall:
 
 	@echo ""
 	@echo "Checking if observability stack should be uninstalled..."
-	@$(MAKE) uninstall-observability-stack NAMESPACE=$(NAMESPACE) UNINSTALL_OBSERVABILITY=$(UNINSTALL_OBSERVABILITY) || true
+	@# When uninstalling operators, always uninstall the observability stack first —
+	@# the stack's CRs (TempoStack, LokiStack, OTel Collector, Korrel8r) depend on
+	@# the operators and would be orphaned without them.
+	@if [ "$(UNINSTALL_OPERATORS)" = "true" ]; then \
+		$(MAKE) uninstall-observability-stack NAMESPACE=$(NAMESPACE) UNINSTALL_OBSERVABILITY=true || true; \
+	else \
+		$(MAKE) uninstall-observability-stack NAMESPACE=$(NAMESPACE) UNINSTALL_OBSERVABILITY=$(UNINSTALL_OBSERVABILITY) || true; \
+	fi
 
 	@echo ""
 	@echo "Checking if operators should be uninstalled..."
@@ -1025,7 +1031,7 @@ install-observability:
 	@$(MAKE) install-loki
 
 .PHONY: install-observability-stack
-install-observability-stack:
+install-observability-stack: verify-operators-ready
 	@echo "🚀 Installing observability stack in proper sequence..."
 	@$(MAKE) install-minio
 	@$(MAKE) setup-tracing
