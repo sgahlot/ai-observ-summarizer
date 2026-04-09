@@ -610,14 +610,15 @@ for doc in docs:
     # If approval is Manual, auto-approve InstallPlan for the startingCSV
     approve_install_plan_if_manual "$subscription_name" "$namespace" || true
 
-    # Verify Subscription was created successfully
+    # Verify Subscription was created successfully (lightweight check — CSV phase
+    # is verified separately in the next loop, so we only check Subscription existence here)
     echo -e "${BLUE}  ⏳ Verifying Subscription was created...${NC}"
 
     local max_attempts=60  # 10 minutes with 10-second intervals
     local attempt=0
 
     while [ $attempt -lt $max_attempts ]; do
-        if check_operator "$operator_name" "$namespace"; then
+        if oc get "$OLM_SUBSCRIPTION_RESOURCE" "$subscription_name" -n "$namespace" >/dev/null 2>&1; then
             echo -e "${GREEN}  ✅ Subscription confirmed${NC}"
             break
         fi
