@@ -134,20 +134,25 @@ ifeq ($(origin RHOAI_VERSION),file)
 endif
 
 # Auto-detect LlamaStack operator on RHOAI 3.x: if the operator is set to Managed
-# in the DataScienceCluster, automatically use operator-based deployment. This avoids
-# deploying a conflicting Helm-based LlamaStack alongside an operator-managed instance.
+# in the DataScienceCluster, automatically use operator-based deployment.
 # Checks managementState (not just CRD existence) because CRDs can persist after the
 # operator is disabled. Only runs for RHOAI 3.x (2.x doesn't support it).
+# Respects explicit user override: if USE_LLAMA_STACK_OPERATOR is set on the command
+# line, skip auto-detection entirely so users can choose architectural charts even
+# when the operator is enabled at the cluster level.
 ifeq ($(RHOAI_VERSION),3)
+ifeq ($(origin USE_LLAMA_STACK_OPERATOR),file)
 ifneq ($(USE_LLAMA_STACK_OPERATOR),true)
   _LLAMA_OP_STATE := $(shell oc get datasciencecluster -o jsonpath='{.items[0].spec.components.llamastackoperator.managementState}' 2>/dev/null)
   ifeq ($(_LLAMA_OP_STATE),Managed)
     $(info ℹ️  Auto-detected LlamaStack operator (Managed) in DataScienceCluster — switching to operator mode (USE_LLAMA_STACK_OPERATOR=true))
+    $(info    To use architectural charts instead, pass USE_LLAMA_STACK_OPERATOR=false explicitly.)
     USE_LLAMA_STACK_OPERATOR := true
   else
     $(info ℹ️  LlamaStack operator not enabled — using architectural Helm charts for LlamaStack.)
     $(info    To enable the operator, run: make enable-llamastack-operator)
   endif
+endif
 endif
 endif
 
