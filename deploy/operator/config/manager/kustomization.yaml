@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: quay.io/ecosystem-appeng/aiobs-operator
-  newTag: v4.2.7
+  newTag: v5.0.0
