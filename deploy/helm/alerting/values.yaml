@@ -20,3 +20,4 @@ prometheusRule:
 config:
   alertmanagerUrl: "https://alertmanager-user-workload.openshift-user-workload-monitoring.svc.cluster.local:9095"
   timeWindow: 60
+  llamaStackUrl: ""

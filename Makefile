@@ -3,7 +3,7 @@
 
 # NAMESPACE validation for deployment targets
 ifeq ($(NAMESPACE),)
-ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-alerting build-mcp-server build-console-plugin build-react-ui push push-alerting push-mcp-server push-console-plugin push-react-ui clean config test test-python test-react test-scripts check-observability-drift install-operators uninstall-operators check-operators verify-operators-ready cleanup-loki-clusterroles install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r install-minio uninstall-minio operator-build operator-push operator-bundle-build operator-bundle-push operator-catalog-build operator-catalog-push operator-build-all operator-push-all operator-deploy operator-config,$(MAKECMDGOALS)))
+ifeq (,$(filter install-local depend install-ingestion-pipeline list-models% generate-model-config help build build-alerting build-mcp-server build-console-plugin build-react-ui push push-alerting push-mcp-server push-console-plugin push-react-ui clean config test test-python test-react test-scripts check-observability-drift install-operators uninstall-operators check-operators verify-operators-ready check-llamastack-operator enable-llamastack-operator pre-install-checks cleanup-loki-clusterroles install-cluster-observability-operator install-opentelemetry-operator install-tempo-operator install-logging-operator install-loki-operator uninstall-cluster-observability-operator uninstall-opentelemetry-operator uninstall-tempo-operator uninstall-logging-operator uninstall-loki-operator enable-tracing-ui disable-tracing-ui enable-logging-ui disable-logging-ui install-loki uninstall-loki upgrade-observability install-korrel8r uninstall-korrel8r install-minio uninstall-minio operator-build operator-push operator-bundle-build operator-bundle-push operator-catalog-build operator-catalog-push operator-build-all operator-push-all operator-deploy operator-config,$(MAKECMDGOALS)))
 $(error NAMESPACE is not set)
 endif
 endif
@@ -17,6 +17,8 @@ IMAGE_PREFIX ?= aiobs
 VERSION ?= 4.2.7
 PLATFORM ?= linux/amd64
 DEV_MODE ?= false
+USE_LLAMA_STACK_OPERATOR ?= false
+RHOAI_VERSION ?= 2
 
 # GPU Metrics Discovery - custom prefix overrides (comma-separated, additive)
 GPU_PREFIX_NVIDIA ?=
@@ -88,7 +90,6 @@ KORREL8R_NAMESPACE ?= openshift-cluster-observability-operator
 # Component toggles
 RAG_ENABLED ?= true
 ALERTING_ENABLED ?= false
-INFRASTRUCTURE_ENABLED ?= true
 
 TOLERATIONS_TEMPLATE=[{"key":"$(1)","effect":"NoSchedule","operator":"Exists"}]
 GEN_MODEL_CONFIG_PREFIX = /tmp/gen_model_config
@@ -119,6 +120,73 @@ DEFAULT_LLM_PORT_AND_PATH := :8080/v1
 
 OPERATOR_MANAGER_SCRIPT := scripts/operator-manager.sh
 
+# Auto-detect RHOAI version from the cluster when not explicitly set on the command line.
+# Prevents the footgun of deploying on RHOAI 3.x with RHOAI_VERSION=2 defaults, which
+# would install logging/loki operators on stable-6.3 channels instead of stable-6.4.
+# $(origin RHOAI_VERSION) is "file" when set via ?= above, "command line" when explicit.
+ifeq ($(origin RHOAI_VERSION),file)
+  _RHOAI_CSV := $(shell oc get csv -n redhat-ods-operator -l operators.coreos.com/rhods-operator.redhat-ods-operator \
+    -o jsonpath='{.items[0].spec.version}' 2>/dev/null)
+  ifneq ($(findstring 3.,$(_RHOAI_CSV)),)
+    $(info ℹ️  Auto-detected RHOAI 3.x ($(_RHOAI_CSV)) — setting RHOAI_VERSION=3)
+    RHOAI_VERSION := 3
+  endif
+endif
+
+# Auto-detect LlamaStack operator on RHOAI 3.x: if the operator is set to Managed
+# in the DataScienceCluster, automatically use operator-based deployment.
+# Checks managementState (not just CRD existence) because CRDs can persist after the
+# operator is disabled. Only runs for RHOAI 3.x (2.x doesn't support it).
+# Respects explicit user override: if USE_LLAMA_STACK_OPERATOR is set on the command
+# line, skip auto-detection entirely so users can choose architectural charts even
+# when the operator is enabled at the cluster level.
+ifeq ($(RHOAI_VERSION),3)
+ifeq ($(origin USE_LLAMA_STACK_OPERATOR),file)
+ifneq ($(USE_LLAMA_STACK_OPERATOR),true)
+  _LLAMA_OP_STATE := $(shell oc get datasciencecluster -o jsonpath='{.items[0].spec.components.llamastackoperator.managementState}' 2>/dev/null)
+  ifeq ($(_LLAMA_OP_STATE),Managed)
+    $(info ℹ️  Auto-detected LlamaStack operator (Managed) in DataScienceCluster — switching to operator mode (USE_LLAMA_STACK_OPERATOR=true))
+    $(info    To use architectural charts instead, pass USE_LLAMA_STACK_OPERATOR=false explicitly.)
+    USE_LLAMA_STACK_OPERATOR := true
+  else
+    $(info ℹ️  LlamaStack operator not enabled — using architectural Helm charts for LlamaStack.)
+    $(info    To enable the operator, run: make enable-llamastack-operator)
+  endif
+endif
+endif
+endif
+
+# Export so recursive $(MAKE) calls inherit the resolved value and skip re-detection
+export USE_LLAMA_STACK_OPERATOR
+export RHOAI_VERSION
+
+# LlamaStack deployment mode: Helm chart (default) vs Operator
+ifeq ($(USE_LLAMA_STACK_OPERATOR),true)
+  LLAMA_STACK_CHART_PREFIX := llama-stack-instance
+  LLAMA_STACK_SVC_NAME := llamastack-service
+else
+  LLAMA_STACK_CHART_PREFIX := llama-stack
+  LLAMA_STACK_SVC_NAME := llamastack
+endif
+
+# Logging/Loki operator channel and starting CSV: RHOAI 3.x uses stable-6.4, RHOAI 2.x uses stable-6.3
+ifeq ($(RHOAI_VERSION),3)
+  LOGGING_LOKI_CHANNEL := stable-6.4
+  LOGGING_STARTING_CSV := cluster-logging.v6.4.3
+  LOKI_STARTING_CSV := loki-operator.v6.4.3
+else
+  LOGGING_LOKI_CHANNEL := stable-6.3
+  LOGGING_STARTING_CSV := cluster-logging.v6.3.4
+  LOKI_STARTING_CSV := loki-operator.v6.3.4
+endif
+
+# Validate: LlamaStack operator requires RHOAI 3.x (operator v0.3.0 on RHOAI 2.x is not supported)
+ifeq ($(USE_LLAMA_STACK_OPERATOR),true)
+ifneq ($(RHOAI_VERSION),3)
+  $(error USE_LLAMA_STACK_OPERATOR=true requires RHOAI_VERSION=3. The LlamaStack operator on RHOAI 2.x (v0.3.0) is not supported.)
+endif
+endif
+
 # Helm argument templates
 
 helm_llm_service_args = \
@@ -148,8 +216,9 @@ helm_llama_stack_args = \
     $(if $(SAFETY_URL),--set global.models.$(SAFETY).url='$(SAFETY_URL)',) \
     $(if $(LLM_API_TOKEN),--set global.models.$(LLM).apiToken='$(LLM_API_TOKEN)',) \
     $(if $(SAFETY_API_TOKEN),--set global.models.$(SAFETY).apiToken='$(SAFETY_API_TOKEN)',) \
-    $(if $(LLAMA_STACK_ENV),--set-json llama-stack.secrets='$(LLAMA_STACK_ENV)',) \
-    $(if $(RAW_DEPLOYMENT),--set llama-stack.rawDeploymentMode=$(RAW_DEPLOYMENT),)
+    $(if $(LLAMA_STACK_ENV),--set-json $(LLAMA_STACK_CHART_PREFIX).secrets='$(LLAMA_STACK_ENV)',) \
+    $(if $(RAW_DEPLOYMENT),--set $(LLAMA_STACK_CHART_PREFIX).rawDeploymentMode=$(RAW_DEPLOYMENT),) \
+    $(if $(filter true,$(USE_LLAMA_STACK_OPERATOR)),--set llama-stack.enabled=false --set llama-stack-instance.enabled=true,)
 
 helm_pgvector_args = \
     --set pgvector.secret.user=$(POSTGRES_USER) \
@@ -209,7 +278,8 @@ help:
 	@echo "  install            - Deploy to OpenShift using Helm (DEV_MODE=false: Console Plugin only, DEV_MODE=true: React UI only)"
 	@echo "  install-with-alerts - Deploy with alerting enabled"
 	@echo "  install-local      - Set up local development environment"
-	@echo "  install-rag        - Install RAG backend services only"
+	@echo "  install-rag        - Install RAG backend services only (uses Helm chart by default, operator with USE_LLAMA_STACK_OPERATOR=true)"
+	@echo "  enable-llamastack-operator - Enable LlamaStack operator in DataScienceCluster (auto-detected if already Managed)"
 	@echo "  install-mcp-server - Install MCP server only"
 	@echo "  install-console-plugin - Install OpenShift Console Plugin"
 	@echo "  uninstall-console-plugin - Uninstall OpenShift Console Plugin"
@@ -297,6 +367,8 @@ help:
 	@echo "  LLM_URL            - Use existing model URL (auto-adds :8080/v1 if no port specified)"
 	@echo "  SAFETY             - Safety model id"
 	@echo "  RAG_ENABLED         - Set to 'false' to skip RAG backend services (default: true)"
+	@echo "  RHOAI_VERSION          - Set to '2' for RHOAI 2.x or '3' for RHOAI 3.x (auto-detected from cluster, controls operator channels: stable-6.3 vs stable-6.4) (default: auto-detect, fallback: 2)"
+	@echo "  USE_LLAMA_STACK_OPERATOR - Set to 'true' to deploy LlamaStack via operator instead of Helm chart (requires RHOAI_VERSION=3) (default: false)"
 	@echo "  ALERTING_ENABLED    - Set to 'true' to install alerting (default: false)"
 	@echo "  SLACK_WEBHOOK_URL  - Slack Webhook URL for alerting (will prompt if not provided)"
 	@echo "  MINIO_USER         - MinIO username for observability storage (default: admin)"
@@ -431,7 +503,7 @@ install-mcp-server: namespace
 			--set LLM_PREDICTOR=$(LLM)-predictor \
 			--set env.DEV_MODE=$(DEV_MODE) \
 			$(if $(MCP_SERVER_ROUTE_HOST),--set route.host='$(MCP_SERVER_ROUTE_HOST)',) \
-			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',) \
+			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',$(if $(filter true,$(USE_LLAMA_STACK_OPERATOR)),--set llm.url='http://$(LLAMA_STACK_SVC_NAME).$(NAMESPACE).svc.cluster.local:8321/v1/openai/v1',)) \
 			$(if $(GPU_PREFIX_NVIDIA),--set env.GPU_METRICS_PREFIX_NVIDIA='$(GPU_PREFIX_NVIDIA)',) \
 			$(if $(GPU_PREFIX_INTEL),--set env.GPU_METRICS_PREFIX_INTEL='$(GPU_PREFIX_INTEL)',) \
 			$(if $(GPU_PREFIX_AMD),--set env.GPU_METRICS_PREFIX_AMD='$(GPU_PREFIX_AMD)',) \
@@ -445,7 +517,7 @@ install-mcp-server: namespace
 			--set LLM_PREDICTOR=$(LLM)-predictor \
 			--set env.DEV_MODE=$(DEV_MODE) \
 			$(if $(MCP_SERVER_ROUTE_HOST),--set route.host='$(MCP_SERVER_ROUTE_HOST)',) \
-			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',) \
+			$(if $(LLAMA_STACK_URL),--set llm.url='$(LLAMA_STACK_URL)',$(if $(filter true,$(USE_LLAMA_STACK_OPERATOR)),--set llm.url='http://$(LLAMA_STACK_SVC_NAME).$(NAMESPACE).svc.cluster.local:8321/v1/openai/v1',)) \
 			$(if $(GPU_PREFIX_NVIDIA),--set env.GPU_METRICS_PREFIX_NVIDIA='$(GPU_PREFIX_NVIDIA)',) \
 			$(if $(GPU_PREFIX_INTEL),--set env.GPU_METRICS_PREFIX_INTEL='$(GPU_PREFIX_INTEL)',) \
 			$(if $(GPU_PREFIX_AMD),--set env.GPU_METRICS_PREFIX_AMD='$(GPU_PREFIX_AMD)',) \
@@ -518,8 +590,61 @@ uninstall-react-ui:
 	-@helm -n $(NAMESPACE) uninstall $(REACT_UI_RELEASE_NAME) --ignore-not-found
 	@echo "✅ React UI uninstalled"
 
+.PHONY: enable-llamastack-operator
+enable-llamastack-operator:
+	@echo "Enabling LlamaStack Operator..."
+	@DSC_NAME=$$(oc get datasciencecluster -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || \
+		{ echo "ERROR: No DataScienceCluster found. Ensure RHOAI (2.22+ or 3.x) is installed."; exit 1; }; \
+	STATE=$$(oc get datasciencecluster $$DSC_NAME -o jsonpath='{.spec.components.llamastackoperator.managementState}' 2>/dev/null); \
+	if [ "$$STATE" != "Managed" ]; then \
+		echo "Patching DataScienceCluster ($$DSC_NAME) to set llamastackoperator=Managed..."; \
+		oc patch datasciencecluster $$DSC_NAME --type merge \
+			-p '{"spec":{"components":{"llamastackoperator":{"managementState":"Managed"}}}}'; \
+		echo "Waiting for LlamaStack Operator CRD to be registered (up to 180s)..."; \
+		WAIT=0; \
+		while [ $$WAIT -lt 180 ]; do \
+			if oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
+				break; \
+			fi; \
+			sleep 5; \
+			WAIT=$$((WAIT + 5)); \
+		done; \
+		if ! oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
+			echo "ERROR: LlamaStack Operator CRD not registered after 180s. Check RHOAI operator logs in redhat-ods-applications namespace."; \
+			exit 1; \
+		fi; \
+		echo "✅ LlamaStack Operator enabled successfully."; \
+	else \
+		echo "✅ LlamaStack Operator is already enabled (Managed)."; \
+	fi
+
+.PHONY: check-llamastack-operator
+check-llamastack-operator:
+	@echo "Checking LlamaStack Operator CRD..."
+	@if ! oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
+		echo ""; \
+		echo "❌ ERROR: LlamaStack Operator CRD (llamastackdistributions.llamastack.io) not found."; \
+		echo "          The LlamaStack operator must be enabled in your DataScienceCluster (RHOAI 3.x required)."; \
+		echo ""; \
+		echo "Either:"; \
+		echo "  1. Run: make enable-llamastack-operator"; \
+		echo "  2. Enable manually:"; \
+		echo "     oc patch datasciencecluster <name> --type merge -p '{\"spec\":{\"components\":{\"llamastackoperator\":{\"managementState\":\"Managed\"}}}}'"; \
+		echo ""; \
+		echo "Then wait 3-5 minutes for the operator to start and register the CRD before re-running install."; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "✅ LlamaStack Operator CRD is registered."
+
+.PHONY: check-llamastack-prerequisites
+check-llamastack-prerequisites:
+	@if [ "$(USE_LLAMA_STACK_OPERATOR)" = "true" ]; then \
+		$(MAKE) check-llamastack-operator; \
+	fi
+
 .PHONY: install-rag
-install-rag: namespace
+install-rag: namespace check-llamastack-prerequisites
 	@$(eval LLM_SERVICE_ARGS := $(call helm_llm_service_args))
 	@$(eval LLAMA_STACK_ARGS := $(call helm_llama_stack_args))
 	@$(eval PGVECTOR_ARGS := $(call helm_pgvector_args))
@@ -535,8 +660,14 @@ install-rag: namespace
 	@echo "$(RAG_CHART) installed successfully"
 
 
+.PHONY: pre-install-checks
+pre-install-checks:
+	@if [ "$(RAG_ENABLED)" != "false" ] && [ "$(USE_LLAMA_STACK_OPERATOR)" = "true" ]; then \
+		$(MAKE) check-llamastack-operator; \
+	fi
+
 .PHONY: install
-install: namespace enable-user-workload-monitoring depend validate-llm install-operators install-observability-stack install-mcp-server delete-jobs
+install: namespace pre-install-checks enable-user-workload-monitoring depend validate-llm install-operators install-observability-stack install-mcp-server delete-jobs
 	@echo "DEV_MODE is set to: $(DEV_MODE)"
 	@if [ "$(DEV_MODE)" = "true" ]; then \
 		echo "→ DEV_MODE=true: Installing React UI standalone application only"; \
@@ -652,7 +783,14 @@ uninstall:
 
 	@echo ""
 	@echo "Checking if observability stack should be uninstalled..."
-	@$(MAKE) uninstall-observability-stack NAMESPACE=$(NAMESPACE) UNINSTALL_OBSERVABILITY=$(UNINSTALL_OBSERVABILITY) || true
+	@# When uninstalling operators, always uninstall the observability stack first —
+	@# the stack's CRs (TempoStack, LokiStack, OTel Collector, Korrel8r) depend on
+	@# the operators and would be orphaned without them.
+	@if [ "$(UNINSTALL_OPERATORS)" = "true" ]; then \
+		$(MAKE) uninstall-observability-stack NAMESPACE=$(NAMESPACE) UNINSTALL_OBSERVABILITY=true || true; \
+	else \
+		$(MAKE) uninstall-observability-stack NAMESPACE=$(NAMESPACE) UNINSTALL_OBSERVABILITY=$(UNINSTALL_OBSERVABILITY) || true; \
+	fi
 
 	@echo ""
 	@echo "Checking if operators should be uninstalled..."
@@ -897,7 +1035,8 @@ install-alerts: patch-config create-secret
 	@echo "Installing/Upgrading Helm chart $(ALERTING_RELEASE_NAME) in namespace $(NAMESPACE)..."
 	@cd deploy/helm && helm upgrade --install $(ALERTING_RELEASE_NAME) ./alerting --namespace $(NAMESPACE) \
 		--set image.repository=$(METRICS_ALERTING_IMAGE) \
-		--set image.tag=$(VERSION)
+		--set image.tag=$(VERSION) \
+		$(if $(filter true,$(USE_LLAMA_STACK_OPERATOR)),--set config.llamaStackUrl='http://$(LLAMA_STACK_SVC_NAME).$(NAMESPACE).svc.cluster.local:8321',)
 	@echo "Alerting Helm chart deployment complete."
 
 .PHONY: uninstall-alerts
@@ -959,7 +1098,7 @@ install-observability:
 	@$(MAKE) install-loki
 
 .PHONY: install-observability-stack
-install-observability-stack:
+install-observability-stack: verify-operators-ready
 	@echo "🚀 Installing observability stack in proper sequence..."
 	@$(MAKE) install-minio
 	@$(MAKE) setup-tracing
@@ -1313,13 +1452,13 @@ install-loki:
 		echo "  → loki-stack already installed, skipping..."; \
 	else \
 		echo "→ Verifying Logging and Loki Operators are ready..."; \
-		if ! oc get operator cluster-logging.openshift-logging >/dev/null 2>&1; then \
+		if ! oc get subscription cluster-logging -n openshift-logging >/dev/null 2>&1; then \
 			echo "  ❌ Error: Logging Operator is not installed"; \
 			echo "  → Run: make install-logging-operator"; \
 			exit 1; \
 		fi; \
 		echo "  ✅ Logging Operator is installed"; \
-		if ! oc get operator loki-operator.openshift-operators-redhat >/dev/null 2>&1; then \
+		if ! oc get subscription loki-operator -n openshift-operators-redhat >/dev/null 2>&1; then \
 			echo "  ❌ Error: Loki Operator is not installed"; \
 			echo "  → Run: make install-loki-operator"; \
 			exit 1; \
@@ -1465,13 +1604,13 @@ install-tempo-operator:
 .PHONY: install-logging-operator
 install-logging-operator:
 	@echo ""
-	@$(OPERATOR_MANAGER_SCRIPT) -i logging -n openshift-logging
+	@CHANNEL=$(LOGGING_LOKI_CHANNEL) STARTING_CSV=$(LOGGING_STARTING_CSV) $(OPERATOR_MANAGER_SCRIPT) -i logging -n openshift-logging
 
 # Install Loki Operator
 .PHONY: install-loki-operator
 install-loki-operator:
 	@echo ""
-	@$(OPERATOR_MANAGER_SCRIPT) -i loki -n openshift-operators-redhat
+	@CHANNEL=$(LOGGING_LOKI_CHANNEL) STARTING_CSV=$(LOKI_STARTING_CSV) $(OPERATOR_MANAGER_SCRIPT) -i loki -n openshift-operators-redhat
 
 # Verify all required operators are installed and ready
 .PHONY: verify-operators-ready
@@ -1480,7 +1619,7 @@ verify-operators-ready:
 	@echo "🔍 Verifying all required operators are installed and ready..."
 	@ERRORS=0; \
 	echo "  → Checking Cluster Observability Operator..."; \
-	if oc get operator cluster-observability-operator.openshift-cluster-observability >/dev/null 2>&1; then \
+	if oc get subscription cluster-observability-operator -n openshift-cluster-observability-operator >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription cluster-observability-operator -n openshift-cluster-observability-operator -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-cluster-observability-operator -o jsonpath='{.status.phase}' 2>/dev/null); \
@@ -1497,7 +1636,7 @@ verify-operators-ready:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	echo "  → Checking OpenTelemetry Operator..."; \
-	if oc get operator opentelemetry-product.openshift-opentelemetry-operator >/dev/null 2>&1; then \
+	if oc get subscription opentelemetry-product -n openshift-opentelemetry-operator >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription opentelemetry-product -n openshift-opentelemetry-operator -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-opentelemetry-operator -o jsonpath='{.status.phase}' 2>/dev/null); \
@@ -1514,7 +1653,7 @@ verify-operators-ready:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	echo "  → Checking Tempo Operator..."; \
-	if oc get operator tempo-product.openshift-tempo-operator >/dev/null 2>&1; then \
+	if oc get subscription tempo-product -n openshift-tempo-operator >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription tempo-product -n openshift-tempo-operator -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-tempo-operator -o jsonpath='{.status.phase}' 2>/dev/null); \
@@ -1531,7 +1670,7 @@ verify-operators-ready:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	echo "  → Checking Logging Operator..."; \
-	if oc get operator cluster-logging.openshift-logging >/dev/null 2>&1; then \
+	if oc get subscription cluster-logging -n openshift-logging >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription cluster-logging -n openshift-logging -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-logging -o jsonpath='{.status.phase}' 2>/dev/null); \
@@ -1548,7 +1687,7 @@ verify-operators-ready:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	echo "  → Checking Loki Operator..."; \
-	if oc get operator loki-operator.openshift-operators-redhat >/dev/null 2>&1; then \
+	if oc get subscription loki-operator -n openshift-operators-redhat >/dev/null 2>&1; then \
 		CSV=$$(oc get subscription loki-operator -n openshift-operators-redhat -o jsonpath='{.status.installedCSV}' 2>/dev/null); \
 		if [ -n "$$CSV" ]; then \
 			PHASE=$$(oc get csv $$CSV -n openshift-operators-redhat -o jsonpath='{.status.phase}' 2>/dev/null); \
@@ -1580,7 +1719,6 @@ install-operators: install-cluster-observability-operator install-opentelemetry-
 	@echo "✅ All operators installation completed"
 	@echo "⏳ Waiting 15 seconds for operators to stabilize and CRDs to be fully ready..."
 	@sleep 15
-	@$(MAKE) verify-operators-ready
 
 # Uninstall Cluster Observability Operator
 .PHONY: uninstall-cluster-observability-operator

@@ -77,7 +77,7 @@ def check_rag_availability():
             error = MCPException(
                 message="vLLM infrastructure not available",
                 error_code=MCPErrorCode.CONFIGURATION_ERROR,
-                recovery_suggestion="RAG infrastructure is not installed or accessible. vLLM metrics require local model deployment. Install with: make install ENABLE_RAG=true"
+                recovery_suggestion="RAG infrastructure is not installed or accessible. vLLM metrics require local model deployment. Install with: make install RAG_ENABLED=true"
             )
             return error.to_mcp_response()
         return None

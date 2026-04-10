@@ -154,9 +154,9 @@ parse_args() {
         [[ "$DEBUG" == "true" ]] && echo -e "${BLUE}📋 Auto-detected YAML file: $YAML_FILE${NC}"
     fi
 
-    # Check if operator is installed
+    # Check if operator is installed (pass NAMESPACE if available from -n flag)
     local is_installed=false
-    check_operator "$OPERATOR_NAME" && is_installed=true
+    check_operator "$OPERATOR_NAME" "$NAMESPACE" && is_installed=true
 
     # Execute check/install/uninstall action based on operator status
     case "$ACTION" in
@@ -186,7 +186,19 @@ parse_args() {
             ;;
         "$OPERATOR_ACTION_UNINSTALL")
             validate_namespace "$OPERATOR_ACTION_UNINSTALL"
-            if [ "$is_installed" = false ]; then
+            # For uninstall, check if a Subscription exists — don't require CSV Succeeded.
+            # check_operator() requires CSV Succeeded phase, which is too strict for uninstall:
+            # if a Subscription exists but OLM couldn't resolve it (e.g., channel removed from
+            # catalog), check_operator() returns false and uninstall skips the operator entirely,
+            # leaving orphaned Subscriptions and OperatorGroups that cause deadlocks on reinstall.
+            local sub_info=$(get_subscription_info "$OPERATOR_NAME")
+            local unsub_name="${sub_info%%:*}"
+            local unsub_ns="${NAMESPACE:-${sub_info##*:}}"
+            local has_subscription=false
+            if [ -n "$unsub_name" ] && oc get "$OLM_SUBSCRIPTION_RESOURCE" "$unsub_name" -n "$unsub_ns" >/dev/null 2>&1; then
+                has_subscription=true
+            fi
+            if [ "$is_installed" = false ] && [ "$has_subscription" = false ]; then
                 echo -e "${YELLOW}⚠️  Operator $OPERATOR_NAME is not installed${NC}"
                 exit 0
             fi
@@ -221,7 +233,10 @@ validate_namespace() {
     fi
 }
 
-# Function to get subscription name and namespace from operator full name
+# Function to get subscription name and namespace from operator full name.
+# Note: OLM operator resource names do NOT always match "subscription.namespace" format.
+# E.g., the OLM resource is "cluster-observability-operator.openshift-cluster-observability"
+# but the actual namespace is "openshift-cluster-observability-operator".
 get_subscription_info() {
     local operator_name="$1"
     case "$operator_name" in
@@ -246,27 +261,31 @@ get_subscription_info() {
     esac
 }
 
-# Function to check if an operator is fully installed
-# Returns 0 if operator exists AND has a Succeeded CSV, 1 otherwise
+# Function to check if an operator is actively installed.
+# Uses Subscription presence (+ CSV Succeeded phase) rather than the OLM `operator`
+# resource, because `operator` resources are phantom aggregation objects that persist
+# as long as CRDs exist — even after a clean uninstall. Checking them causes false
+# positives ("already installed") and blocks reinstall.
+#
+# Args:
+#   $1 - Full operator name (e.g., "cluster-logging.openshift-logging")
+#   $2 - (optional) Namespace override. If not provided, uses get_subscription_info().
 check_operator() {
     local operator_name="$1"
+    local ns_override="${2:-}"
     [[ "$DEBUG" == "true" ]] && echo -e "${BLUE}📋 Checking operator: $operator_name${NC}"
-
-    # First check if operator resource exists
-    if ! oc get "$OLM_OPERATOR_RESOURCE" "$operator_name" >/dev/null 2>&1; then
-        [[ "$DEBUG" == "true" ]] && echo -e "${BLUE}   → Operator resource does not exist${NC}"
-        return 1  # Operator does not exist
-    fi
 
     # Get subscription name and namespace
     local sub_info=$(get_subscription_info "$operator_name")
+    local subscription_name=""
+    local namespace=""
     if [ -z "$sub_info" ]; then
         # Fallback: try to extract from operator name (format: subscription.namespace)
-        local namespace="${operator_name##*.}"
-        local subscription_name="${operator_name%%.*}"
+        namespace="${ns_override:-${operator_name##*.}}"
+        subscription_name="${operator_name%%.*}"
     else
-        local subscription_name="${sub_info%%:*}"
-        local namespace="${sub_info##*:}"
+        subscription_name="${sub_info%%:*}"
+        namespace="${ns_override:-${sub_info##*:}}"
     fi
 
     [[ "$DEBUG" == "true" ]] && echo -e "${BLUE}   → Looking for subscription '$subscription_name' in namespace '$namespace'${NC}"
@@ -453,30 +472,11 @@ uninstall_operator() {
     # servicemonitors.monitoring.rhobs also resolved to servicemonitors.monitoring.coreos.com,
     # wiping GPU operator DCGM ServiceMonitors and all platform ServiceMonitors.
 
-    echo -e "${BLUE}  📋 Step 3: Deleting operator resource: $operator_name${NC}"
-    # Delete the operator resource directly
-    oc delete "$OLM_OPERATOR_RESOURCE" "$operator_name" --ignore-not-found=true --wait=false
-
-    # Wait for OLM to clean up the operator resource (max 2 minutes)
-    echo -e "${BLUE}     → Waiting for OLM to clean up operator resource...${NC}"
-    local wait_attempts=24  # 2 minutes with 5-second intervals
-    local wait_count=0
-    while [ $wait_count -lt $wait_attempts ]; do
-        if ! oc get "$OLM_OPERATOR_RESOURCE" "$operator_name" >/dev/null 2>&1; then
-            echo -e "${GREEN}     ✅ Operator resource removed${NC}"
-            break
-        fi
-        wait_count=$((wait_count + 1))
-        if [ $wait_count -lt $wait_attempts ]; then
-            sleep 5
-        fi
-    done
-
-    if [ $wait_count -eq $wait_attempts ]; then
-        echo -e "${YELLOW}     ⚠️  Operator resource still exists after 2 minutes${NC}"
-        echo -e "${YELLOW}     ⚠️  OLM will eventually clean it up (can take 30-60 minutes)${NC}"
-        echo -e "${YELLOW}     ⚠️  The operator is functionally removed (no pods/deployments running)${NC}"
-    fi
+    echo -e "${BLUE}  📋 Step 3: Cleaning up operator resource: $operator_name${NC}"
+    # Best-effort cleanup of the OLM operator resource. Since CRDs are preserved
+    # (see comment above), OLM may regenerate this resource. This is harmless —
+    # check_operator() uses Subscription presence, not the operator resource.
+    oc delete "$OLM_OPERATOR_RESOURCE" "$operator_name" --ignore-not-found=true --wait=false 2>/dev/null || true
 
     echo -e "${GREEN}✅ $operator_name deletion completed!${NC}"
     echo -e "${BLUE}  ℹ️  Note: Namespace '$namespace' was preserved${NC}"
@@ -590,16 +590,19 @@ install_operator() {
     # which is only supported by 'create'. We add --save-config to enable future kubectl apply operations.
     # Suppress "AlreadyExists" errors for namespaces since uninstall preserves them by design.
     export NAMESPACE="$namespace"
+    export CHANNEL="${CHANNEL:-stable}"
+    export STARTING_CSV="${STARTING_CSV:-}"
 
-    # In shared namespaces (e.g. openshift-operators-redhat), an OperatorGroup likely already exists
-    # from other operators. Creating a second one causes OLM to deadlock (no InstallPlans created).
-    # Strip the entire OperatorGroup document from the YAML if one already exists.
-    if [ "$namespace" = "$SHARED_REDHAT_OPERATORS_NS" ]; then
-        local existing_og=$(oc get "$OLM_OPERATORGROUP_RESOURCE" -n "$namespace" -o name 2>/dev/null | head -1)
-        if [ -n "$existing_og" ]; then
-            echo -e "${BLUE}     → OperatorGroup already exists in shared namespace $namespace ($existing_og). Skipping creation.${NC}"
-            # python3: splits multi-doc YAML and drops OperatorGroup (see file header).
-            envsubst < "$yaml_path" | python3 -c "
+    # Check if an OperatorGroup already exists in the target namespace. Multiple
+    # OperatorGroups cause OLM to deadlock (no InstallPlans created). This can happen
+    # when reinstalling after an uninstall that preserved the namespace, because the
+    # YAML uses generateName which creates a new OperatorGroup on every `oc create`.
+    # Strip the OperatorGroup document from the YAML if one already exists.
+    local existing_og=$(oc get "$OLM_OPERATORGROUP_RESOURCE" -n "$namespace" -o name 2>/dev/null | head -1)
+    if [ -n "$existing_og" ]; then
+        echo -e "${BLUE}     → OperatorGroup already exists in $namespace ($existing_og). Skipping creation.${NC}"
+        # python3: splits multi-doc YAML and drops OperatorGroup (see file header).
+        envsubst '${NAMESPACE} ${CHANNEL} ${STARTING_CSV}' < "$yaml_path" | python3 -c "
 import sys
 docs = sys.stdin.read().split('---')
 for doc in docs:
@@ -607,11 +610,8 @@ for doc in docs:
         print('---')
         print(doc, end='')
 " | oc create --save-config -f - 2>&1 | grep -v "namespaces.*already exists" || true
-        else
-            envsubst < "$yaml_path" | oc create --save-config -f - 2>&1 | grep -v "namespaces.*already exists" || true
-        fi
     else
-        envsubst < "$yaml_path" | oc create --save-config -f - 2>&1 | grep -v "namespaces.*already exists" || true
+        envsubst '${NAMESPACE} ${CHANNEL} ${STARTING_CSV}' < "$yaml_path" | oc create --save-config -f - 2>&1 | grep -v "namespaces.*already exists" || true
     fi
 
     echo -e "${GREEN}  ✅ $operator_name installation initiated${NC}"
@@ -622,15 +622,16 @@ for doc in docs:
     # If approval is Manual, auto-approve InstallPlan for the startingCSV
     approve_install_plan_if_manual "$subscription_name" "$namespace" || true
 
-    # Wait for operator to be installed (operator resource exists)
-    echo -e "${BLUE}  ⏳ Waiting for operator resource to be created...${NC}"
+    # Verify Subscription was created successfully (lightweight check — CSV phase
+    # is verified separately in the next loop, so we only check Subscription existence here)
+    echo -e "${BLUE}  ⏳ Verifying Subscription was created...${NC}"
 
     local max_attempts=60  # 10 minutes with 10-second intervals
     local attempt=0
 
     while [ $attempt -lt $max_attempts ]; do
-        if check_operator "$operator_name"; then
-            echo -e "${GREEN}  ✅ Operator resource created${NC}"
+        if oc get "$OLM_SUBSCRIPTION_RESOURCE" "$subscription_name" -n "$namespace" >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✅ Subscription confirmed${NC}"
             break
         fi
 
@@ -642,7 +643,7 @@ for doc in docs:
     done
 
     if [ $attempt -eq $max_attempts ]; then
-        echo -e "${RED}  ❌ Operator resource was not created after 10 minutes${NC}"
+        echo -e "${RED}  ❌ Subscription was not created after 10 minutes${NC}"
         exit 1
     fi
 
