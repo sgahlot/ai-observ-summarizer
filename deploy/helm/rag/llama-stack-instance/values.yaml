@@ -8,10 +8,15 @@ rawDeploymentMode: true
 image:
   repository: llamastack/distribution-starter
   pullPolicy: IfNotPresent
-  tag: "0.2.22"
+  # Align with ai-architecture-charts llama-stack (distribution-starter); override if operator pins another version.
+  tag: "0.6.0"
 
 nameOverride: "llamastack"
 fullnameOverride: "llamastack"
+
+# Optional override when CR metadata.name / fullname and PVC name must stay aligned (default: llama-stack-data).
+persistence:
+  claimName: ""
 
 service:
   port: 8321

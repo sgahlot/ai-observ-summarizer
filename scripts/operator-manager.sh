@@ -602,7 +602,7 @@ install_operator() {
     if [ -n "$existing_og" ]; then
         echo -e "${BLUE}     → OperatorGroup already exists in $namespace ($existing_og). Skipping creation.${NC}"
         # python3: splits multi-doc YAML and drops OperatorGroup (see file header).
-        envsubst < "$yaml_path" | python3 -c "
+        envsubst '${NAMESPACE} ${CHANNEL} ${STARTING_CSV}' < "$yaml_path" | python3 -c "
 import sys
 docs = sys.stdin.read().split('---')
 for doc in docs:
@@ -611,7 +611,7 @@ for doc in docs:
         print(doc, end='')
 " | oc create --save-config -f - 2>&1 | grep -v "namespaces.*already exists" || true
     else
-        envsubst < "$yaml_path" | oc create --save-config -f - 2>&1 | grep -v "namespaces.*already exists" || true
+        envsubst '${NAMESPACE} ${CHANNEL} ${STARTING_CSV}' < "$yaml_path" | oc create --save-config -f - 2>&1 | grep -v "namespaces.*already exists" || true
     fi
 
     echo -e "${GREEN}  ✅ $operator_name installation initiated${NC}"

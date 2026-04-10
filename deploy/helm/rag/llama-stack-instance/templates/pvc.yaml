@@ -1,7 +1,7 @@
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: llama-stack-data
+  name: {{ include "llama-stack-instance.dataClaimName" . }}
 spec:
   accessModes:
     - ReadWriteOnce

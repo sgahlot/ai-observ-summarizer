@@ -118,7 +118,7 @@ data:
           {{- if .Values.otelExporter }}
           sinks: ${env.TELEMETRY_SINKS:=console,sqlite,otel_trace}
           service_name: {{ include "llama-stack-instance.fullname" . }}
-          otel_exporter_otlp_endpoint: ${env.OTEL_EXPORTER_OTLP_ENDPOINT:=}
+          otel_exporter_otlp_endpoint: ${env.OTEL_ENDPOINT:=}
           {{- else }}
           sinks: ${env.TELEMETRY_SINKS:=console,sqlite}
           {{- end }}
@@ -172,10 +172,12 @@ data:
     - toolgroup_id: builtin::rag
       provider_id: rag-runtime
     {{- range $key, $server := $mcpServers }}
+    {{- with $server.uri }}
     - toolgroup_id: mcp::{{ $key }}
       provider_id: model-context-protocol
       mcp_endpoint:
-        uri: {{ $server.uri }}
+        uri: {{ tpl . $ | quote }}
+    {{- end }}
     {{- end }}
     {{- if .Values.auth }}
     server:

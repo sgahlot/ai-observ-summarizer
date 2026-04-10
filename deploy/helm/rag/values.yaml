@@ -75,6 +75,8 @@ llama-stack:
           name: pgvector
   secrets:
     TAVILY_SEARCH_API_KEY: "Paste-your-key-here"
+  # For llama-stack-instance, {{ .Release.Namespace }} is expanded via tpl in the subchart ConfigMap.
+  # For llama-stack (architecture chart), behavior depends on that upstream chart.
   mcp-servers:
     observability-mcp:
       uri: http://aiobs-mcp-server-svc.{{ .Release.Namespace }}.svc.cluster.local:8085/mcp
@@ -120,6 +122,7 @@ llama-stack-instance:
           name: pgvector
   secrets:
     TAVILY_SEARCH_API_KEY: "Paste-your-key-here"
+  # Namespace in uri is expanded via tpl in llama-stack-instance/templates/configmap.yaml.
   mcp-servers:
     observability-mcp:
       uri: http://aiobs-mcp-server-svc.{{ .Release.Namespace }}.svc.cluster.local:8085/mcp

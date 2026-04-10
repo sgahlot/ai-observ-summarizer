@@ -17,8 +17,8 @@ spec:
       env:
         {{- toYaml .Values.env | nindent 8 }}
         {{- if .Values.otelExporter }}
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: {{ .Values.otelExporter }}
+        - name: OTEL_ENDPOINT
+          value: {{ .Values.otelExporter | quote }}
         {{- end }}
         {{- range $key, $value := .Values.secrets }}
         - name: {{ $key }}
@@ -42,6 +42,6 @@ spec:
       volumes:
         - name: dot-llama
           persistentVolumeClaim:
-            claimName: llama-stack-data
+            claimName: {{ include "llama-stack-instance.dataClaimName" . }}
         - name: cache
           emptyDir: {}

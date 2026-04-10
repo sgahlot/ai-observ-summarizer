@@ -120,6 +120,19 @@ DEFAULT_LLM_PORT_AND_PATH := :8080/v1
 
 OPERATOR_MANAGER_SCRIPT := scripts/operator-manager.sh
 
+# Auto-detect RHOAI version from the cluster when not explicitly set on the command line.
+# Prevents the footgun of deploying on RHOAI 3.x with RHOAI_VERSION=2 defaults, which
+# would install logging/loki operators on stable-6.3 channels instead of stable-6.4.
+# $(origin RHOAI_VERSION) is "file" when set via ?= above, "command line" when explicit.
+ifeq ($(origin RHOAI_VERSION),file)
+  _RHOAI_CSV := $(shell oc get csv -n redhat-ods-operator -l operators.coreos.com/rhods-operator.redhat-ods-operator \
+    -o jsonpath='{.items[0].spec.version}' 2>/dev/null)
+  ifneq ($(findstring 3.,$(_RHOAI_CSV)),)
+    $(info ℹ️  Auto-detected RHOAI 3.x ($(_RHOAI_CSV)) — setting RHOAI_VERSION=3)
+    RHOAI_VERSION := 3
+  endif
+endif
+
 # Auto-detect LlamaStack operator on RHOAI 3.x: if the operator is set to Managed
 # in the DataScienceCluster, automatically use operator-based deployment. This avoids
 # deploying a conflicting Helm-based LlamaStack alongside an operator-managed instance.
@@ -261,7 +274,7 @@ help:
 	@echo "  install-with-alerts - Deploy with alerting enabled"
 	@echo "  install-local      - Set up local development environment"
 	@echo "  install-rag        - Install RAG backend services only (uses Helm chart by default, operator with USE_LLAMA_STACK_OPERATOR=true)"
-	@echo "  enable-llamastack-operator - Enable LlamaStack operator in DataScienceCluster (required before USE_LLAMA_STACK_OPERATOR=true)"
+	@echo "  enable-llamastack-operator - Enable LlamaStack operator in DataScienceCluster (auto-detected if already Managed)"
 	@echo "  install-mcp-server - Install MCP server only"
 	@echo "  install-console-plugin - Install OpenShift Console Plugin"
 	@echo "  uninstall-console-plugin - Uninstall OpenShift Console Plugin"
@@ -349,7 +362,7 @@ help:
 	@echo "  LLM_URL            - Use existing model URL (auto-adds :8080/v1 if no port specified)"
 	@echo "  SAFETY             - Safety model id"
 	@echo "  RAG_ENABLED         - Set to 'false' to skip RAG backend services (default: true)"
-	@echo "  RHOAI_VERSION          - Set to '2' for RHOAI 2.x or '3' for RHOAI 3.x (controls operator channels: stable-6.3 vs stable-6.4) (default: 2)"
+	@echo "  RHOAI_VERSION          - Set to '2' for RHOAI 2.x or '3' for RHOAI 3.x (auto-detected from cluster, controls operator channels: stable-6.3 vs stable-6.4) (default: auto-detect, fallback: 2)"
 	@echo "  USE_LLAMA_STACK_OPERATOR - Set to 'true' to deploy LlamaStack via operator instead of Helm chart (requires RHOAI_VERSION=3) (default: false)"
 	@echo "  ALERTING_ENABLED    - Set to 'true' to install alerting (default: false)"
 	@echo "  SLACK_WEBHOOK_URL  - Slack Webhook URL for alerting (will prompt if not provided)"
@@ -583,12 +596,13 @@ enable-llamastack-operator:
 		oc patch datasciencecluster $$DSC_NAME --type merge \
 			-p '{"spec":{"components":{"llamastackoperator":{"managementState":"Managed"}}}}'; \
 		echo "Waiting for LlamaStack Operator CRD to be registered (up to 180s)..."; \
-		SECONDS=0; \
-		while [ $$SECONDS -lt 180 ]; do \
+		WAIT=0; \
+		while [ $$WAIT -lt 180 ]; do \
 			if oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
 				break; \
 			fi; \
 			sleep 5; \
+			WAIT=$$((WAIT + 5)); \
 		done; \
 		if ! oc get crd llamastackdistributions.llamastack.io > /dev/null 2>&1; then \
 			echo "ERROR: LlamaStack Operator CRD not registered after 180s. Check RHOAI operator logs in redhat-ods-applications namespace."; \
@@ -643,7 +657,7 @@ install-rag: namespace check-llamastack-prerequisites
 
 .PHONY: pre-install-checks
 pre-install-checks:
-	@if [ "$(ENABLE_RAG)" != "false" ] && [ "$(USE_LLAMA_STACK_OPERATOR)" = "true" ]; then \
+	@if [ "$(RAG_ENABLED)" != "false" ] && [ "$(USE_LLAMA_STACK_OPERATOR)" = "true" ]; then \
 		$(MAKE) check-llamastack-operator; \
 	fi
 

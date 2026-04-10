@@ -75,3 +75,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   {{- $merged := merge $globalServers $localServers }}
   {{- toJson $merged }}
 {{- end }}
+
+{{/* PVC claim for LlamaStack data; override persistence.claimName if it must differ from default. */}}
+{{- define "llama-stack-instance.dataClaimName" -}}
+{{- $p := .Values.persistence | default dict }}
+{{- default "llama-stack-data" $p.claimName }}
+{{- end }}
