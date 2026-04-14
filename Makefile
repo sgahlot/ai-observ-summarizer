@@ -14,11 +14,11 @@ MAKEFLAGS += --no-print-directory
 REGISTRY ?= quay.io
 ORG ?= ecosystem-appeng
 IMAGE_PREFIX ?= aiobs
-VERSION ?= 5.0.0
+VERSION ?= 5.0.1
 PLATFORM ?= linux/amd64
 DEV_MODE ?= false
 USE_LLAMA_STACK_OPERATOR ?= false
-RHOAI_VERSION ?= 2
+RHOAI_VERSION ?= 5.0.1
 
 # GPU Metrics Discovery - custom prefix overrides (comma-separated, additive)
 GPU_PREFIX_NVIDIA ?=
