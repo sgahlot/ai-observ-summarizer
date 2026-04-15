@@ -14,13 +14,17 @@ import {
   FormSelectOption,
 } from '@patternfly/react-core';
 import { callMcpTool } from '../services/mcpClient';
-import { CategorySummary, getQuestionsForCategory } from './MetricCategoriesPopover';
+import { CategorySummary, getQuestionsForCategory, NAMESPACE_SCOPED_CATEGORIES } from './MetricCategoriesPopover';
+import { ChatScope } from '../data/namespaceDefaults';
 
 interface MetricCategoriesInlineProps {
   onSelectQuestion: (question: string) => void;
   onCategorySelect: (categoryName: string | null) => void;
   isExpanded: boolean;
   onToggle: (expanded: boolean) => void;
+  chatScope?: ChatScope;
+  selectedNamespace?: string | null;
+  gpuAvailable?: boolean | undefined;
 }
 
 export const MetricCategoriesInline: React.FC<MetricCategoriesInlineProps> = ({
@@ -28,6 +32,9 @@ export const MetricCategoriesInline: React.FC<MetricCategoriesInlineProps> = ({
   onCategorySelect,
   isExpanded,
   onToggle,
+  chatScope = 'cluster_wide',
+  selectedNamespace = null,
+  gpuAvailable,
 }) => {
   const [categories, setCategories] = React.useState<CategorySummary[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -39,6 +46,15 @@ export const MetricCategoriesInline: React.FC<MetricCategoriesInlineProps> = ({
     if (loadedRef.current) return;
     loadCategories();
   }, []);
+
+  // Reload categories when scope or GPU availability changes
+  React.useEffect(() => {
+    if (loadedRef.current) {
+      loadCategories();
+      setSelectedCategoryId(''); // Reset category selection when scope changes
+      onCategorySelect(null); // Notify parent that category selection is cleared
+    }
+  }, [chatScope, gpuAvailable]);
 
   const loadCategories = async () => {
     setLoading(true);
@@ -54,7 +70,19 @@ export const MetricCategoriesInline: React.FC<MetricCategoriesInlineProps> = ({
       if (parsed.error) {
         setError(parsed.error);
       } else {
-        setCategories(Array.isArray(parsed) ? parsed : []);
+        const allCategories = Array.isArray(parsed) ? parsed : [];
+
+        // Filter based on scope
+        let filteredCategories = chatScope === 'namespace_scoped'
+          ? allCategories.filter(cat => NAMESPACE_SCOPED_CATEGORIES.includes(cat.id))
+          : allCategories;
+
+        // Filter out GPU category if unavailable
+        if (!gpuAvailable) {
+          filteredCategories = filteredCategories.filter(cat => cat.id !== 'gpu_ai');
+        }
+
+        setCategories(filteredCategories);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load categories');
@@ -96,7 +124,7 @@ export const MetricCategoriesInline: React.FC<MetricCategoriesInlineProps> = ({
       );
     }
 
-    const questions = selectedCategory ? getQuestionsForCategory(selectedCategory) : [];
+    const questions = selectedCategory ? getQuestionsForCategory(selectedCategory, chatScope, selectedNamespace) : [];
 
     return (
       <div>

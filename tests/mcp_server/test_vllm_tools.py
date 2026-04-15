@@ -23,9 +23,8 @@ def test_list_models_empty(_):
     assert any("No models are currently available" in t for t in texts)
 
 
-@patch("src.mcp_server.tools.observability_vllm_tools.check_rag_availability", return_value=None)
 @patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_namespaces_helper", return_value=["ns1", "ns2"])  # type: ignore[arg-type]
-def test_list_vllm_namespaces_success(_, __):
+def test_list_vllm_namespaces_success(_):
     out = tools.list_vllm_namespaces()
     texts = _texts(out)
     assert any("Monitored vLLM Namespaces" in t for t in texts)
@@ -33,16 +32,16 @@ def test_list_vllm_namespaces_success(_, __):
     assert any("ns2" in t for t in texts)
 
 
-@patch("src.mcp_server.tools.observability_vllm_tools.check_rag_availability", return_value=None)
 @patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_namespaces_helper", return_value=[])  # type: ignore[arg-type]
-def test_list_vllm_namespaces_empty(_, __):
+def test_list_vllm_namespaces_empty(_):
     out = tools.list_vllm_namespaces()
     texts = _texts(out)
     assert any("No monitored vLLM namespaces found" in t for t in texts)
 
 
-@patch("os.getenv", return_value='{"m1": {"external": false}, "m2": {"external": true}}')
-def test_get_model_config_success(_):
+@patch("core.config.is_rag_available", return_value=True)
+@patch("core.model_config_manager.get_model_config", return_value={"m1": {"external": False}, "m2": {"external": True}})
+def test_get_model_config_success(mock_get_config, mock_is_rag):
     out = tools.get_model_config()
     text = "\n".join(_texts(out))
     assert "Available Model Config" in text
@@ -50,16 +49,15 @@ def test_get_model_config_success(_):
     assert text.find("m1") < text.find("m2")
 
 
-@patch("core.config.RAG_AVAILABLE", True)
-@patch("src.mcp_server.tools.observability_vllm_tools.os.getenv")
-def test_get_model_config_empty(mock_getenv):
-    # Return "{}" for MODEL_CONFIG, None for all other env vars
-    mock_getenv.side_effect = lambda key, default=None: "{}" if key == "MODEL_CONFIG" else default
-
+@patch("core.config.is_rag_available", return_value=True)
+@patch("core.model_config_manager.get_model_config", return_value={})
+def test_get_model_config_empty(mock_get_config, mock_rag):
     out = tools.get_model_config()
     texts = _texts(out)
-    # When RAG_AVAILABLE is True and config is empty, should show this message
+    # When is_rag_available() returns True and config is empty, should show this message
     assert any("No LLM models configured" in t for t in texts)
+
+
 @patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_metrics", return_value={"latency": "q1", "tps": "q2"})
 @patch("src.mcp_server.tools.observability_vllm_tools.execute_range_queries_parallel")
 @patch("src.mcp_server.tools.observability_vllm_tools.build_prompt", return_value="PROMPT")
@@ -248,6 +246,56 @@ def test_get_vllm_metrics_tool_success(mock_get_vllm_metrics):
     assert "vllm:num_requests_running" in text
     assert "📊 **GPU Metrics:**" in text
     assert "🚀 **vLLM Performance Metrics:**" in text
+
+
+@patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_metrics")
+def test_get_vllm_metrics_tool_replaces_5m_with_rate_interval(mock_get_vllm_metrics):
+    """Test that get_vllm_metrics_tool replaces [5m] with <rate_interval> in LLM output."""
+    mock_get_vllm_metrics.return_value = {
+        "P95 Latency (s)": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le))",
+        "Tokens Generated Per Second": "rate(vllm:request_generation_tokens_sum[5m])",
+        "GPU Temperature (°C)": "avg(DCGM_FI_DEV_GPU_TEMP)",
+    }
+
+    result = tools.get_vllm_metrics_tool()
+    text = "\n".join(_texts(result))
+
+    # [5m] should be replaced with <rate_interval> in displayed queries
+    assert "[5m]" not in text
+    assert "[<rate_interval>]" in text
+    assert "rate(vllm:e2e_request_latency_seconds_bucket[<rate_interval>])" in text
+    assert "rate(vllm:request_generation_tokens_sum[<rate_interval>])" in text
+    # Queries without [5m] should be unchanged
+    assert "avg(DCGM_FI_DEV_GPU_TEMP)" in text
+    # Rate interval guidance note should be present
+    assert "<rate_interval>" in text
+    assert "<=1h use 5m" in text
+    assert "<=3h use 15m" in text
+    assert ">48h divide hours by 12" in text
+
+
+@patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_metrics")
+def test_get_vllm_metrics_tool_replaces_any_rate_window(mock_get_vllm_metrics):
+    """Test that get_vllm_metrics_tool replaces non-[5m] rate windows too."""
+    mock_get_vllm_metrics.return_value = {
+        "Custom Rate 15m": "rate(custom_metric[15m])",
+        "Custom Increase 1h": "sum(increase(custom_counter[1h]))",
+        "Standard 5m": "rate(vllm:latency_bucket[5m])",
+        "Gauge (no window)": "avg(DCGM_FI_DEV_GPU_TEMP)",
+    }
+
+    result = tools.get_vllm_metrics_tool()
+    text = "\n".join(_texts(result))
+
+    # All hardcoded windows should be replaced
+    assert "[15m]" not in text
+    assert "[1h]" not in text
+    assert "[5m]" not in text
+    assert "rate(custom_metric[<rate_interval>])" in text
+    assert "increase(custom_counter[<rate_interval>])" in text
+    assert "rate(vllm:latency_bucket[<rate_interval>])" in text
+    # Gauge query without window should be unchanged
+    assert "avg(DCGM_FI_DEV_GPU_TEMP)" in text
 
 
 @patch("src.mcp_server.tools.observability_vllm_tools.get_vllm_metrics")

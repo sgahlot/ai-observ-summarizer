@@ -1189,7 +1189,7 @@ const VLLMMetricsPage: React.FC = () => {
                     The vLLM metrics dashboard requires local model deployment with RAG infrastructure.
                   </Text>
                   <Text component={TextVariants.small} style={{ color: 'var(--pf-v5-global--Color--200)' }}>
-                    To enable vLLM metrics, install the RAG infrastructure using: <code>make install ENABLE_RAG=true</code>
+                    To enable vLLM metrics, install the RAG infrastructure using: <code>make install RAG_ENABLED=true</code>
                   </Text>
                 </div>
               ) : (

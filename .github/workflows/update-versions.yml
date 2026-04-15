@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ inputs.target_branch || github.ref }}
           fetch-depth: 0
@@ -70,9 +70,19 @@ jobs:
             echo "Updated deploy/helm/react-ui-app/values.yaml"
           fi
 
+      - name: Update aiobs-stack values.yaml (parent chart)
+        run: |
+          if [ -f "deploy/helm/aiobs-stack/values.yaml" ]; then
+            # Update MCP server tag (same pattern as child charts)
+            sed -i '/repository:.*aiobs-mcp-server/{n;s|tag: .*|tag: '"${{ inputs.version }}"'|}' deploy/helm/aiobs-stack/values.yaml
+            # Update Console Plugin tag (same pattern as child charts)
+            sed -i '/repository:.*aiobs-console-plugin/{n;s|tag: .*|tag: '"${{ inputs.version }}"'|}' deploy/helm/aiobs-stack/values.yaml
+            echo "Updated deploy/helm/aiobs-stack/values.yaml"
+          fi
+
       - name: Update Makefile version
-        # NOTE: Anchor with ^ to match only the VERSION line, not RHOAI_VERSION
-        # or any other variable whose name ends in VERSION.
+        # NOTE: Anchor with ^ to match only the VERSION line, not any other
+        # variable whose name ends in VERSION.
         run: |
           if [ -f "Makefile" ]; then
             sed -i 's|^VERSION ?= .*|VERSION ?= '"${{ inputs.version }}"'|' Makefile

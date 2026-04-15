@@ -5,7 +5,7 @@
  * Uses stateless HTTP mode - no session management needed
  */
 
-import { getDevCredentials } from './devCredentials';
+import { getDevCredentials, getDevModels } from './devCredentials';
 import { fetchRuntimeConfig, isDevMode as checkDevMode } from './runtimeConfig';
 import config from '../../shared/config';
 
@@ -49,6 +49,84 @@ export function clearSessionConfig(): void {
   getStorage().removeItem(SESSION_CONFIG_KEY);
 }
 
+// ============ GPU Availability Detection ============
+
+const GPU_AVAILABILITY_KEY = 'gpu_availability_cache';
+const GPU_AVAILABILITY_CACHE_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Check if GPU hardware is available in the cluster.
+ * Uses the same pattern as DeviceMetricsPage - queries device metrics
+ * and checks if any GPUs/accelerators are detected.
+ *
+ * Supports NVIDIA (DCGM) and Intel (Gaudi) accelerators.
+ */
+export async function getGpuAvailability(): Promise<boolean> {
+  try {
+    // Check cache first
+    const cached = getStorage().getItem(GPU_AVAILABILITY_KEY);
+    if (cached) {
+      const { value, timestamp } = JSON.parse(cached);
+      const cacheAge = Date.now() - timestamp;
+      if (cacheAge < GPU_AVAILABILITY_CACHE_MS) {
+        return value;
+      }
+    }
+
+    // Use existing proven pattern from DeviceMetricsPage (lines 285-304)
+    // Fetch both vendor metrics in parallel
+    const [dcgmResp, intelResp] = await Promise.all([
+      fetchOpenShiftMetrics('Device (DCGM)', 'cluster_wide', '15m'),
+      fetchOpenShiftMetrics('Device (Intel)', 'cluster_wide', '15m'),
+    ]);
+
+    // Guard: both failed
+    if (!dcgmResp && !intelResp) {
+      return false;
+    }
+
+    // CRITICAL: fetchOpenShiftMetrics returns { metrics: {...} } or null
+    // Access .metrics field (DeviceMetricsPage:299-300)
+    const dcgmMetrics = dcgmResp?.metrics || {};
+    const intelMetrics = intelResp?.metrics || {};
+
+    // Check device counts (DeviceMetricsPage:303-304)
+    // GPU available if either vendor reports devices > 0
+    const nvidiaCount = dcgmMetrics['GPU Count']?.latest_value ?? 0;
+    const intelCount = intelMetrics['Device Count']?.latest_value ?? 0;
+
+    const hasGpu = nvidiaCount > 0 || intelCount > 0;
+
+    // Cache result with timestamp
+    getStorage().setItem(GPU_AVAILABILITY_KEY, JSON.stringify({
+      value: hasGpu,
+      timestamp: Date.now(),
+    }));
+
+    return hasGpu;
+  } catch (error) {
+    console.error('GPU availability check failed:', error);
+    // Safe default: assume no GPU on error
+    return false;
+  }
+}
+
+export function clearGpuAvailabilityCache(): void {
+  getStorage().removeItem(GPU_AVAILABILITY_KEY);
+}
+
+// Expose refresh function on window for manual testing
+if (typeof window !== 'undefined') {
+  (window as any).refreshGpuAvailability = async () => {
+    clearGpuAvailabilityCache();
+    const available = await getGpuAvailability();
+    console.log('GPU availability refreshed:', available);
+    // Dispatch event for UI to react
+    window.dispatchEvent(new CustomEvent('gpu-availability-changed', { detail: available }));
+    return available;
+  };
+}
+
 // ============ Dev Mode Credential Injection ============
 
 /**
@@ -60,6 +138,7 @@ export function detectProviderFromModelId(modelId: string): string | null {
     anthropic: /^(anthropic\/|claude-)/,
     google: /^(google\/|gemini-)/,
     meta: /^(meta\/|llama-)/,
+    maas: /^maas\//,
   };
 
   for (const [provider, pattern] of Object.entries(patterns)) {
@@ -94,23 +173,44 @@ async function injectDevCredentials(toolName: string, args: Record<string, unkno
   }
 
   const devCreds = getDevCredentials();
+  const devModels = getDevModels();
 
   // Try to detect provider from various parameters
   let provider: string | null = null;
+  let modelId: string | null = null;
 
   // Check explicit provider parameter first
   if (typeof args.provider === 'string') {
     provider = args.provider.toLowerCase();
   }
   // Try to detect from model_id parameters
-  else {
-    const modelId = (args.summarize_model_id as string) || (args.model_name as string);
-    if (modelId) {
-      provider = detectProviderFromModelId(modelId);
+  modelId = (args.summarize_model_id as string) || (args.model_name as string) || null;
+  if (modelId && !provider) {
+    provider = detectProviderFromModelId(modelId);
+  }
+
+  // Special handling for MAAS and other external models: Look up from dev model storage
+  if (modelId) {
+    const devModel = devModels[modelId];
+    if (devModel) {
+      console.log(`[DevMode] Auto-injecting config for model ${modelId} from dev storage`);
+      const injectedArgs: Record<string, unknown> = { ...args };
+
+      // Inject API key if available
+      if (devModel.apiKey && !args.api_key) {
+        injectedArgs.api_key = devModel.apiKey;
+      }
+
+      // Inject API URL if available (critical for MAAS and custom endpoints)
+      if (devModel.endpoint && !args.api_url) {
+        injectedArgs.api_url = devModel.endpoint;
+      }
+
+      return injectedArgs;
     }
   }
 
-  // Inject the key if provider detected and key available
+  // Inject the key if provider detected and key available (for non-MAAS providers)
   if (provider && devCreds[provider]?.apiKey) {
     console.log(`[DevMode] Auto-injecting API key for ${provider}`);
     return {

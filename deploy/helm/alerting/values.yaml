@@ -1,6 +1,6 @@
 image:
   repository: quay.io/ecosystem-appeng/aiobs-metrics-alerting
-  tag: 2.0.0
+  tag: 6.0.0
   pullPolicy: IfNotPresent
 
 schedule: "*/1 * * * *" # cron job scheduled every minute
@@ -8,6 +8,7 @@ schedule: "*/1 * * * *" # cron job scheduled every minute
 slackWebhook:
   secretName: alerts-secrets
   secretKey: slack-webhook-url
+  url: ""  # Optional - Slack webhook URL for alert notifications
 
 serviceAccountName: alert-receiver
 
@@ -19,3 +20,4 @@ prometheusRule:
 config:
   alertmanagerUrl: "https://alertmanager-user-workload.openshift-user-workload-monitoring.svc.cluster.local:9095"
   timeWindow: 60
+  llamaStackUrl: ""
