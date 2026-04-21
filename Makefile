@@ -14,7 +14,7 @@ MAKEFLAGS += --no-print-directory
 REGISTRY ?= quay.io
 ORG ?= ecosystem-appeng
 IMAGE_PREFIX ?= aiobs
-VERSION ?= 6.0.0
+VERSION ?= 6.1.1
 PLATFORM ?= linux/amd64
 DEV_MODE ?= false
 USE_LLAMA_STACK_OPERATOR ?= false
@@ -120,8 +120,6 @@ DEFAULT_LLM_PORT_AND_PATH := :8080/v1
 OPERATOR_MANAGER_SCRIPT := scripts/operator-manager.sh
 
 # Auto-detect RHOAI version from the cluster when not explicitly set on the command line.
-# Prevents the footgun of deploying on RHOAI 3.x with RHOAI_VERSION=2 defaults, which
-# would install logging/loki operators on stable-6.3 channels instead of stable-6.4.
 # RHOAI_VERSION is NOT declared with ?= to avoid corruption by the version-bump workflow.
 # $(origin RHOAI_VERSION) is "undefined" when not set, "command line" when explicit.
 ifneq ($(origin RHOAI_VERSION),command line)
@@ -171,16 +169,46 @@ else
   LLAMA_STACK_SVC_NAME := llamastack
 endif
 
-# Logging/Loki operator channel and starting CSV: RHOAI 3.x uses stable-6.4, RHOAI 2.x uses stable-6.3
-ifeq ($(RHOAI_VERSION),3)
-  LOGGING_LOKI_CHANNEL := stable-6.4
-  LOGGING_STARTING_CSV := cluster-logging.v6.4.3
-  LOKI_STARTING_CSV := loki-operator.v6.4.3
-else
-  LOGGING_LOKI_CHANNEL := stable-6.3
-  LOGGING_STARTING_CSV := cluster-logging.v6.3.4
-  LOKI_STARTING_CSV := loki-operator.v6.3.4
+# Logging/Loki operator channels and starting CSVs.
+# Auto-detected independently from the cluster's redhat-operators catalog.
+# No hardcoded fallback — install targets fail fast if detection fails.
+# NOTE: Must query with -l catalog=redhat-operators because loki-operator also exists
+# in community-operators (with only an 'alpha' channel).
+
+# Logging operator channel + CSV
+LOGGING_CHANNEL := $(shell oc get packagemanifest -l catalog=redhat-operators \
+    -o jsonpath='{range .items[?(@.metadata.name=="cluster-logging")]}{.status.defaultChannel}{end}' 2>/dev/null)
+LOGGING_STARTING_CSV := $(shell oc get packagemanifest -l catalog=redhat-operators \
+    -o jsonpath='{range .items[?(@.metadata.name=="cluster-logging")].status.channels[?(@.name=="$(LOGGING_CHANNEL)")]}{.currentCSV}{end}' 2>/dev/null)
+
+# Loki operator channel + CSV (queried independently — channels may diverge from logging)
+LOKI_CHANNEL := $(shell oc get packagemanifest -l catalog=redhat-operators \
+    -o jsonpath='{range .items[?(@.metadata.name=="loki-operator")]}{.status.defaultChannel}{end}' 2>/dev/null)
+LOKI_STARTING_CSV := $(shell oc get packagemanifest -l catalog=redhat-operators \
+    -o jsonpath='{range .items[?(@.metadata.name=="loki-operator")].status.channels[?(@.name=="$(LOKI_CHANNEL)")]}{.currentCSV}{end}' 2>/dev/null)
+
+ifneq ($(LOGGING_CHANNEL),)
+  $(info ℹ️  Logging operator: channel=$(LOGGING_CHANNEL), csv=$(LOGGING_STARTING_CSV))
 endif
+ifneq ($(LOKI_CHANNEL),)
+  $(info ℹ️  Loki operator: channel=$(LOKI_CHANNEL), csv=$(LOKI_STARTING_CSV))
+endif
+
+# Guard macro: fails with actionable error when operator channel or starting CSV
+# was not detected.  Called at recipe time by install targets that need them, so
+# non-cluster targets (test, build, help) are not affected.
+define _require_operator_channel
+	@if [ -z "$(LOGGING_CHANNEL)" ] || [ -z "$(LOKI_CHANNEL)" ] || \
+	    [ -z "$(LOGGING_STARTING_CSV)" ] || [ -z "$(LOKI_STARTING_CSV)" ]; then \
+		echo ""; \
+		echo "🛑 Could not detect logging/loki operator channel or starting CSV from the redhat-operators catalog."; \
+		echo "   Verify the cluster is reachable and the catalog is healthy:"; \
+		echo "     - oc get catalogsource redhat-operators -n openshift-marketplace"; \
+		echo "Exiting!!!"; \
+		echo ""; \
+		exit 1; \
+	fi
+endef
 
 # Validate: LlamaStack operator requires RHOAI 3.x (operator v0.3.0 on RHOAI 2.x is not supported)
 ifeq ($(USE_LLAMA_STACK_OPERATOR),true)
@@ -1605,14 +1633,16 @@ install-tempo-operator:
 # Install OpenShift Logging Operator
 .PHONY: install-logging-operator
 install-logging-operator:
+	$(call _require_operator_channel)
 	@echo ""
-	@CHANNEL=$(LOGGING_LOKI_CHANNEL) STARTING_CSV=$(LOGGING_STARTING_CSV) $(OPERATOR_MANAGER_SCRIPT) -i logging -n openshift-logging
+	@CHANNEL=$(LOGGING_CHANNEL) STARTING_CSV=$(LOGGING_STARTING_CSV) $(OPERATOR_MANAGER_SCRIPT) -i logging -n openshift-logging
 
 # Install Loki Operator
 .PHONY: install-loki-operator
 install-loki-operator:
+	$(call _require_operator_channel)
 	@echo ""
-	@CHANNEL=$(LOGGING_LOKI_CHANNEL) STARTING_CSV=$(LOKI_STARTING_CSV) $(OPERATOR_MANAGER_SCRIPT) -i loki -n openshift-operators-redhat
+	@CHANNEL=$(LOKI_CHANNEL) STARTING_CSV=$(LOKI_STARTING_CSV) $(OPERATOR_MANAGER_SCRIPT) -i loki -n openshift-operators-redhat
 
 # Verify all required operators are installed and ready
 .PHONY: verify-operators-ready

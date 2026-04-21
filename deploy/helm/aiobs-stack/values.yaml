@@ -23,9 +23,12 @@ mcpServer:
   enabled: true  # Always deployed
   image:
     repository: quay.io/ecosystem-appeng/aiobs-mcp-server
-    tag: 6.0.0
+    tag: 6.1.1
     pullPolicy: Always
   # NOTE: DEV_MODE env var is automatically set from global.devMode by mcp-server chart
+  rbac:
+    # Empty string means auto-use parent release name (for umbrella chart deployments)
+    lokiReleaseName: ""
 
 # OpenShift Console Plugin - Native console integration
 consolePlugin:
@@ -35,7 +38,7 @@ consolePlugin:
     description: "AI Observability Plugin"
     image:
       repository: quay.io/ecosystem-appeng/aiobs-console-plugin
-      tag: 6.0.0
+      tag: 6.1.1
     imagePullPolicy: Always
     replicas: 2
     port: 9443
